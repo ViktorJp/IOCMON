@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.3.0
+# Version: 0.3.1
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Sep-12
 # ============================================================================================================================
@@ -65,7 +65,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.3.0"
+version="0.3.1"
 apppath="/jffs/scripts/iocmon.sh"
 addonsdir="/jffs/addons/iocmon.d"
 config="/jffs/addons/iocmon.d/iocmon.cfg"
@@ -127,8 +127,16 @@ authslowthreshold=15            # same-source-IP login failures across that whol
                                  # per tick indefinitely, which the burst check alone can never see
 
 enablefsintegrity=1
-fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /opt/bin /opt/sbin /opt/etc/init.d $iocmonroot/.."
-fswatchexclude="Backups Downloads Media"
+fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /tmp/mnt/$extdrivelabel"
+                                 # deliberately NOT /opt/bin, /opt/sbin, /opt/etc/init.d - those are Entware's
+                                 # own symlinks into this same drive (see realdirpath's own comment on why they
+                                 # now resolve to real paths instead of scanning nothing), so watching the drive
+                                 # root already covers everything they would ever find; listing them separately
+                                 # only cost real scan time for zero added coverage - a real user-caught issue
+fswatchexclude="Backups Downloads Media iocmon.d"
+                                 # "iocmon.d" here is belt-and-suspenders, not the only protection - checkfsintegrity
+                                 # unconditionally -prunes $iocmonroot itself regardless of this list (see its own
+                                 # comment), so removing this entry can't reintroduce the Fifth round's self-scan bug
 fsmaxhashsize=52428800          # 50MB cap - skip larger files for auto-hash
 enablequarantine=0              # opt-in; renames + strips +x, never deletes
 enablecrondiff=1                # alert on unexpected new cru entries and Entware crontab entries
@@ -806,7 +814,7 @@ initialsetup()
     exit 1
   fi
 
-  fswatchdirs="/jffs/scripts /opt/bin /opt/sbin /opt/etc/init.d ${iocmonroot}/.."
+  fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /tmp/mnt/$extdrivelabel"
   saveconfig
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
@@ -877,7 +885,7 @@ togglesetting()
 
 veditlist()
 {
-  local varname="$1" title="$2" hint="${3:-absolute path}" list count entry idx sel newval delnum newlist
+  local varname="$1" title="$2" hint="${3:-absolute path}" list count entry idx sel newval delnum newlist overlapmsg
 
   while true; do
     eval "list=\"\$$varname\""
@@ -911,6 +919,15 @@ veditlist()
       [Aa])
         read -p "New entry ($hint): " newval
         if [ -n "$newval" ]; then
+          if [ "$varname" = "fswatchdirs" ]; then
+            overlapmsg="$(fswatchdiroverlap "$newval")"
+            if [ -n "$overlapmsg" ]; then
+              echo ""
+              echo -e "${CYellow}${overlapmsg}${CClear}"
+              echo -e "Add it anyway?"
+              promptyn "[y/n]: " || continue
+            fi
+          fi
           eval "$varname=\"\${$varname:+\$$varname }\$newval\""
           saveconfig
         fi
@@ -2791,6 +2808,42 @@ realdirpath()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# fswatchdiroverlap checks $1 (a candidate new $fswatchdirs entry) against every already-configured entry
+
+fswatchdiroverlap()
+{
+  local candidate="$1" resolvedcandidate existing resolvedexisting
+
+  resolvedcandidate="$(realdirpath "$candidate")"
+  [ -z "$resolvedcandidate" ] && return 1
+
+  for existing in $fswatchdirs; do
+    [ -d "$existing" ] || continue
+    resolvedexisting="$(realdirpath "$existing")"
+    [ -z "$resolvedexisting" ] && continue
+
+    if [ "$resolvedcandidate" = "$resolvedexisting" ]; then
+      echo "This resolves to the exact same directory as the already-configured entry \"$existing\" ($resolvedexisting)."
+      return 0
+    fi
+    case "$resolvedcandidate" in
+      "$resolvedexisting"/*)
+        echo "This is already covered by the existing entry \"$existing\" (resolves to $resolvedexisting)."
+        return 0
+        ;;
+    esac
+    case "$resolvedexisting" in
+      "$resolvedcandidate"/*)
+        echo "This would already cover the existing entry \"$existing\" (resolves to $resolvedexisting) - consider removing that one instead."
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # iswritablebit checks $1's OWN mode bits for a write permission (owner, group, or other)
 
 iswritablebit()
@@ -2939,9 +2992,6 @@ checkfsintegrity()
   while IFS= read -r path; do
     [ -z "$path" ] && continue
     scancounter=$((scancounter+1))
-    # Throttled to every 25th file - this loop forks `wc -c` once per watched file, so printing on every
-    # single iteration would itself add meaningfully to the very slowness this progress display exists to
-    # reassure the user about.
     [ $((scancounter % 25)) -eq 0 ] && fsscanprogress "Computing size baseline" "$scancounter" "$sizetotal"
     sz="$(wc -c < "$path" 2>/dev/null)"
     [ -z "$sz" ] && sz=0
@@ -3064,7 +3114,7 @@ cronmatchkey()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# checkcronbaseline alerts on any cru entry that appeared since the last check.
+# checkcronbaseline alerts on any cru entry that appeared since the last check
 
 incronexceptionlist()
 {
@@ -3815,7 +3865,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press (V) to view the full log, or (O) for IoC Detections)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] to view the full log, or [${CGreen}O${CClear}] for IoC Detections)"
     if [ -s "$dropbearlogfile" ]; then
       tail -n 10 "$dropbearlogfile" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -3825,7 +3875,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (kept indefinitely - press (V) to view the full log, or (D) for Dropbear attempts)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (kept indefinitely - press [${CGreen}V${CClear}] to view the full log, or [${CGreen}D${CClear}] for Dropbear attempts)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
         [ "${#iocline}" -gt 134 ] && iocline="$(printf '%.133s' "$iocline")>"
