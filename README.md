@@ -70,7 +70,7 @@ The first time IOCMON runs with no existing config, it walks you through a short
   it if only one is found, or pick from a numbered list if you have more than one. If no drive is available,
   you can proceed in a reduced **degraded mode** (JFFS-only storage, a smaller feed set) instead.
 - Once a drive is selected (or degraded mode is confirmed), IOCMON writes its default configuration and you're
-  dropped into the **Configuration Menu**.
+  dropped into the **Initial Scan**.
 
 ### 3. Start the background monitor
 
