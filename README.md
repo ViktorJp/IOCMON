@@ -46,7 +46,7 @@ public threat-intelligence feeds to catch signs of compromise early, before they
 
 Run from an SSH prompt on your router:
 ```
-curl --retry 3 "https://raw.githubusercontent.com/ViktorJp/IOCMON/main/iocmon.sh" -o "/jffs/scripts/iocmontest.sh" && chmod 755 "/j
+curl --retry 3 "https://raw.githubusercontent.com/ViktorJp/IOCMON/main/iocmon.sh" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/j
 ffs/scripts/iocmontest.sh"
 ```
 
