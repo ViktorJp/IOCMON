@@ -1,0 +1,7 @@
+v0.4.0    - (TBA)
+            Initial public release! IOCMON is a lightweight, always-on security-intelligence monitor for
+            Asus-Merlin routers. It runs quietly in the background and watches your router from four different
+            angles at once, correlating what it sees against public threat-intelligence feeds to catch signs of
+            compromise early, before they become a real problem. HUGE thank you to @visortgw for his relentless
+            testing of IOCMON, and putting it through its paces on his end. A lot of his excellent suggestions
+            turned into a good bit of functionality that was added to IOCMON thanks to @visortgw!
