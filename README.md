@@ -11,7 +11,7 @@ Modified: Sep-14-2026
 
 IOCMON is a lightweight, always-on security-intelligence monitor for Asus-Merlin routers. It runs quietly in
 the background and watches your router from four different angles at once, correlating what it sees against
-public threat-intelligence feeds to catch signs of compromise early — before they become a real problem.
+public threat-intelligence feeds to catch signs of compromise early, before they become a real problem.
 
 **Why run it:**
 
@@ -83,7 +83,7 @@ sh /jffs/scripts/iocmon.sh -screen -now
 ```
 
 To have it start automatically on every reboot, turn on **Autostart** in Advanced Settings → General / Script
-Behavior (see below) — this hooks the router's `post-mount` script so it launches once the USB drive is ready.
+Behavior (see below). This hooks the router's `post-mount` script so it launches once the USB drive is ready.
 
 Two periodic tasks (feed refresh and filesystem-integrity scans) are scheduled via cron automatically whenever
 you save any setting, and run on their own independent of whether the background monitor is up — but for
@@ -143,7 +143,7 @@ Everything is reachable from the **Configuration Menu** (`c` from the main scree
 ### Advanced Settings, by what you're trying to achieve
 
 **"I want to control email alerts"** → *Alerting & Notifications*
-Turn alert emails on/off, and cap how many can send per hour (0 = unlimited) — useful if you're worried about
+Turn alert emails on/off, and cap how many can send per hour (0 = unlimited), useful if you're worried about
 a noisy detection flooding your inbox.
 
 **"I want to watch DNS lookups against known-bad domains, or catch DNS tunneling"** → *DNS Watch & Tunneling
@@ -151,7 +151,7 @@ Detection*
 Turn on feed-based DNS matching (this also offers to enable the router's own dnsmasq query logging, which it
 needs to see anything). Add domains to the exceptions list for known false positives (e.g. a CDN flagged only
 because a malicious URL was once hosted there). Separately, turn on the behavioral tunneling/exfiltration
-heuristic if you want to catch unusually long or high-volume DNS query patterns — this is off by default since
+heuristic if you want to catch unusually long or high-volume DNS query patterns, this is off by default since
 it can false-positive against legitimate high-subdomain-churn services; the same exceptions list quiets it too.
 
 **"I want to catch brute-force login attempts"** → *Brute-Force Login Detection*
@@ -160,7 +160,7 @@ Two independent layers: a **burst** alert (N failed logins from one IP within a 
 staying under the burst threshold). Tune both thresholds and the sustained window size here.
 
 **"I want to watch files/folders for tampering"** → *Filesystem Integrity & Cron Watch*
-This is the largest section — how often to scan, which folders to watch, and four ways to exclude noise:
+This is the largest section: how often to scan, which folders to watch, and four ways to exclude noise:
 folder names, file extensions, individual files by absolute path, and (further down) cron jobs known to be
 re-added legitimately by another tool. Also controls the hash-size cap, automatic quarantine on a malware-hash
 match, deletion alerts on critical paths, permission-escalation alerts, and the cron-tampering diff itself.
@@ -191,7 +191,7 @@ list for nearly every watch instead of forcing you to disable the whole feature:
 
 If your configuration has drifted somewhere you don't want, use **Configuration Menu → (5) Reset IOCMON back
 to Default Settings**. After a confirmation prompt explaining exactly what will happen, this erases the saved
-config and restarts IOCMON fresh — every toggle, threshold, and list reverts to its shipped default, and you'll
+config and restarts IOCMON fresh, every toggle, threshold, and list reverts to its shipped default, and you'll
 be walked back through the initial drive-selection setup. This cannot be undone.
 
 ### Uninstalling
