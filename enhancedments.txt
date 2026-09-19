@@ -5,5 +5,6 @@ To-Do:
 - Add VI as an optional text reader (@XIII)
 - Look at autoupdate logic as it may be failing with 404's (@visortgw)
 - Look into @visortgw's false positive file deletion issue
+- Look at possible integration with Skynet and import IOC threat feeds to prevent outbound contact with malicious actors.
 
 Done:
