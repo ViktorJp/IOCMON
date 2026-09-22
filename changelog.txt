@@ -1,10 +1,13 @@
-v0.4.4    - (TBA)
+v0.4.7    - (September 22, 2026)
           - PATCH: Added a formal script update menu under the configuration menu. This has been modeled after
             the TAILMON script update feature, allowing you to choose between the stable or beta track.
           - PATCH: Added a new shortcut key to the main UI that allows you to easily detach from the current
             Screen session using the command "/opt/sbin/screen -S ioclmon -X detach;;". No more having to use
             the CTRL-A+D key combo -- thanks @rung!
-          - 
+          - PATCH: Added another menu item under the configuration menu that allows for the optional install
+            of Entware binaries that are being used in the script. This is optional, as the script was written
+            to use a different method if they aren't found. Please note that if "screen" is not installed, the
+            script will be unable to run in the background.
 
 v0.4.3    - (September 21, 2026)
           - PATCH: Fixed the URL paths to the Github repository to prevent the autoupdate functionality from
