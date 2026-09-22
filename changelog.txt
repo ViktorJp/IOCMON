@@ -1,6 +1,10 @@
 v0.4.4    - (TBA)
           - PATCH: Added a formal script update menu under the configuration menu. This has been modeled after
             the TAILMON script update feature, allowing you to choose between the stable or beta track.
+          - PATCH: Added a new shortcut key to the main UI that allows you to easily detach from the current
+            Screen session using the command "/opt/sbin/screen -S ioclmon -X detach;;". No more having to use
+            the CTRL-A+D key combo -- thanks @rung!
+          - 
 
 v0.4.3    - (September 21, 2026)
           - PATCH: Fixed the URL paths to the Github repository to prevent the autoupdate functionality from
