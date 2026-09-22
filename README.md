@@ -1,7 +1,7 @@
-# IOCMON v0.4.0
+# IOCMON v0.4.3
 Asus-Merlin Security Intelligence Monitor
 
-Modified: Sep-14-2026
+Modified: Sep-21-2026
 
 <img width="1252" height="644" alt="Screenshot 2026-09-07 191836" src="https://github.com/user-attachments/assets/4644b613-7b65-4e23-a336-954c108aace1" />
 
@@ -46,8 +46,7 @@ public threat-intelligence feeds to catch signs of compromise early, before they
 
 Run from an SSH prompt on your router:
 ```
-curl --retry 3 "https://raw.githubusercontent.com/ViktorJp/IOCMON/main/iocmon.sh" -o "/jffs/scripts/iocmontest.sh" && chmod 755 "/j
-ffs/scripts/iocmontest.sh"
+curl --retry 3 "https://raw.githubusercontent.com/ViktorJp/IOCMON/main/iocmon.sh" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
 ```
 
 Or, copy `iocmon.sh` to `/jffs/scripts/iocmon.sh` on your router and make it executable:
@@ -71,7 +70,7 @@ The first time IOCMON runs with no existing config, it walks you through a short
   it if only one is found, or pick from a numbered list if you have more than one. If no drive is available,
   you can proceed in a reduced **degraded mode** (JFFS-only storage, a smaller feed set) instead.
 - Once a drive is selected (or degraded mode is confirmed), IOCMON writes its default configuration and you're
-  dropped into the **Configuration Menu**.
+  dropped into the **Initial Scan**.
 
 ### 3. Start the background monitor
 

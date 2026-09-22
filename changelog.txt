@@ -1,4 +1,15 @@
-v0.4.0    - (TBA)
+v0.4.3    - (September 21, 2026)
+          - PATCH: Fixed the URL paths to the Github repository to prevent the autoupdate functionality from
+            returning a 404 error, and overwriting the script with bogus garbage. 
+          - PATCH: Fixed a possible concurrency error that was duplicating efforts during a filesystem sweep
+            and now using a pid lock file to ensure only 1 runs at a time. (@visortgw)
+          - PATCH: Using the same pid lock file, now prevents a second script from running at the same time
+            that could also be causing concurrency issues.
+          - PATCH: Improved the Filesystem Integrity scan by utilizing a different method of scanning each file
+            across the filesystem, dramatically speeding things up while dropping the strain on the CPU during
+            this process.
+
+v0.4.0    - (September 14, 2026)
             Initial public release! IOCMON is a lightweight, always-on security-intelligence monitor for
             Asus-Merlin routers. It runs quietly in the background and watches your router from four different
             angles at once, correlating what it sees against public threat-intelligence feeds to catch signs of

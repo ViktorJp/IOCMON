@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.4.3
+# Version: 0.4.0
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-21
+# Last Updated: 2026-Sep-14
 # ============================================================================================================================
 #
 # Description:
@@ -67,13 +67,6 @@ else
   findbin="find"
 fi
 
-# Probes whether $findbin supports GNU -printf, so file sizes can be batched (one find call per directory) instead of forked per file.
-if "$findbin" "$findbin" -maxdepth 0 -printf '' >/dev/null 2>&1; then
-  findsupportsprintf=1
-else
-  findsupportsprintf=0
-fi
-
 # HOME/SCREENDIR fix added by Martinski W. [2026-Apr-13]
 [ "$HOME" != "/root" ] && export HOME="/root"
 export SCREENDIR="${HOME}/.screen"
@@ -83,7 +76,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.4.3"                 # current script version
+version="0.4.0"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -94,8 +87,8 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 dropbearlogfile="/jffs/addons/iocmon.d/dropbear_attempts.log"  # raw dropbear auth-failure log
 
 # Repo used for self-update checks.
-iocmonrepostable="https://raw.githubusercontent.com/ViktorJp/IOCMON/main"
-iocmonrepobeta="https://raw.githubusercontent.com/ViktorJp/IOCMON/develop"
+iocmonrepostable="https://raw.githubusercontent.com/IOCMON/main"
+iocmonrepobeta="https://raw.githubusercontent.com/IOCMON/develop"
 
 # AMTM Email Notification Variables - shared library reused verbatim from TAILMON/VPNMON-R3
 readonly scriptFileName="${0##*/}"  # this script's own filename
@@ -532,7 +525,7 @@ updatecheck()
     elif [ "$DLversion" != "$version" ]; then
       DLversionPF=$(printf "%-8s" "$DLversion")
       versionPF=$(printf "%-8s" "$version")
-      UpdateNotify="${InvYellow} ${InvDkGray}${CWhite} Stable Track Update available: v$versionPF -> v$DLversionPF                                                                                   ${CClear}"
+      UpdateNotify="${InvYellow} ${InvDkGray}${CWhite} Stable Track Update available: v$versionPF -> v$DLversionPF                                                                                                          ${CClear}"
     else
       UpdateNotify=0
     fi
@@ -550,7 +543,7 @@ betacheck()
     if [ "$beta" == "1" ] && [ "$Bversion" != "$version" ]; then
       BversionPF=$(printf "%-8s" "$Bversion")
       versionPF=$(printf "%-8s" "$version")
-      BUpdateNotify="${InvYellow} ${InvDkGray}${CWhite} Beta Track Update available: v$versionPF -> v$BversionPF                                                                                     ${CClear}"
+      BUpdateNotify="${InvYellow} ${InvDkGray}${CWhite} Beta Track Update available: v$versionPF -> v$BversionPF                                                                                                            ${CClear}"
     else
       BUpdateNotify=0
     fi
@@ -2799,7 +2792,8 @@ drainfsevents()
     [ -z "$path" ] && continue
     [ -f "$path" ] || continue
     fspathexcluded "$path" && continue
-    size="$(filesizeof "$path")"
+    size="$(wc -c < "$path" 2>/dev/null)"
+    [ -z "$size" ] && size=0
     if [ -x "$path" ]; then isexec=1; else isexec=0; fi
     processfschange "MOD" "$path" "$size" "$isexec" "$hashesfile"
   done
@@ -2862,48 +2856,6 @@ iswritablebit()
     *w*) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# filesizeof echoes $1's byte size via ls -l - measured far cheaper per call than wc -c on real hardware.
-
-filesizeof()
-{
-  local sz
-  sz="$(ls -l "$1" 2>/dev/null | awk '{print $5}')"
-  [ -z "$sz" ] && sz=0
-  echo "$sz"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# buildsizebaseline writes path<TAB>size for every watched file into $1 - one find call per directory when findsupportsprintf, else a per-file ls fallback.
-
-buildsizebaseline()
-{
-  local outfile="$1" oldmanifest="$2" label="$3" counttotal="$4"
-  local d realdir path sz scancounter=0 tab
-  tab="$(printf '\t')"
-
-  : > "$outfile"
-
-  if [ "$findsupportsprintf" -eq 1 ]; then
-    for d in $fswatchdirs; do
-      [ -d "$d" ] || continue
-      realdir="$(realdirpath "$d")"
-      "$findbin" "$realdir" -type f -printf '%p\t%s\n' 2>/dev/null | while IFS="$tab" read -r path sz; do
-        fspathexcluded "$path" || printf '%s\t%s\n' "$path" "$sz"
-      done >> "$outfile"
-    done
-    sort -u "$outfile" -o "$outfile"
-  else
-    while IFS= read -r path; do
-      [ -z "$path" ] && continue
-      scancounter=$((scancounter+1))
-      [ $((scancounter % 25)) -eq 0 ] && fsscanprogress "$label" "$scancounter" "$counttotal"
-      sz="$(filesizeof "$path")"
-      printf '%s\t%s\n' "$path" "$sz" >> "$outfile"
-    done < "$oldmanifest"
-  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2974,7 +2926,16 @@ checkfsintegrity()
     mv "$newmanifest" "$oldmanifest"
     mv "$newmarker" "$marker"
     fsscannedcount="$(wc -l < "$oldmanifest" | tr -d ' ')"
-    buildsizebaseline "$newsizebaseline" "$oldmanifest" "Building initial size baseline" "$fsscannedcount"
+    scancounter=0
+    : > "$newsizebaseline"
+    while IFS= read -r path; do
+      [ -z "$path" ] && continue
+      scancounter=$((scancounter+1))
+      [ $((scancounter % 25)) -eq 0 ] && fsscanprogress "Building initial size baseline" "$scancounter" "$fsscannedcount"
+      sz="$(wc -c < "$path" 2>/dev/null)"
+      [ -z "$sz" ] && sz=0
+      printf '%s\t%s\n' "$path" "$sz" >> "$newsizebaseline"
+    done < "$oldmanifest"
     mv "$newsizebaseline" "$sizebaseline"
     if [ "$enablepermwatch" -eq 1 ]; then
       scancounter=0
@@ -3025,7 +2986,16 @@ checkfsintegrity()
   mv "$newmarker" "$marker"
 
   sizetotal="$(wc -l < "$oldmanifest" | tr -d ' ')"
-  buildsizebaseline "$newsizebaseline" "$oldmanifest" "Computing size baseline" "$sizetotal"
+  scancounter=0
+  : > "$newsizebaseline"
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    scancounter=$((scancounter+1))
+    [ $((scancounter % 25)) -eq 0 ] && fsscanprogress "Computing size baseline" "$scancounter" "$sizetotal"
+    sz="$(wc -c < "$path" 2>/dev/null)"
+    [ -z "$sz" ] && sz=0
+    printf '%s\t%s\n' "$path" "$sz" >> "$newsizebaseline"
+  done < "$oldmanifest"
 
   : > "$sizechangesfile"
   if [ -s "$sizebaseline" ]; then
@@ -3104,7 +3074,8 @@ checkfsintegrity()
     [ -f "$path" ] || continue
     scancounter=$((scancounter+1))
     [ $((scancounter % 5)) -eq 0 ] && fsscanprogress "Hashing changed files" "$scancounter" "$hashtotal"
-    filesize="$(filesizeof "$path")"
+    filesize="$(wc -c < "$path" 2>/dev/null)"
+    [ -z "$filesize" ] && filesize=0
     if [ -x "$path" ]; then isexec=1; else isexec=0; fi
     processfschange "$changetype" "$path" "$filesize" "$isexec" "$hashesfile"
   done
@@ -3260,44 +3231,6 @@ checkfirewallrules()
 # -------------------------------------------------------------------------------------------------------------------------
 # fsintegritycheck is the main-loop entry point
 
-# -------------------------------------------------------------------------------------------------------------------------
-# fsintegritylock/fsintegrityunlock guard against two overlapping scans (main loop cadence vs -fsintegrity cron vs forced) racing on the same manifest/state files.
-
-fsintegritylock()
-{
-  local lockfile="$addonsdir/fsintegrity.lock" lockpid
-  if [ -f "$lockfile" ]; then
-    lockpid="$(cat "$lockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && kill -0 "$lockpid" 2>/dev/null; then
-      return 1
-    fi
-  fi
-  echo "$$" > "$lockfile"
-  return 0
-}
-
-fsintegrityunlock()
-{
-  rm -f "$addonsdir/fsintegrity.lock"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# runfsintegrityscan runs the full scan+cron+firewall diff under fsintegritylock, skipping (not racing) if already locked.
-
-runfsintegrityscan()
-{
-  if ! fsintegritylock; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Filesystem-integrity scan skipped - another scan is already in progress." >> "$logfile"
-    return 1
-  fi
-  checkfsintegrity
-  checkcronbaseline
-  checkentwarecron
-  checkfirewallrules
-  fsintegrityunlock
-  return 0
-}
-
 fsintegritycheck()
 {
   fsintegrityranthiscycle=0
@@ -3319,10 +3252,12 @@ fsintegritycheck()
   duesec=$((fsintegrityhrs * 3600))
 
   if [ "$((nowepoch - lastepoch))" -ge "$duesec" ]; then
-    if runfsintegrityscan; then
-      fsintegrityranthiscycle=1
-      echo "$nowepoch" > "$stampfile"
-    fi
+    fsintegrityranthiscycle=1
+    checkfsintegrity
+    checkcronbaseline
+    checkentwarecron
+    checkfirewallrules
+    echo "$nowepoch" > "$stampfile"
   fi
 }
 
@@ -3342,19 +3277,18 @@ forcefsintegrity()
     echo -e "${CRed}ERROR: No state storage location is available right now (external drive missing). Check skipped.${CClear}"
   else
     mkdir -m 755 -p "$stateroot"
-    if runfsintegrityscan; then
-      flushemailbatch
-      date +%s > "$stateroot/fs_last_check"
-      blanklineguard
-      echo -e "  ${CGreen}*${CClear} Hashed/scanned ${CGreen}${fsscannedcount}${CClear} files across ${CGreen}${fsdircount}${CClear} watched directories"
-      echo -e "  ${CGreen}*${CClear} Found ${CGreen}${fsnewcount}${CClear} new file(s), ${CGreen}${fsmodcount}${CClear} modified file(s), ${CGreen}${fsdelcount}${CClear} deletion(s) in critical paths, and ${CGreen}${fspermcount}${CClear} permission-only change(s) since the last scan"
-      echo ""
-      echo ""
-      echo -e "${CGreen}Filesystem-integrity check complete.${CClear}"
-    else
-      echo ""
-      echo -e "${CYellow}A filesystem-integrity scan is already in progress (likely the main loop's own periodic scan) - try again in a moment.${CClear}"
-    fi
+    checkfsintegrity
+    checkcronbaseline
+    checkentwarecron
+    checkfirewallrules
+    flushemailbatch
+    date +%s > "$stateroot/fs_last_check"
+    blanklineguard
+    echo -e "  ${CGreen}*${CClear} Hashed/scanned ${CGreen}${fsscannedcount}${CClear} files across ${CGreen}${fsdircount}${CClear} watched directories"
+    echo -e "  ${CGreen}*${CClear} Found ${CGreen}${fsnewcount}${CClear} new file(s), ${CGreen}${fsmodcount}${CClear} modified file(s), ${CGreen}${fsdelcount}${CClear} deletion(s) in critical paths, and ${CGreen}${fspermcount}${CClear} permission-only change(s) since the last scan"
+    echo ""
+    echo ""
+    echo -e "${CGreen}Filesystem-integrity check complete.${CClear}"
   fi
 
   echo ""
@@ -3827,29 +3761,6 @@ fi
 # Begin IOCMON Main Loop
 # -------------------------------------------------------------------------------------------------------------------------
 
-# Refuse to start a second concurrent main loop - two live instances race on every shared state/manifest file.
-pidfile="$addonsdir/iocmon.pid"
-mkdir -m 755 -p "$addonsdir"
-if [ -f "$pidfile" ]; then
-  oldpid="$(cat "$pidfile" 2>/dev/null)"
-  if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && kill -0 "$oldpid" 2>/dev/null; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Another IOCMON instance (PID $oldpid) is already running - exiting to avoid state corruption." >> "$logfile"
-    clear
-    echo -e "${CRed}ERROR: IOCMON is already running (PID $oldpid) - a second instance was not started, to avoid two${CClear}"
-    echo -e "${CRed}copies corrupting shared detection data.${CClear}"
-    echo ""
-    echo -e "To view or reattach to the already-running instance, use:"
-    echo -e "  ${CGreen}iocmon -screen${CClear}   (or: ${CGreen}sh $apppath -screen${CClear})"
-    echo ""
-    echo -e "If IOCMON is NOT actually still running, confirm with ${CGreen}ps | grep iocmon${CClear} or ${CGreen}screen -ls${CClear},"
-    echo -e "then remove the stale lock file: ${CGreen}rm -f $pidfile${CClear}"
-    echo ""
-    exit 1
-  fi
-fi
-echo "$$" > "$pidfile"
-trap 'rm -f "$pidfile"' EXIT INT TERM
-
 # Check for and add an alias for IOCMON
 if ! grep -F "sh /jffs/scripts/iocmon.sh" /jffs/configs/profile.add >/dev/null 2>/dev/null; then
   echo "alias iocmon=\"sh /jffs/scripts/iocmon.sh\" # added by iocmon" >> /jffs/configs/profile.add
@@ -3887,26 +3798,27 @@ renderdashboard()
 
   echo -en "${InvGreen} "
   echo -e "${InvDkGray}${titleleft}$(printf '%*s' "$titlemidpadl" '')${CWhite}${titlemid}${InvDkGray}$(printf '%*s' "$titlemidpadr" '')${titleright}${CClear}"
+  echo -e "${InvGreen} ${CClear}"
 
   resolvestateroot
   if [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
-    echo -e "${InvGreen} ${CClear}"
     pendingcount="$(sed -n '1p' "$stateroot/alert_pending" 2>/dev/null)"
     pendingsummary="$(sed -n '2p' "$stateroot/alert_pending" 2>/dev/null)"
     [ "${#pendingsummary}" -gt 129 ] && pendingsummary="$(printf '%.128s' "$pendingsummary")>"
     echo -en "${InvRed}${CWhite} "; padright "!!! SECURITY ALERT: ${pendingcount:-1} unacknowledged IOC detection(s) !!!" 137; echo -e "${CClear}"
     echo -e " ${CWhite}Latest: ${pendingsummary:-see the IoC log}${CClear}"
     echo -en "${InvRed}${CWhite} "; padright "Press (A) to Acknowledge" 137; echo -e "${CClear}"
+    echo -e "${InvGreen} ${CClear}"
   fi
 
   if [ "$track" = "0" ] && [ "$UpdateNotify" != "0" ]; then
     echo -e "$UpdateNotify"
+    echo -e "${InvGreen} ${CClear}"
   fi
   if [ "$track" = "1" ] && [ "$BUpdateNotify" != "0" ]; then
     echo -e "$BUpdateNotify"
+    echo -e "${InvGreen} ${CClear}"
   fi
-
-  echo -e "${InvGreen} ${CClear}"
 
   feedsindicatorcount=0
   feedsbreakdown=""
