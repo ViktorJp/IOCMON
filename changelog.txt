@@ -1,3 +1,7 @@
+v0.4.4    - (TBA)
+          - PATCH: Added a formal script update menu under the configuration menu. This has been modeled after
+            the TAILMON script update feature, allowing you to choose between the stable or beta track.
+
 v0.4.3    - (September 21, 2026)
           - PATCH: Fixed the URL paths to the Github repository to prevent the autoupdate functionality from
             returning a 404 error, and overwriting the script with bogus garbage. (@JB_1366)
