@@ -3,6 +3,8 @@ v0.4.1    - (TBA)
             returning a 404 error, and overwriting the script with bogus garbage. 
           - PATCH: Fixed a possible concurrency error that was duplicating efforts during a filesystem sweep
             and now using a pid lock file to ensure only 1 runs at a time. (@visortgw)
+          - PATCH: Using the same pid lock file, now prevents a second script from running at the same time
+            that could also be causing concurrency issues.
           - PATCH: Improved the Filesystem Integrity scan by utilizing a different method of scanning each file
             across the filesystem, dramatically speeding things up while dropping the strain on the CPU during
             this process.
