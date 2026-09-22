@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.4.7
+# Version: 0.4.3
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-22
+# Last Updated: 2026-Sep-21
 # ============================================================================================================================
 #
 # Description:
@@ -29,6 +29,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/auth_checkpoint           : syslog line-count cursor for checkauth
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db            : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker            : reference file `find -newer` compares against
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_events.queue/.pid      : background inotifywait queue + pidfile
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db          : last-seen `cru l` output for the cron-diff heuristic
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_check             : epoch stamp gating the fsintegrityhrs cadence
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_summary.txt       : human-readable last-scan detail (main screen)
@@ -53,7 +54,6 @@
 # Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
 #   (v) view the permanent state/ioc_alerts.log in nano   (t) simulate a detection from a real, currently loaded
 #   (a) acknowledge the persistent red alert banner   (p) pause/resume the countdown timer without triggering a rescan
-#   (x) detach from the background SCREEN session without stopping IOCMON
 #
 # ============================================================================================================================
 
@@ -83,7 +83,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.4.7"                 # current script version
+version="0.4.3"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -156,6 +156,7 @@ schedulehrs=4                   # hour of day for the daily self-update check
 schedulemin=0                   # minute of hour for the daily self-update check
 updateiocm=0                    # autoupdate IOCMON script itself
 track=0                         # update track: 0 = stable, 1 = beta
+beta=0                          # currently running a beta build
 
 # Well-known Merlin persistent filenames living directly in /jffs/scripts
 fsstartupscripts="services-start services-stop firewall-start wan-start wan-event nat-start post-mount unmount init-start dhcpc-event openvpn-event wg-event"
@@ -206,7 +207,7 @@ logoNM ()
   echo -e "                /___/\\____/\\____/_/  /_/\\____/_/ |_/  v$version"
   echo ""
   echo ""
-  printf "\r                       ${CGreen}    [ INITIALIZING ]     ${CClear}"
+  printf "\r                            ${CGreen}    [ INITIALIZING ]     ${CClear}"
   sleep 1
   clear
   echo ""
@@ -219,9 +220,9 @@ logoNM ()
   echo -e "                /___/\\____/\\____/_/  /_/\\____/_/ |_/  v$version"
   echo ""
   echo ""
-  printf "\r                       ${CGreen}[ INITIALIZING ... DONE ]${CClear}"
+  printf "\r                            ${CGreen}[ INITIALIZING ... DONE ]${CClear}"
   sleep 1
-  printf "\r                       ${CGreen}      [ LOADING... ]     ${CClear}"
+  printf "\r                            ${CGreen}      [ LOADING... ]     ${CClear}"
   sleep 1
 }
 
@@ -238,7 +239,7 @@ logoNMexit ()
   echo -e "                /___/\\____/\\____/_/  /_/\\____/_/ |_/  v$version"
   echo ""
   echo ""
-  printf "\r                       ${CGreen}    [ SHUTTING DOWN ]     ${CClear}"
+  printf "\r                            ${CGreen}    [ SHUTTING DOWN ]     ${CClear}"
   sleep 1
   clear
   echo ""
@@ -251,9 +252,9 @@ logoNMexit ()
   echo -e "                /___/\\____/\\____/_/  /_/\\____/_/ |_/  v$version"
   echo ""
   echo ""
-  printf "\r                       ${CGreen}    [ SHUTTING DOWN ]     ${CClear}"
+  printf "\r                            ${CGreen}    [ SHUTTING DOWN ]     ${CClear}"
   sleep 1
-  printf "\r                       ${CDkGray}      [ GOODBYE... ]     ${CClear}\n\n"
+  printf "\r                            ${CDkGray}      [ GOODBYE... ]     ${CClear}\n\n"
   sleep 1
 }
 
@@ -400,7 +401,7 @@ progressbaroverride()
       AltNumPadded=$(printf "%0${tlwidth}d" "$AltNum")
       progrPadded=$(printf "%03d" "$progr")
       if [ "$timerpaused" -eq 1 ]; then timerinv="$InvRed"; else timerinv="$InvDkGray"; fi
-      drawprogressprompt "${InvGreen} ${CClear} ${CWhite}${timerinv}${AltNumPadded}${4} / ${progrPadded}%${CClear} [${CGreen}c${CClear}=Config] [${CGreen}f${CClear}=Feeds] [${CGreen}i${CClear}=FS Integrity] [${CGreen}t${CClear}=Test] [${CGreen}a${CClear}=Ack] [${CGreen}l${CClear}=Logs] [${CGreen}p${CClear}=Pause] [${CGreen}x${CClear}=Detach/Screen] [${CGreen}e${CClear}=Exit]${CClear}" "[Key+Enter?  ]"
+      drawprogressprompt "${InvGreen} ${CClear} ${CWhite}${timerinv}${AltNumPadded}${4} / ${progrPadded}%${CClear} [${CGreen}c${CClear}=Config] [${CGreen}f${CClear}=Feeds] [${CGreen}i${CClear}=FS Integrity] [${CGreen}t${CClear}=Test] [${CGreen}a${CClear}=Ack] [${CGreen}l${CClear}=Logs] [${CGreen}p${CClear}=Pause] [${CGreen}e${CClear}=Exit]${CClear}" "[Key+Enter?  ]"
     fi
   fi
 
@@ -422,7 +423,6 @@ progressbaroverride()
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
           [Ee]) logoNMexit; echo -e "${CClear}\n"; exit 0;;
           *) if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi;;
       esac
@@ -527,7 +527,7 @@ updatecheck()
   if [ -f "$dlverpath" ]; then
     DLversion=$(cat "$dlverpath")
 
-    if [ "$track" == "1" ]; then
+    if [ "$beta" == "1" ]; then
       UpdateNotify=0
     elif [ "$DLversion" != "$version" ]; then
       DLversionPF=$(printf "%-8s" "$DLversion")
@@ -547,7 +547,7 @@ betacheck()
   if [ -f "$bverpath" ]; then
     Bversion=$(cat "$bverpath")
 
-    if [ "$track" == "1" ] && [ "$Bversion" != "$version" ]; then
+    if [ "$beta" == "1" ] && [ "$Bversion" != "$version" ]; then
       BversionPF=$(printf "%-8s" "$Bversion")
       versionPF=$(printf "%-8s" "$version")
       BUpdateNotify="${InvYellow} ${InvDkGray}${CWhite} Beta Track Update available: v$versionPF -> v$BversionPF                                                                                     ${CClear}"
@@ -609,6 +609,7 @@ saveconfig()
     echo 'schedulemin='$schedulemin
     echo 'updateiocm='$updateiocm
     echo 'track='$track
+    echo 'beta='$beta
   } > "$config"
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON config has been updated." >> "$logfile"
@@ -817,26 +818,22 @@ vsetup()
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : Reset IOCMON back to Default Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : Update IOCMON to Latest Version${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : Optional Entware Components${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : Advanced Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : Uninstall IOCMON${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : Advanced Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : Uninstall IOCMON${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-9, e=Exit): " selsetup
+    read -p "Please select? (1-7, e=Exit): " selsetup
     case "$selsetup" in
       1) selectextdrive ;;
       2) vfeedsources ;;
       3) forcefeeds ;;
       4) forcefsintegrity ;;
       5) vresetdefaults ;;
-      6) vupdate ;;
-      7) ventwarecomponents ;;
-      8) vadvanced ;;
-      9) vuninstall ;;
+      6) vadvanced ;;
+      7) vuninstall ;;
       [Ee]) break ;;
       *) ;;
     esac
@@ -2722,7 +2719,7 @@ processfsdeletion()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# fspathexcluded is the single shared exclusion rule set (self-paths, quarantine suffix, fswatchexclude, fsexcludeext, fsexcludefiles) for every filesystem-integrity path.
+# fspathexcluded is the single shared exclusion rule set (self-paths, quarantine suffix, fswatchexclude, fsexcludeext, fsexcludefiles) for every filesystem-integrity path, used by both the periodic scan and the real-time inotify queue.
 
 fspathexcluded()
 {
@@ -2758,6 +2755,54 @@ fspathexcluded()
   done
 
   return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# startfsinotify launches a detached background inotifywait watching $fswatchdirs when Entware inotify-tools is present
+
+startfsinotify()
+{
+  which inotifywait >/dev/null 2>&1 || return
+  [ -n "$stateroot" ] || return
+
+  local pidfile="$stateroot/fs_events.pid" oldpid
+  if [ -f "$pidfile" ]; then
+    oldpid="$(cat "$pidfile" 2>/dev/null)"
+    if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+      return
+    fi
+  fi
+
+  : > "$stateroot/fs_events.queue"
+  nohup inotifywait -m -r -e create,modify,moved_to,close_write --format '%w%f' $fswatchdirs >> "$stateroot/fs_events.queue" 2>/dev/null &
+  echo "$!" > "$pidfile"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Started background inotifywait for real-time filesystem-integrity events (PID $!)." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# drainfsevents processes and truncates whatever startfsinotify's background watcher queued since the last tick.
+
+drainfsevents()
+{
+  local queuefile="$stateroot/fs_events.queue" hashesfile="" pending path size isexec
+
+  [ -n "$stateroot" ] || return
+  [ -s "$queuefile" ] || return
+
+  resolvefeedsroot
+  [ -n "$feedsroot" ] && hashesfile="$feedsroot/hashes.txt"
+
+  pending="$(cat "$queuefile")"
+  : > "$queuefile"
+
+  echo "$pending" | sort -u | while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    [ -f "$path" ] || continue
+    fspathexcluded "$path" && continue
+    size="$(filesizeof "$path")"
+    if [ -x "$path" ]; then isexec=1; else isexec=0; fi
+    processfschange "MOD" "$path" "$size" "$isexec" "$hashesfile"
+  done
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -3263,6 +3308,9 @@ fsintegritycheck()
   [ -z "$stateroot" ] && return
   mkdir -m 755 -p "$stateroot"
 
+  startfsinotify
+  drainfsevents
+
   local stampfile="$stateroot/fs_last_check" nowepoch lastepoch duesec
   nowepoch=$(date +%s)
   lastepoch=0
@@ -3497,177 +3545,6 @@ vresetdefaults()
     sleep 2
     exec sh "$apppath" -noswitch
   fi
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# vupdate checks both tracks (per TAILMON's own vupdate), lets the user switch tracks, and downloads/installs the chosen one.
-
-vupdate()
-{
-  local trackdisp remoteversion remotelabel remoteurl selupdate
-
-  while true; do
-    updatecheck
-    betacheck
-
-    if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
-
-    clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} Update IOCMON                                                                                                                           ${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Checks for and installs the latest IOCMON script from your preferred Stable or Beta track.${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CWhite} Stable Track${CClear}"
-    echo -e "${InvGreen} ${CClear} Local Version:       ${CGreen}$version${CClear}"
-    echo -e "${InvGreen} ${CClear} Official Version:    ${CGreen}${DLversion:-unknown}${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CWhite} Beta Track${CClear}"
-    echo -e "${InvGreen} ${CClear} Local Version:       ${CGreen}$version${CClear}"
-    echo -e "${InvGreen} ${CClear} Latest Beta Version: ${CGreen}${Bversion:-unknown}${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Your subscribed track: ${CGreen}$trackdisp${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo ""
-
-    if [ "$track" = "0" ]; then
-      remoteversion="$DLversion"; remotelabel="STABLE"; remoteurl="$iocmonrepostable/iocmon.sh"
-    else
-      remoteversion="$Bversion"; remotelabel="BETA"; remoteurl="$iocmonrepobeta/iocmon.sh"
-    fi
-
-    if [ -n "$remoteversion" ] && [ "$version" = "$remoteversion" ]; then
-      echo -e "You are on the latest ${CGreen}${remotelabel}${CClear} version! Download & overwrite, or change tracks?"
-    else
-      echo -e "A new ${CGreen}${remotelabel}${CClear} version is available! Download & upgrade, or change tracks?"
-    fi
-    read -p "(Stable = 0, Beta = 1, Download = y/n, e=Exit): " selupdate
-    case "$selupdate" in
-      0) track=0; saveconfig ;;
-      1) track=1; saveconfig ;;
-      [Yy])
-        echo ""
-        echo -e "Downloading IOCMON ${CGreen}${remotelabel}${CClear}..."
-        if curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$remoteurl" -o "${apppath}.new"; then
-          mv "${apppath}.new" "$apppath"
-          chmod 755 "$apppath"
-          echo -e "${CGreen}Download successful.${CClear}"
-          echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated to the $remotelabel track successfully." >> "$logfile"
-          echo ""
-          read -rsp $'Press any key to restart IOCMON...\n' -n1 key
-          exec sh "$apppath" -noswitch
-        else
-          rm -f "${apppath}.new"
-          echo -e "${CRed}ERROR: Download failed - check network connectivity and try again.${CClear}"
-          echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: IOCMON $remotelabel update download failed." >> "$logfile"
-          echo ""
-          read -rsp $'Press any key to continue...\n' -n1 key
-        fi
-        ;;
-      [Nn]|[Ee])
-        if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
-        return
-        ;;
-      *) ;;
-    esac
-  done
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# installentwarepkg confirms, then opkg update + installs every package name in $1, logging the result.
-
-installentwarepkg()
-{
-  local pkgs="$1" pkg
-  clear
-  echo -e "${InvGreen} ${InvDkGray}${CWhite} Install Optional Entware Component(s)                                                                                                   ${CClear}"
-  echo -e "${InvGreen} ${CClear}"
-  echo -e "${InvGreen} ${CClear} About to install: ${CGreen}${pkgs}${CClear}"
-  echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-  echo ""
-
-  if [ ! -d /opt ]; then
-    echo -e "${CRed}ERROR: Entware was not found on this router.${CClear}"
-    echo -e "Please install Entware using the AMTM utility first, then return to this menu."
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Entware was not found installed on router. Please investigate." >> "$logfile"
-    echo ""
-    read -rsp $'Press any key to continue...\n' -n1 key
-    return
-  fi
-
-  echo -e "Ready to install?"
-  if promptyn "[y/n]: "; then
-    echo ""
-    echo -e "${CGreen}Updating Entware package lists...${CClear}"
-    echo ""
-    opkg update
-    for pkg in $pkgs; do
-      echo ""
-      echo -e "Installing Entware ${CGreen}${pkg}${CClear}..."
-      echo ""
-      opkg install "$pkg"
-    done
-    echo ""
-    echo -e "${CGreen}Install complete.${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Optional Entware package(s) installed: $pkgs" >> "$logfile"
-    echo ""
-    read -rsp $'Press any key to continue...\n' -n1 key
-  fi
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# ventwarecomponents explains and optionally installs every Entware package IOCMON can use, all of them optional.
-
-ventwarecomponents()
-{
-  local screenstatus findstatus jqstatus selentware
-
-  while true; do
-    clear
-    if [ -x /opt/sbin/screen ]; then screenstatus="${CGreen}Installed${CClear}"; else screenstatus="${CYellow}Not installed${CClear}"; fi
-    if [ -x /opt/bin/find ]; then findstatus="${CGreen}Installed${CClear}"; else findstatus="${CYellow}Not installed${CClear}"; fi
-    if which jq >/dev/null 2>&1; then jqstatus="${CGreen}Installed${CClear}"; else jqstatus="${CYellow}Not installed${CClear}"; fi
-
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} Optional Entware Components                                                                                                             ${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} IOCMON runs fully in a reduced mode without any of these - each one only unlocks or${CClear}"
-    echo -e "${InvGreen} ${CClear} speeds up one specific feature. All of this requires Entware itself, already installed${CClear}"
-    echo -e "${InvGreen} ${CClear} via the AMTM utility.${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : screen             : ${screenstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Runs IOCMON continuously in the background so it survives an SSH disconnect and${CClear}"
-    echo -e "${InvGreen} ${CClear}       can autostart on reboot. Required specifically for the -screen/autostart feature -${CClear}"
-    echo -e "${InvGreen} ${CClear}       without it, IOCMON only runs in the foreground while you stay attached to it.${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : findutils          : ${findstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Full GNU find, used by the filesystem-integrity scan. Without it, IOCMON falls${CClear}"
-    echo -e "${InvGreen} ${CClear}       back to the router's own built-in BusyBox find automatically - scans still run${CClear}"
-    echo -e "${InvGreen} ${CClear}       correctly either way, this only affects how efficiently they run.${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : jq                 : ${jqstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Lets ThreatFox's authenticated API mode enrich detections with malware family/${CClear}"
-    echo -e "${InvGreen} ${CClear}       confidence data. Without it, ThreatFox still works fully via its free CSV export -${CClear}"
-    echo -e "${InvGreen} ${CClear}       you only lose that extra detail.${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Install all of the above${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Configuration Menu${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo ""
-    read -p "Please select? (1-4, e=Exit): " selentware
-    case "$selentware" in
-      1) installentwarepkg "screen" ;;
-      2) installentwarepkg "findutils" ;;
-      3) installentwarepkg "jq" ;;
-      4) installentwarepkg "screen findutils jq" ;;
-      [Ee]) break ;;
-      *) ;;
-    esac
-  done
-
-  if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4138,7 +4015,7 @@ renderdashboard()
 
 while true; do
   clear
-  echo -e "${CGreen}IOCMON v$version [Scanning for IoC's ... Please stand by]${CClear}"
+  echo -e "${CGreen}[Scanning for IoC's ... Please stand by]${CClear}"
 
   if [ -f "$config" ]; then
     . "$config"
