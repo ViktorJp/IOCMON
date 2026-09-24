@@ -1,7 +1,10 @@
 v0.4.8    - (TBA)
           - PATCH: Added a [H] Hash Log viewer under the main UI log viewer, showing which new/modified files
             were compared to the hash feed to determine any matches to malicious files. This log is being
-            stored under the extdrive/iocmon.d/state/hash_check.log file.
+            stored under the extdrive/iocmon.d/state/hash_check.log file for transparency.
+          - PATCH: Firmed up the dropbear, httpd and DNS detection logic as they seemed to be dealing with
+            dupes over time. Introduced some new tracking .db files that capture what's already been captured
+            as the syslog and related files are being re-read.
 
 v0.4.7    - (September 22, 2026)
           - PATCH: Added a formal script update menu under the configuration menu. This has been modeled after
