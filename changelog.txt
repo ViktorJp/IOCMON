@@ -10,6 +10,7 @@ v0.5.2    - (TBA)
           - PATCH: IOCMON finds where dnsmasq's queries are written automatically (normal syslog location, 
             "log-facility=" file, or a syslog-ng/scribe "dnsmasq.log"). If your setup routes them somewhere                                                          it can't detect, set the file path yourself under item #6 "DNS query log file" under the DNS Watch
             section under the configuration menu.
+          - PATCH: UI cleanup and spacing fixes.
 
 v0.4.7    - (September 22, 2026)
           - PATCH: Added a formal script update menu under the configuration menu. This has been modeled after
