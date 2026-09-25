@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.5.2
+# Version: 0.5.3
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Sep-25
 # ============================================================================================================================
@@ -86,7 +86,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.5.2"                 # current script version
+version="0.5.3"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -1219,7 +1219,7 @@ vadvanceddns()
       5) echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
          read -p "New query-name length threshold, chars (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; } ;;
-      6) echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"
+      6) echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
          read -p "Full path to the file holding dnsmasq's query lines (blank keeps current, 'auto' clears): " val
          if [ "$val" = "auto" ]; then
            dnslogpath=""; dnslogautotime=0; saveconfig
@@ -2567,8 +2567,8 @@ checkdns()
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
     dnslogannounced="$synclog"
   fi
-  dnslogshort=""
-  [ "$synclog" != "/tmp/syslog.log" ] && dnslogshort="$(printf '%.14s' "${synclog##*/}")"
+  dnslogshort="$synclog"
+  [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$synclog")>"
 
   if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
@@ -4257,7 +4257,7 @@ renderdashboard()
 
   dnsstatus="${CDkGray}off${CClear}"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})${dnslogshort:+ ${CDkGray}[${dnslogshort}]${CClear}}"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
+    if dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
   fi
   conntrackstatus="${CDkGray}off${CClear}"
   [ "$enableconntrackwatch" -eq 1 ] && conntrackstatus="${CGreen}on${CClear} (${conntrackchecked} dst ips, checked ${conntracklastcheck:-n/a})"
@@ -4303,8 +4303,10 @@ renderdashboard()
   echo -en "${InvGreen} ${CClear} "; padright "  Sources: ${CGreen}${feedsbreakdown:-none}${CClear}" 75; echo -e "Last Alert: ${CGreen}${lastalert}${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "conntrack: $conntrackstatus" 75; echo -e "dns: $dnsstatus"
-  echo -en "${InvGreen} ${CClear} "; padright "auth: $authstatus" 75; echo -e "fs-integrity: $fsstatus"
-  echo -e "${InvGreen} ${CClear} nvram: $nvramstatus"
+  dnslogline=""
+  [ "$enablednswatch" -eq 1 ] && [ -n "$dnslogshort" ] && dnslogline="${CDkGray}${dnslogshort}${CClear}"
+  echo -en "${InvGreen} ${CClear} "; padright "auth: $authstatus" 75; echo -e "$dnslogline"
+  echo -en "${InvGreen} ${CClear} "; padright "nvram: $nvramstatus" 75; echo -e "fs-integrity: $fsstatus"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "Email: $amtmdisp (limit: $rldisp)" 75; echo -e "Cron: $cronstatus"
   echo -en "${InvGreen} ${CClear} "; padright "Router: ${CGreen}${routermodel:-unknown}${CClear} ($(nvram get lan_hostname))" 75; echo -e "Storage: $drivestatus"
