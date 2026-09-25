@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.5.0
+# Version: 0.5.2
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-24
+# Last Updated: 2026-Sep-25
 # ============================================================================================================================
 #
 # Description:
@@ -86,7 +86,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.5.0"                 # current script version
+version="0.5.2"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -97,6 +97,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 dropbearlogfile="/jffs/addons/iocmon.d/dropbear_attempts.log"  # raw dropbear auth-failure log
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
+dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
 
 # Repo used for self-update checks.
 iocmonrepostable="https://raw.githubusercontent.com/ViktorJp/IOCMON/main"
@@ -126,6 +127,7 @@ enableurlhaus=1                 # enable the URLhaus feed source
 
 enablednswatch=0                # tail dnsmasq log for domain matches against feed data - off by default so a fresh install doesn't start "awaiting dnsmasq setup"
 dnsexceptions=""                # space-separated domains that match a feed but never alert/email, just an INFO log line - for known false positives
+dnslogpath=""                   # optional explicit DNS query log file (e.g. a syslog-ng/scribe dnsmasq.log) - blank = auto-detect
 enablednstunnel=0               # behavioral DNS-tunneling/exfiltration heuristic (query volume/name-length patterns, not feed-based) - off by default
 dnstunnelsubthreshold=20        # distinct subdomains under one base domain from one source IP, within a single check tick, to flag as possible tunneling
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
@@ -580,6 +582,7 @@ saveconfig()
 
     echo 'enablednswatch='$enablednswatch
     echo 'dnsexceptions="'"$dnsexceptions"'"'
+    echo 'dnslogpath="'"$dnslogpath"'"'
     echo 'enablednstunnel='$enablednstunnel
     echo 'dnstunnelsubthreshold='$dnstunnelsubthreshold
     echo 'dnstunnelnamelen='$dnstunnelnamelen
@@ -1175,15 +1178,22 @@ vadvanceddns()
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" 68; echo -e ": $(booleantoyesno "$enablednstunnel")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "  Distinct subdomains/tick under one domain to flag as tunneling" 68; echo -e ": ${CGreen}$dnstunnelsubthreshold${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "  Single query-name length (chars) to flag on its own" 68; echo -e ": ${CGreen}$dnstunnelnamelen${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" 68; echo -e ": ${CGreen}${dnslogpath:-auto}${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-5, e=Exit): " sel
+    read -p "Please select? (1-6, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
+           if dnsquerylogenabled; then
+             echo ""
+             disablednsquerylogging
+             echo ""
+             read -rsp $'Press any key to continue...\n' -n1 key
+           fi
          else
            enablednswatch=1
            saveconfig
@@ -1209,6 +1219,17 @@ vadvanceddns()
       5) echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
          read -p "New query-name length threshold, chars (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; } ;;
+      6) echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"
+         read -p "Full path to the file holding dnsmasq's query lines (blank keeps current, 'auto' clears): " val
+         if [ "$val" = "auto" ]; then
+           dnslogpath=""; dnslogautotime=0; saveconfig
+         elif [ -n "$val" ]; then
+           case "$val" in
+             /*) [ -f "$val" ] || echo -e "${CYellow}Note: $val does not exist yet - IOCMON will keep auto-detecting until it does.${CClear}"
+                 dnslogpath="$val"; dnslogautotime=0; saveconfig ;;
+             *) echo -e "${CRed}Please enter an absolute path (starting with /).${CClear}"; sleep 2 ;;
+           esac
+         fi ;;
       [Ee]) break ;;
       *) ;;
     esac
@@ -2336,17 +2357,69 @@ dnsquerylogenabled()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# resolvednslogfile finds where dnsmasq is actually writing its query log.
+# dnslogverified succeeds if file $1 exists and its recent tail contains dnsmasq query lines.
+
+dnslogverified()
+{
+  [ -f "$1" ] && tail -n 500 "$1" 2>/dev/null | grep -qE 'dnsmasq.*query\['
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnssyslogngfiles echoes every plain-path file() destination in a syslog-ng config that mentions dnsmasq.
+
+dnssyslogngfiles()
+{
+  local f
+  for f in /opt/etc/syslog-ng.d/* /opt/etc/syslog-ng.conf /opt/etc/syslog-ng/syslog-ng.conf; do
+    [ -f "$f" ] || continue
+    grep -q 'dnsmasq' "$f" 2>/dev/null || continue
+    sed -n 's/.*file("\([^"$]*\)".*/\1/p' "$f" 2>/dev/null
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# resolvednslogfile sets $dnslogresolved/$dnslogreason to the file holding dnsmasq's query lines: manual path, log-facility, then a content-verified auto-detect.
 
 resolvednslogfile()
 {
-  local facility
+  local facility cand now
+  now=$(date +%s)
+
+  if [ -n "$dnslogpath" ] && [ -f "$dnslogpath" ]; then
+    dnslogresolved="$dnslogpath"; dnslogreason="manual setting"
+    return
+  fi
+
   facility="$(grep -E '^log-facility=' /etc/dnsmasq.conf 2>/dev/null | tail -n1 | cut -d= -f2-)"
   if [ -n "$facility" ] && [ -f "$facility" ]; then
-    echo "$facility"
-  else
-    echo "/tmp/syslog.log"
+    dnslogresolved="$facility"; dnslogreason="dnsmasq log-facility"
+    return
   fi
+
+  if [ -n "$dnslogautofile" ] && [ -f "$dnslogautofile" ] && [ "$((now - ${dnslogautotime:-0}))" -lt 300 ]; then
+    dnslogresolved="$dnslogautofile"; dnslogreason="$dnslogautoreason"
+    return
+  fi
+
+  dnslogautofile="/tmp/syslog.log"; dnslogautoreason="syslog"
+  if ! dnslogverified /tmp/syslog.log; then
+    dnslogautoreason="syslog (no dnsmasq query lines found anywhere)"
+    for cand in $(dnssyslogngfiles) $dnslogknownpaths; do
+      if dnslogverified "$cand"; then
+        dnslogautofile="$cand"; dnslogautoreason="auto-detected dnsmasq log"
+        break
+      fi
+    done
+  fi
+
+  if [ "$dnslogautofile" = "/tmp/syslog.log" ] && [ "$dnslogautoreason" != "syslog" ]; then
+    dnslognonecount=$((${dnslognonecount:-0} + 1))
+  else
+    dnslognonecount=0
+  fi
+
+  dnslogautotime="$now"
+  dnslogresolved="$dnslogautofile"; dnslogreason="$dnslogautoreason"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2374,6 +2447,35 @@ enablednsquerylogging()
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Enabled dnsmasq query logging (log-queries) via dnsmasq.conf.add." >> "$logfile"
   service restart_dnsmasq >/dev/null 2>&1
   echo -e "${CGreen}DNS query logging enabled and dnsmasq restarted.${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# disablednsquerylogging removes any active log-queries line from dnsmasq.conf.add and restarts dnsmasq, only if one was actually there.
+
+disablednsquerylogging()
+{
+  local conf="/jffs/configs/dnsmasq.conf.add" before after
+
+  [ -f "$conf" ] || return 0
+
+  before="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
+  if [ "$before" -eq 0 ]; then
+    echo -e "${CGreen}No active log-queries line was found in dnsmasq.conf.add - nothing to remove.${CClear}"
+    return 0
+  fi
+
+  sed -i -e '/^[[:space:]]*log-queries[[:space:]]*$/d' -e '/^[[:space:]]*log-queries=/d' "$conf"
+  after="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
+
+  if [ "$after" -ne 0 ]; then
+    echo -e "${CRed}ERROR: Could not remove log-queries from dnsmasq.conf.add - remove it by hand, then run: service restart_dnsmasq${CClear}"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Failed to remove log-queries from dnsmasq.conf.add." >> "$logfile"
+    return 1
+  fi
+
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed dnsmasq query logging (log-queries) from dnsmasq.conf.add." >> "$logfile"
+  service restart_dnsmasq >/dev/null 2>&1
+  echo -e "${CGreen}DNS watch turned off: removed log-queries from dnsmasq.conf.add and restarted dnsmasq.${CClear}"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2457,8 +2559,22 @@ checkdns()
   [ -s "$domainsfile" ] || return
 
   local synclog
-  synclog="$(resolvednslogfile)"
+  resolvednslogfile
+  synclog="$dnslogresolved"
   [ -f "$synclog" ] || return
+
+  if [ "$synclog" != "$dnslogannounced" ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
+    dnslogannounced="$synclog"
+  fi
+  dnslogshort=""
+  [ "$synclog" != "/tmp/syslog.log" ] && dnslogshort="$(printf '%.14s' "${synclog##*/}")"
+
+  if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
+    dnslognonewarned=1
+  fi
+  [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
 
   local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor=""
   linecount="$(wc -l < "$synclog" | tr -d ' ')"
@@ -3587,6 +3703,7 @@ vresetdefaults()
   echo ""
   echo -e "Do you wish to proceed?"
   if promptyn "[y/n]: "; then
+    if [ "$enablednswatch" -eq 1 ]; then echo ""; disablednsquerylogging; fi
     rm -f "$config"
     echo ""
     echo -e "${CGreen}Configuration erased. Restarting IOCMON with default settings...${CClear}"
@@ -3781,6 +3898,7 @@ vuninstall()
   echo -e "Do you wish to proceed?"
   if promptyn "[y/n]: "; then
     echo ""
+    [ "$enablednswatch" -eq 1 ] && disablednsquerylogging
     echo -e "${CGreen}Removing scheduled cron jobs...${CClear}"
     cru d IOCMONUpdate >/dev/null 2>&1
     cru d IOCMONFeeds >/dev/null 2>&1
@@ -3846,6 +3964,7 @@ dnschecked=0; dnslastcheck=""
 authchecked=0; authlastcheck=""
 alertviewmode="ioc"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
+dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 timerpaused=0
 
 # Remove Maintenance Mode file lock left over from a prior run
@@ -4138,7 +4257,7 @@ renderdashboard()
 
   dnsstatus="${CDkGray}off${CClear}"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
+    if dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})${dnslogshort:+ ${CDkGray}[${dnslogshort}]${CClear}}"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
   fi
   conntrackstatus="${CDkGray}off${CClear}"
   [ "$enableconntrackwatch" -eq 1 ] && conntrackstatus="${CGreen}on${CClear} (${conntrackchecked} dst ips, checked ${conntracklastcheck:-n/a})"
