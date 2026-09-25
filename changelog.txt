@@ -1,4 +1,4 @@
-v0.5.2    - (TBA)
+v0.5.3    - (TBA)
           - PATCH: Added a [H] Hash Log viewer under the main UI log viewer, showing which new/modified files
             were compared to the hash feed to determine any matches to malicious files. This log is being
             stored under the extdrive/iocmon.d/state/hash_check.log file for transparency.
