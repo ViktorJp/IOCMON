@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.5.3
+# Version: 0.4.7
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-25
+# Last Updated: 2026-Sep-22
 # ============================================================================================================================
 #
 # Description:
@@ -25,8 +25,8 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                     : per-source raw downloads
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                     : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db            : "kind|indicator<TAB>epoch" alert dedup records
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint            : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
-#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db             : content ledgers of auth-failure lines already counted (checkauth)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint            : syslog line-count cursor for checkdns
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/auth_checkpoint           : syslog line-count cursor for checkauth
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db            : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker            : reference file `find -newer` compares against
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db          : last-seen `cru l` output for the cron-diff heuristic
@@ -38,9 +38,8 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_modified.txt      : timestamped log of modified filenames
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_deleted.txt       : timestamped log of deleted filenames
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_permchanged.txt   : timestamped log of permission-only changes
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log            : every real detection ever made, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log            : every real detection ever made, kept indefinitely
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending             : pending-count + latest summary; presence = red banner up
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log            : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
 #
 # Usage:
 #   iocmon.sh                                                         : interactive monitoring display
@@ -52,10 +51,8 @@
 #   iocmon.sh -h | -help                                              : this output
 #
 # Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
-#   (v) view the full log behind whichever "Recent..." panel is showing   (t) simulate a detection from a real,
-#   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
-#   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
-#   (p) pause/resume the countdown timer without triggering a rescan
+#   (v) view the permanent state/ioc_alerts.log in nano   (t) simulate a detection from a real, currently loaded
+#   (a) acknowledge the persistent red alert banner   (p) pause/resume the countdown timer without triggering a rescan
 #   (x) detach from the background SCREEN session without stopping IOCMON
 #
 # ============================================================================================================================
@@ -86,7 +83,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.5.3"                 # current script version
+version="0.4.7"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -95,9 +92,6 @@ bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
 logfile="/jffs/addons/iocmon.d/iocmon.log"  # main activity/alert log
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 dropbearlogfile="/jffs/addons/iocmon.d/dropbear_attempts.log"  # raw dropbear auth-failure log
-dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted
-httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
 
 # Repo used for self-update checks.
 iocmonrepostable="https://raw.githubusercontent.com/ViktorJp/IOCMON/main"
@@ -127,7 +121,6 @@ enableurlhaus=1                 # enable the URLhaus feed source
 
 enablednswatch=0                # tail dnsmasq log for domain matches against feed data - off by default so a fresh install doesn't start "awaiting dnsmasq setup"
 dnsexceptions=""                # space-separated domains that match a feed but never alert/email, just an INFO log line - for known false positives
-dnslogpath=""                   # optional explicit DNS query log file (e.g. a syslog-ng/scribe dnsmasq.log) - blank = auto-detect
 enablednstunnel=0               # behavioral DNS-tunneling/exfiltration heuristic (query volume/name-length patterns, not feed-based) - off by default
 dnstunnelsubthreshold=20        # distinct subdomains under one base domain from one source IP, within a single check tick, to flag as possible tunneling
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
@@ -425,7 +418,6 @@ progressbaroverride()
           4) vfslastfile 4;;
           [Dd]) alertviewmode="dropbear"; renderdashboard;;
           [Oo]) alertviewmode="ioc"; renderdashboard;;
-          [Hh]) alertviewmode="hash"; renderdashboard;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
@@ -582,7 +574,6 @@ saveconfig()
 
     echo 'enablednswatch='$enablednswatch
     echo 'dnsexceptions="'"$dnsexceptions"'"'
-    echo 'dnslogpath="'"$dnslogpath"'"'
     echo 'enablednstunnel='$enablednstunnel
     echo 'dnstunnelsubthreshold='$dnstunnelsubthreshold
     echo 'dnstunnelnamelen='$dnstunnelnamelen
@@ -1178,22 +1169,15 @@ vadvanceddns()
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" 68; echo -e ": $(booleantoyesno "$enablednstunnel")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "  Distinct subdomains/tick under one domain to flag as tunneling" 68; echo -e ": ${CGreen}$dnstunnelsubthreshold${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "  Single query-name length (chars) to flag on its own" 68; echo -e ": ${CGreen}$dnstunnelnamelen${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" 68; echo -e ": ${CGreen}${dnslogpath:-auto}${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-6, e=Exit): " sel
+    read -p "Please select? (1-5, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
-           if dnsquerylogenabled; then
-             echo ""
-             disablednsquerylogging
-             echo ""
-             read -rsp $'Press any key to continue...\n' -n1 key
-           fi
          else
            enablednswatch=1
            saveconfig
@@ -1219,17 +1203,6 @@ vadvanceddns()
       5) echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
          read -p "New query-name length threshold, chars (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; } ;;
-      6) echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
-         read -p "Full path to the file holding dnsmasq's query lines (blank keeps current, 'auto' clears): " val
-         if [ "$val" = "auto" ]; then
-           dnslogpath=""; dnslogautotime=0; saveconfig
-         elif [ -n "$val" ]; then
-           case "$val" in
-             /*) [ -f "$val" ] || echo -e "${CYellow}Note: $val does not exist yet - IOCMON will keep auto-detecting until it does.${CClear}"
-                 dnslogpath="$val"; dnslogautotime=0; saveconfig ;;
-             *) echo -e "${CRed}Please enter an absolute path (starting with /).${CClear}"; sleep 2 ;;
-           esac
-         fi ;;
       [Ee]) break ;;
       *) ;;
     esac
@@ -2278,7 +2251,6 @@ raisealert()
     local alertline pendingfile="$stateroot/alert_pending" pendingcount=0
     alertline="$(date +'%b %d %Y %X') | $kind | $indicator | $source | $detail"
     echo "$alertline" >> "$stateroot/ioc_alerts.log"
-    trimlogfile "$stateroot/ioc_alerts.log" "$logsize"
 
     [ -f "$pendingfile" ] && pendingcount="$(head -n1 "$pendingfile" 2>/dev/null)"
     validateint "$pendingcount" 0 || pendingcount=0
@@ -2357,69 +2329,17 @@ dnsquerylogenabled()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# dnslogverified succeeds if file $1 exists and its recent tail contains dnsmasq query lines.
-
-dnslogverified()
-{
-  [ -f "$1" ] && tail -n 500 "$1" 2>/dev/null | grep -qE 'dnsmasq.*query\['
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# dnssyslogngfiles echoes every plain-path file() destination in a syslog-ng config that mentions dnsmasq.
-
-dnssyslogngfiles()
-{
-  local f
-  for f in /opt/etc/syslog-ng.d/* /opt/etc/syslog-ng.conf /opt/etc/syslog-ng/syslog-ng.conf; do
-    [ -f "$f" ] || continue
-    grep -q 'dnsmasq' "$f" 2>/dev/null || continue
-    sed -n 's/.*file("\([^"$]*\)".*/\1/p' "$f" 2>/dev/null
-  done
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# resolvednslogfile sets $dnslogresolved/$dnslogreason to the file holding dnsmasq's query lines: manual path, log-facility, then a content-verified auto-detect.
+# resolvednslogfile finds where dnsmasq is actually writing its query log.
 
 resolvednslogfile()
 {
-  local facility cand now
-  now=$(date +%s)
-
-  if [ -n "$dnslogpath" ] && [ -f "$dnslogpath" ]; then
-    dnslogresolved="$dnslogpath"; dnslogreason="manual setting"
-    return
-  fi
-
+  local facility
   facility="$(grep -E '^log-facility=' /etc/dnsmasq.conf 2>/dev/null | tail -n1 | cut -d= -f2-)"
   if [ -n "$facility" ] && [ -f "$facility" ]; then
-    dnslogresolved="$facility"; dnslogreason="dnsmasq log-facility"
-    return
-  fi
-
-  if [ -n "$dnslogautofile" ] && [ -f "$dnslogautofile" ] && [ "$((now - ${dnslogautotime:-0}))" -lt 300 ]; then
-    dnslogresolved="$dnslogautofile"; dnslogreason="$dnslogautoreason"
-    return
-  fi
-
-  dnslogautofile="/tmp/syslog.log"; dnslogautoreason="syslog"
-  if ! dnslogverified /tmp/syslog.log; then
-    dnslogautoreason="syslog (no dnsmasq query lines found anywhere)"
-    for cand in $(dnssyslogngfiles) $dnslogknownpaths; do
-      if dnslogverified "$cand"; then
-        dnslogautofile="$cand"; dnslogautoreason="auto-detected dnsmasq log"
-        break
-      fi
-    done
-  fi
-
-  if [ "$dnslogautofile" = "/tmp/syslog.log" ] && [ "$dnslogautoreason" != "syslog" ]; then
-    dnslognonecount=$((${dnslognonecount:-0} + 1))
+    echo "$facility"
   else
-    dnslognonecount=0
+    echo "/tmp/syslog.log"
   fi
-
-  dnslogautotime="$now"
-  dnslogresolved="$dnslogautofile"; dnslogreason="$dnslogautoreason"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2450,91 +2370,6 @@ enablednsquerylogging()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# disablednsquerylogging removes any active log-queries line from dnsmasq.conf.add and restarts dnsmasq, only if one was actually there.
-
-disablednsquerylogging()
-{
-  local conf="/jffs/configs/dnsmasq.conf.add" before after
-
-  [ -f "$conf" ] || return 0
-
-  before="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
-  if [ "$before" -eq 0 ]; then
-    echo -e "${CGreen}No active log-queries line was found in dnsmasq.conf.add - nothing to remove.${CClear}"
-    return 0
-  fi
-
-  sed -i -e '/^[[:space:]]*log-queries[[:space:]]*$/d' -e '/^[[:space:]]*log-queries=/d' "$conf"
-  after="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
-
-  if [ "$after" -ne 0 ]; then
-    echo -e "${CRed}ERROR: Could not remove log-queries from dnsmasq.conf.add - remove it by hand, then run: service restart_dnsmasq${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Failed to remove log-queries from dnsmasq.conf.add." >> "$logfile"
-    return 1
-  fi
-
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed dnsmasq query logging (log-queries) from dnsmasq.conf.add." >> "$logfile"
-  service restart_dnsmasq >/dev/null 2>&1
-  echo -e "${CGreen}DNS watch turned off: removed log-queries from dnsmasq.conf.add and restarted dnsmasq.${CClear}"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# syslogresumepoint echoes the line number to resume after in $1, using the saved count and last-line anchor so pruning/rotation can't trigger a full replay.
-
-syslogresumepoint()
-{
-  local file="$1" lastcount="$2" anchor="$3" linecount="$4" found
-
-  if [ "$lastcount" -gt 0 ] && [ "$lastcount" -le "$linecount" ]; then
-    if [ -z "$anchor" ] || [ "$(sed -n "${lastcount}p" "$file")" = "$anchor" ]; then
-      echo "$lastcount"
-      return
-    fi
-  fi
-
-  if [ -n "$anchor" ]; then
-    found="$(grep -nxF -- "$anchor" "$file" | tail -n 1 | cut -d: -f1)"
-    if [ -n "$found" ]; then
-      echo "$found"
-      return
-    fi
-  fi
-
-  echo 0
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# authnewlines reads matching log lines on stdin, echoes only those not yet recorded in ledger $1 (multiplicity-aware), then updates the ledger.
-
-authnewlines()
-{
-  local ledger="$1" tmpbase="/tmp/iocmon_authseen.$$"
-
-  [ -f "$ledger" ] || : > "$ledger"
-  cat > "${tmpbase}.cur"
-  : > "${tmpbase}.out"
-  : > "${tmpbase}.new"
-
-  awk -v lp="$ledger" -v outf="${tmpbase}.out" -v newf="${tmpbase}.new" '
-    FILENAME==lp { i=index($0,"\t"); if (i>0) seen[substr($0,i+1)]=substr($0,1,i-1)+0; next }
-    { if (!($0 in cur)) order[++n]=$0; cur[$0]++ }
-    END {
-      for (k=1; k<=n; k++) {
-        l=order[k]; prev=(l in seen)?seen[l]:0; c=cur[l]
-        for (j=prev; j<c; j++) print l > outf
-        print ((c>prev)?c:prev) "\t" l > newf
-      }
-    }' "$ledger" "${tmpbase}.cur"
-
-  if [ "$(cat "${tmpbase}.new")" != "$(cat "$ledger")" ]; then
-    mv "${tmpbase}.new" "$ledger"
-  fi
-
-  cat "${tmpbase}.out"
-  rm -f "${tmpbase}.cur" "${tmpbase}.out" "${tmpbase}.new"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
 # checkdns tails new syslog lines since the last check
 
 checkdns()
@@ -2559,47 +2394,27 @@ checkdns()
   [ -s "$domainsfile" ] || return
 
   local synclog
-  resolvednslogfile
-  synclog="$dnslogresolved"
+  synclog="$(resolvednslogfile)"
   [ -f "$synclog" ] || return
 
-  if [ "$synclog" != "$dnslogannounced" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
-    dnslogannounced="$synclog"
-  fi
-  dnslogshort="$synclog"
-  [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$synclog")>"
-
-  if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
-    dnslognonewarned=1
-  fi
-  [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
-
-  local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor=""
+  local linecount lastcount=0 newlines checkpointfile=""
   linecount="$(wc -l < "$synclog" | tr -d ' ')"
 
   resolvestateroot
   if [ -n "$stateroot" ]; then
     mkdir -m 755 -p "$stateroot"
     checkpointfile="$stateroot/dns_checkpoint"
-    anchorfile="$stateroot/dns_anchor"
     [ -f "$checkpointfile" ] && lastcount="$(cat "$checkpointfile" 2>/dev/null)"
     [ -z "$lastcount" ] && lastcount=0
-    [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
   elif [ -n "$dnscheckpointcache" ]; then
     lastcount="$dnscheckpointcache"
-    anchor="$dnsanchorcache"
   fi
 
-  lastcount="$(syslogresumepoint "$synclog" "$lastcount" "$anchor" "$linecount")"
+  [ "$linecount" -lt "$lastcount" ] && lastcount=0
   newlines=$((linecount - lastcount))
 
-  anchor="$(tail -n 1 "$synclog")"
   [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
-  [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
   dnscheckpointcache="$linecount"
-  dnsanchorcache="$anchor"
 
   [ "$newlines" -le 0 ] && return
 
@@ -2688,54 +2503,43 @@ checkauth()
   local synclog="/tmp/syslog.log"
   [ -f "$synclog" ] || return
 
-  local sig linecount
-  sig="$(wc -lc < "$synclog" | awk '{print $1":"$2}')"
-  linecount="${sig%%:*}"
-
-  authchecked=$((linecount - ${authlastlinecount:-0}))
-  [ "$authchecked" -lt 0 ] && authchecked="$linecount"
-  authlastlinecount="$linecount"
-
-  if [ "$sig" = "$authsyncsig" ]; then
-    authchecked=0
-    return
-  fi
-  authsyncsig="$sig"
-  authlastcheck=$(date +'%H:%M')
+  local linecount lastcount=0 newlines checkpointfile=""
+  linecount="$(wc -l < "$synclog" | tr -d ' ')"
 
   resolvestateroot
-  [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
+  if [ -n "$stateroot" ]; then
+    mkdir -m 755 -p "$stateroot"
+    checkpointfile="$stateroot/auth_checkpoint"
+    [ -f "$checkpointfile" ] && lastcount="$(cat "$checkpointfile" 2>/dev/null)"
+    [ -z "$lastcount" ] && lastcount=0
+  elif [ -n "$authcheckpointcache" ]; then
+    lastcount="$authcheckpointcache"
+  fi
 
-  local nowepoch cutoff dropbearips httpdips dropbearlines httpdlines dbfirst=0 hdfirst=0
+  [ "$linecount" -lt "$lastcount" ] && lastcount=0
+  newlines=$((linecount - lastcount))
+
+  [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
+  authcheckpointcache="$linecount"
+
+  [ "$newlines" -le 0 ] && return
+
+  authchecked="$newlines"
+  authlastcheck=$(date +'%H:%M')
+
+  local nowepoch cutoff dropbearips httpdips dropbearlines
   nowepoch=$(date +%s)
   cutoff=$((nowepoch - authslowwindowhrs * 3600))
 
-  [ -f "$dropbearseenfile" ] || dbfirst=1
-  [ -f "$httpdseenfile" ] || hdfirst=1
-
-  dropbearlines="$(grep -F 'dropbear' "$synclog" | grep -F 'Bad password attempt' | authnewlines "$dropbearseenfile")"
-  httpdlines="$(grep -iF 'httpd' "$synclog" | grep -iE 'login.?fail|invalid.?password|authentication.?fail' | authnewlines "$httpdseenfile")"
-
-  if [ "$dbfirst" -eq 1 ]; then
-    dropbearlines=""
-    if [ -s "$dropbearlogfile" ]; then
-      awk '!seenline[$0]++' "$dropbearlogfile" > "/tmp/iocmon_dbdedupe.$$" && mv "/tmp/iocmon_dbdedupe.$$" "$dropbearlogfile"
-    fi
-    [ -n "$stateroot" ] && : > "$stateroot/auth_slow_dropbear.db"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Dropbear attempt ledger initialized - de-duplicated the existing dropbear log and reset the sustained-attempt counter." >> "$logfile"
-  fi
-  if [ "$hdfirst" -eq 1 ]; then
-    httpdlines=""
-    [ -n "$stateroot" ] && : > "$stateroot/auth_slow_httpd.db"
-  fi
-
+  dropbearlines="$(tail -n "$newlines" "$synclog" | grep -F 'dropbear' | grep -F 'Bad password attempt')"
   if [ -n "$dropbearlines" ]; then
     echo "$dropbearlines" >> "$dropbearlogfile"
     trimlogfile "$dropbearlogfile" "$logsize"
   fi
   dropbearips="$(echo "$dropbearlines" | grep -oE 'from [0-9]{1,3}(\.[0-9]{1,3}){3}' | awk '{print $2}')"
 
-  httpdips="$(echo "$httpdlines" | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')"
+  httpdips="$(tail -n "$newlines" "$synclog" | grep -iF 'httpd' | grep -iE 'login.?fail|invalid.?password|authentication.?fail' | \
+    grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')"
 
   if [ -n "$dropbearips" ]; then
     [ -n "$stateroot" ] && echo "$dropbearips" | awk -v now="$nowepoch" '{print now"|"$0}' >> "$stateroot/auth_slow_dropbear.db"
@@ -2826,7 +2630,7 @@ quarantinefile()
 
 hashmatchcheck()
 {
-  local path="$1" hashesfile="$2" md5="" sha1="" sha256="" match hashchecklogfile hashlogprefix
+  local path="$1" hashesfile="$2" md5="" sha1="" sha256="" match
 
   which md5sum >/dev/null 2>&1 && md5="$(md5sum "$path" 2>/dev/null | awk '{print $1}')"
   which sha1sum >/dev/null 2>&1 && sha1="$(sha1sum "$path" 2>/dev/null | awk '{print $1}')"
@@ -2836,19 +2640,6 @@ hashmatchcheck()
     FNR==NR { h[$1] = $2"|"$3; next }
     { if ($0 in h) print $0"|"h[$0] }
   ' "$hashesfile" -)"
-
-  if [ -n "$stateroot" ]; then
-    hashchecklogfile="$stateroot/hash_check.log"
-    hashlogprefix="$(date +'%b %d %Y %X') | $path | md5=${md5:-n/a} sha1=${sha1:-n/a} sha256=${sha256:-n/a}"
-    if [ -n "$match" ]; then
-      echo "$match" | while IFS='|' read -r matchedhash source family; do
-        echo "${hashlogprefix} | MATCH: hash=${matchedhash} source=${source} family=${family}" >> "$hashchecklogfile"
-      done
-    else
-      echo "${hashlogprefix} | no match" >> "$hashchecklogfile"
-    fi
-    trimlogfile "$hashchecklogfile" "$logsize"
-  fi
 
   [ -z "$match" ] && return
 
@@ -3537,7 +3328,7 @@ acknowledgealert()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vioclog opens the full log behind whichever "Recent..." panel ($alertviewmode) is currently showing, in nano.
+# vioclog opens the permanent IOC detection log in nano.
 
 vioclog()
 {
@@ -3546,9 +3337,6 @@ vioclog()
 
   if [ "$alertviewmode" = "dropbear" ]; then
     viewfile="$dropbearlogfile"
-  elif [ "$alertviewmode" = "hash" ]; then
-    emptymsg="No files have been checked against the malware-hash feed yet."
-    [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
   else
     emptymsg="No IoC detections have been logged yet."
     [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
@@ -3703,7 +3491,6 @@ vresetdefaults()
   echo ""
   echo -e "Do you wish to proceed?"
   if promptyn "[y/n]: "; then
-    if [ "$enablednswatch" -eq 1 ]; then echo ""; disablednsquerylogging; fi
     rm -f "$config"
     echo ""
     echo -e "${CGreen}Configuration erased. Restarting IOCMON with default settings...${CClear}"
@@ -3898,7 +3685,6 @@ vuninstall()
   echo -e "Do you wish to proceed?"
   if promptyn "[y/n]: "; then
     echo ""
-    [ "$enablednswatch" -eq 1 ] && disablednsquerylogging
     echo -e "${CGreen}Removing scheduled cron jobs...${CClear}"
     cru d IOCMONUpdate >/dev/null 2>&1
     cru d IOCMONFeeds >/dev/null 2>&1
@@ -3963,8 +3749,7 @@ conntrackchecked=0; conntracklastcheck=""
 dnschecked=0; dnslastcheck=""
 authchecked=0; authlastcheck=""
 alertviewmode="ioc"
-dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
-dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
+dnscheckpointcache=""; authcheckpointcache=""
 timerpaused=0
 
 # Remove Maintenance Mode file lock left over from a prior run
@@ -4303,10 +4088,8 @@ renderdashboard()
   echo -en "${InvGreen} ${CClear} "; padright "  Sources: ${CGreen}${feedsbreakdown:-none}${CClear}" 75; echo -e "Last Alert: ${CGreen}${lastalert}${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "conntrack: $conntrackstatus" 75; echo -e "dns: $dnsstatus"
-  dnslogline=""
-  [ "$enablednswatch" -eq 1 ] && [ -n "$dnslogshort" ] && dnslogline="${CDkGray}${dnslogshort}${CClear}"
-  echo -en "${InvGreen} ${CClear} "; padright "auth: $authstatus" 75; echo -e "$dnslogline"
-  echo -en "${InvGreen} ${CClear} "; padright "nvram: $nvramstatus" 75; echo -e "fs-integrity: $fsstatus"
+  echo -en "${InvGreen} ${CClear} "; padright "auth: $authstatus" 75; echo -e "fs-integrity: $fsstatus"
+  echo -e "${InvGreen} ${CClear} nvram: $nvramstatus"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "Email: $amtmdisp (limit: $rldisp)" 75; echo -e "Cron: $cronstatus"
   echo -en "${InvGreen} ${CClear} "; padright "Router: ${CGreen}${routermodel:-unknown}${CClear} ($(nvram get lan_hostname))" 75; echo -e "Storage: $drivestatus"
@@ -4329,7 +4112,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] to view the full log, or [${CGreen}O${CClear}] for IoC Detections)"
     if [ -s "$dropbearlogfile" ]; then
       tail -n 10 "$dropbearlogfile" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -4338,18 +4121,8 @@ renderdashboard()
     else
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
-  elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}D${CClear}] for Dropbear attempts)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
-      tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
-        [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
-        echo -e "${InvGreen} ${CClear}   ${CCyan}${hashline}${CClear}"
-      done
-    else
-      echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
-    fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}H${CClear}] for Hash Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (kept indefinitely - press [${CGreen}V${CClear}] to view the full log, or [${CGreen}D${CClear}] for Dropbear attempts)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
         [ "${#iocline}" -gt 134 ] && iocline="$(printf '%.133s' "$iocline")>"
@@ -4409,7 +4182,7 @@ while true; do
   checknvram
   if [ "$enablenvramwatch" -eq 1 ]; then
     blanklineguard
-    echo -e "  ${CGreen}*${CClear} Compared ${CGreen}$(echo "$nvramwatchvars" | wc -w | tr -d ' ')${CClear} security-relevant NVRAM variable(s) for unexpected changes"
+    echo -e "  ${CGreen}*${CClear} Checked ${CGreen}$(echo "$nvramwatchvars" | wc -w | tr -d ' ')${CClear} security-relevant NVRAM variable(s) (SSH/Telnet, WAN DNS, WAN type, JFFS scripts) for unexpected changes"
     scanbulletprinted=1
     sleep 1
   fi
