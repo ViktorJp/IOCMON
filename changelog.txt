@@ -3,8 +3,9 @@ v0.5.6    - (TBA)
             IP feed resource. Q-Feeds is free, but requires a signup in order to get an API key. This key will
             need to be input into the Feeds menu under the Configuration Menu. Huge thanks to @Slapdaddy for
             bringing up this suggestion. This resource adds a tremendous number of additional malware source
-            indicators to check against! Due to its size, I'm suggesting only updating 1x/day, however you can
-            change that if you please.
+            indicators to check against! Due to its size, and being on the free community edition, feeds are
+            only updated every 24hrs by default. Which is why the settings suggest only updating 1x/day,
+            however you can change that if you please.
           - PATCH: Included the menu item numbering system to each of the sub menus and their sub menus for
             easier reference where you are, or when following instructions. Thanks to @Twiglets for that great
             suggestion!
