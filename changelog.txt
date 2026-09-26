@@ -1,4 +1,4 @@
-v0.5.3    - (TBA)
+v0.5.3    - (September 25, 2026)
           - PATCH: Added a [H] Hash Log viewer under the main UI log viewer, showing which new/modified files
             were compared to the hash feed to determine any matches to malicious files. This log is being
             stored under the extdrive/iocmon.d/state/hash_check.log file for transparency.
@@ -9,7 +9,7 @@ v0.5.3    - (TBA)
             dnsmasq.conf.add file and dnsmasq is restarted.
           - PATCH: IOCMON finds where dnsmasq's queries are written automatically (normal syslog location, 
             "log-facility=" file, or a syslog-ng/scribe "dnsmasq.log"). If your setup routes them somewhere                                                          it can't detect, set the file path yourself under item #6 "DNS query log file" under the DNS Watch
-            section under the configuration menu.
+            section under the configuration menu. Thanks to @scootertramp for noting this!
           - PATCH: UI cleanup and spacing fixes.
 
 v0.4.7    - (September 22, 2026)
