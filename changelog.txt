@@ -1,3 +1,13 @@
+v0.5.6    - (TBA)
+          - MINOR: Added another feed integration. Pleased to announce Q-Feeds as another malicious domain and
+            IP feed resource. Q-Feeds is free, but requires a signup in order to get an API key. This key will
+            need to be input into the Feeds menu under the Configuration Menu. Huge thanks to @Slapdaddy for
+            bringing up this suggestion. This resource adds a tremendous number of additional malware source
+            indicators to check against!
+          - PATCH: Included the menu item numbering system to each of the sub menus and their sub menus for
+            easier reference where you are, or when following instructions. Thanks to @Twiglets for that great
+            suggestion!
+
 v0.5.3    - (September 25, 2026)
           - PATCH: Added a [H] Hash Log viewer under the main UI log viewer, showing which new/modified files
             were compared to the hash feed to determine any matches to malicious files. This log is being
