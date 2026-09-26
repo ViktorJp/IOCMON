@@ -8,7 +8,8 @@ v0.5.3    - (September 25, 2026)
           - PATCH: When DNS Monitoring is disabled, the "log-queries" entry is cleaned up and removed from the
             dnsmasq.conf.add file and dnsmasq is restarted.
           - PATCH: IOCMON finds where dnsmasq's queries are written automatically (normal syslog location, 
-            "log-facility=" file, or a syslog-ng/scribe "dnsmasq.log"). If your setup routes them somewhere                                                          it can't detect, set the file path yourself under item #6 "DNS query log file" under the DNS Watch
+            "log-facility=" file, or a syslog-ng/scribe "dnsmasq.log"). If your setup routes them somewhere
+            it can't detect, set the file path yourself under item #6 "DNS query log file" under the DNS Watch
             section under the configuration menu. Thanks to @scootertramp for noting this!
           - PATCH: UI cleanup and spacing fixes.
 
