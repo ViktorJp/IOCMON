@@ -3,6 +3,7 @@ PLANNED IOCMON ENHANCEMENTS
 To-Do:
 - Add VI as an optional text reader (@XIII)
 - Look at possible integration with Skynet and import IOC threat feeds to prevent outbound contact with malicious actors.
+- Build a web interface (@AvalonOC)
 
 Done:
 - Integrate Q-Feeds as another feed resource (@Slapdaddy)
