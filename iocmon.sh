@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.5.8
+# Version: 0.5.9
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Sep-27
 # ============================================================================================================================
@@ -87,7 +87,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.5.8"                 # current script version
+version="0.5.9"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -887,6 +887,29 @@ togglesetting()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# validipcidr checks $1 is a well-formed IPv4 address (each octet 0-255), optionally /N with N 0-32.
+
+validipcidr()
+{
+  local val="$1" ip mask hasslash=0 octet oldifs
+  case "$val" in
+    */*) hasslash=1; mask="${val#*/}"; ip="${val%%/*}" ;;
+    *) ip="$val"; mask="" ;;
+  esac
+  if [ "$hasslash" -eq 1 ]; then
+    case "$mask" in "") return 1 ;; *[!0-9]*) return 1 ;; esac
+    [ "$mask" -ge 0 ] && [ "$mask" -le 32 ] || return 1
+  fi
+  oldifs="$IFS"; IFS=.; set -- $ip; IFS="$oldifs"
+  [ "$#" -eq 4 ] || return 1
+  for octet in "$1" "$2" "$3" "$4"; do
+    case "$octet" in "") return 1 ;; *[!0-9]*) return 1 ;; esac
+    [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
+  done
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # veditlist is a numbered add/edit/delete editor for a space-separated list stored in $1
 
 veditlist()
@@ -935,6 +958,11 @@ veditlist()
               echo -e "Add it anyway?"
               promptyn "[y/n]: " || continue
             fi
+          elif [ "$varname" = "ipexceptions" ] && ! validipcidr "$newval"; then
+            echo ""
+            echo -e "${CRed}Invalid entry - expected a single IP (e.g. 204.44.63.22) or a CIDR range (e.g. 204.44.0.0/16, prefix 0-32).${CClear}"
+            sleep 3
+            continue
           fi
           eval "$varname=\"\${$varname:+\$$varname }\$newval\""
           saveconfig
@@ -964,6 +992,12 @@ veditlist()
           echo -e "Current: ${CGreen}${entry}${CClear}"
           read -p "New value (blank to keep current): " newval
           if [ -n "$newval" ]; then
+            if [ "$varname" = "ipexceptions" ] && ! validipcidr "$newval"; then
+              echo ""
+              echo -e "${CRed}Invalid entry - expected a single IP (e.g. 204.44.63.22) or a CIDR range (e.g. 204.44.0.0/16, prefix 0-32).${CClear}"
+              sleep 3
+              continue
+            fi
             set -- $list
             idx=0
             newlist=""
@@ -2499,7 +2533,11 @@ checkconntrack()
       excn = split(exc, ea, " ")
       for (k = 1; k <= excn; k++) {
         if (ea[k] == "") continue
-        if (index(ea[k], "/") > 0) { split(ea[k], pp, "/"); cidrnet[k] = toint(pp[1]); cidrmask[k] = pp[2] + 0; iscidr[k] = 1 }
+        if (index(ea[k], "/") > 0) {
+          split(ea[k], pp, "/")
+          if ((pp[2] + 0) < 0 || (pp[2] + 0) > 32) continue
+          cidrnet[k] = toint(pp[1]); cidrmask[k] = pp[2] + 0; iscidr[k] = 1
+        }
         else { plainexc[ea[k]] = 1 }
       }
     }
