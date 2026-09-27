@@ -1,6 +1,6 @@
 v0.5.8    - (TBA)
-          - PATCH: Worked on fixing an issue with screen corruption when coming from a reboot when IOCMON
-            started on its own using 'screen'. The timer line would throw some corruption and redraws. Fixed!
+          - PATCH: Worked on fixing an issue with screen corruption when coming from a router reboot when
+            IOCMON starts on its own using 'screen'. The timer line would throw some corruption and redraws.
           - PATCH: Alert banner location is configurable under menu 8.1, and allows you to choose the top or
             bottom of the screen. By default, Top of the screen is enabled. - thanks for the suggestion, @XIII!
           - PATCH: Alert banner content/email level options are available under 8.1 as well, giving you the
