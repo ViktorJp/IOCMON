@@ -1,4 +1,4 @@
-v0.5.8    - (September 27, 2026)
+v0.5.9    - (September 27, 2026)
           - PATCH: Worked on fixing an issue with screen corruption when coming from a router reboot when
             IOCMON starts on its own using 'screen'. The timer line would throw some corruption and redraws.
           - PATCH: Alert banner location is configurable under menu 8.1, and allows you to choose the top or
