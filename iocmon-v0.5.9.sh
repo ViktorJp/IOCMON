@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.6.1
+# Version: 0.5.9
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-28
+# Last Updated: 2026-Sep-27
 # ============================================================================================================================
 #
 # Description:
@@ -27,8 +27,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                     : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db            : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint            : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
-#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db             : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay (see round 62)
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log     : raw dropbear auth-failure log, trimmed to $logsize
+#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db             : content ledgers of auth-failure lines already counted (checkauth)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db            : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker            : reference file `find -newer` compares against
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db          : last-seen `cru l` output for the cron-diff heuristic
@@ -88,7 +87,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.6.1"                 # current script version
+version="0.5.9"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -96,7 +95,8 @@ dlverpath="/jffs/addons/iocmon.d/version.txt"  # stable-track version file
 bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
 logfile="/jffs/addons/iocmon.d/iocmon.log"  # main activity/alert log
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
-dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately (round 62)
+dropbearlogfile="/jffs/addons/iocmon.d/dropbear_attempts.log"  # raw dropbear auth-failure log
+dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
 
@@ -334,25 +334,6 @@ ScriptUpdateFromAMTM()
     fi
 
     return "$DLsuccess"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# downloadiocmonupdate does the actual curl-to-.new-then-mv download; shared by vupdate() and -autoupdate.
-
-downloadiocmonupdate()
-{
-  local url="$1" label="$2"
-
-  if curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"; then
-    mv "${apppath}.new" "$apppath"
-    chmod 755 "$apppath"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
-    return 0
-  else
-    rm -f "${apppath}.new"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
-    return 1
-  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2958,23 +2939,8 @@ checkauth()
   [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
 
   local nowepoch cutoff dropbearips httpdips dropbearlines httpdlines dbfirst=0 hdfirst=0
-  local olddropbearlog="/jffs/addons/iocmon.d/dropbear_attempts.log" dropbearlogfile=""
   nowepoch=$(date +%s)
   cutoff=$((nowepoch - authslowwindowhrs * 3600))
-
-  if [ -n "$stateroot" ]; then
-    dropbearlogfile="$stateroot/dropbear_attempts.log"
-    if [ -f "$olddropbearlog" ]; then
-      if [ -s "$dropbearlogfile" ]; then
-        cat "$olddropbearlog" >> "$dropbearlogfile"
-      else
-        mv "$olddropbearlog" "$dropbearlogfile"
-      fi
-      rm -f "$olddropbearlog"
-      trimlogfile "$dropbearlogfile" "$logsize"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Migrated dropbear_attempts.log from JFFS to the state folder on the feed storage location." >> "$logfile"
-    fi
-  fi
 
   [ -f "$dropbearseenfile" ] || dbfirst=1
   [ -f "$httpdseenfile" ] || hdfirst=1
@@ -2984,7 +2950,7 @@ checkauth()
 
   if [ "$dbfirst" -eq 1 ]; then
     dropbearlines=""
-    if [ -n "$dropbearlogfile" ] && [ -s "$dropbearlogfile" ]; then
+    if [ -s "$dropbearlogfile" ]; then
       awk '!seenline[$0]++' "$dropbearlogfile" > "/tmp/iocmon_dbdedupe.$$" && mv "/tmp/iocmon_dbdedupe.$$" "$dropbearlogfile"
     fi
     [ -n "$stateroot" ] && : > "$stateroot/auth_slow_dropbear.db"
@@ -2995,7 +2961,7 @@ checkauth()
     [ -n "$stateroot" ] && : > "$stateroot/auth_slow_httpd.db"
   fi
 
-  if [ -n "$dropbearlines" ] && [ -n "$dropbearlogfile" ]; then
+  if [ -n "$dropbearlines" ]; then
     echo "$dropbearlines" >> "$dropbearlogfile"
     trimlogfile "$dropbearlogfile" "$logsize"
   fi
@@ -3811,7 +3777,7 @@ vioclog()
   local viewfile="" emptymsg="No dropbear login-failure attempts have been logged yet."
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    [ -n "$stateroot" ] && viewfile="$stateroot/dropbear_attempts.log"
+    viewfile="$dropbearlogfile"
   elif [ "$alertviewmode" = "hash" ]; then
     emptymsg="No files have been checked against the malware-hash feed yet."
     [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
@@ -4027,13 +3993,18 @@ vupdate()
       [Yy])
         echo ""
         echo -e "Downloading IOCMON ${CGreen}${remotelabel}${CClear}..."
-        if downloadiocmonupdate "$remoteurl" "$remotelabel"; then
+        if curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$remoteurl" -o "${apppath}.new"; then
+          mv "${apppath}.new" "$apppath"
+          chmod 755 "$apppath"
           echo -e "${CGreen}Download successful.${CClear}"
+          echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated to the $remotelabel track successfully." >> "$logfile"
           echo ""
           read -rsp $'Press any key to restart IOCMON...\n' -n1 key
           exec sh "$apppath" -noswitch
         else
+          rm -f "${apppath}.new"
           echo -e "${CRed}ERROR: Download failed - check network connectivity and try again.${CClear}"
+          echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: IOCMON $remotelabel update download failed." >> "$logfile"
           echo ""
           read -rsp $'Press any key to continue...\n' -n1 key
         fi
@@ -4237,11 +4208,6 @@ fi
 
 if [ "$1" = "amtmupdate" ]; then
     shift
-    [ -f "$config" ] && . "$config"
-    if [ "${track:-0}" = "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: AMTM update request ignored - this install is subscribed to the Beta track, which AMTM only ever installs Stable for; use Configuration Menu (6) to update a Beta install instead." >> "$logfile"
-      exit 0
-    fi
     ScriptUpdateFromAMTM "$@"
     exit "$?"
 fi
@@ -4332,16 +4298,9 @@ if [ "$1" == "-autoupdate" ]; then
     updatecheck
     betacheck
     if [ "$updateiocm" -eq 1 ]; then
-      if [ "$track" = "1" ]; then
-        remoteurl="$iocmonrepobeta/iocmon.sh"; remotelabel="BETA"; remoteversion="$Bversion"
-      else
-        remoteurl="$iocmonrepostable/iocmon.sh"; remotelabel="STABLE"; remoteversion="$DLversion"
-      fi
-      if [ -n "$remoteversion" ] && [ "$version" != "$remoteversion" ]; then
-        echo > "$updatingfile"
-        downloadiocmonupdate "$remoteurl" "$remotelabel"
-        rm -f "$updatingfile" >/dev/null 2>&1
-      fi
+      echo > "$updatingfile"
+      ScriptUpdateFromAMTM
+      rm -f "$updatingfile" >/dev/null 2>&1
     fi
     exit 0
 fi
@@ -4615,8 +4574,8 @@ renderdashboard()
 
   if [ "$alertviewmode" = "dropbear" ]; then
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
-      tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
+    if [ -s "$dropbearlogfile" ]; then
+      tail -n 10 "$dropbearlogfile" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
         echo -e "${InvGreen} ${CClear}   ${CYellow}${dbline}${CClear}"
       done
