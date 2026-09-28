@@ -1,3 +1,9 @@
+v0.6.1    - (September 28, 2026)
+          - PATCH: Fixed some inconsistencies with the -autoupdate switch installing a stable version over a
+            beta version, even when the beta track was already selected. Thanks @XIII and @Ripsshod!
+          - PATCH: Moved the location of dropbear_attempts.log from /jffs/addons/iocmon.d to the external
+            drive's state folder.
+
 v0.5.9    - (September 27, 2026)
           - PATCH: Worked on fixing an issue with screen corruption when coming from a router reboot when
             IOCMON starts on its own using 'screen'. The timer line would throw some corruption and redraws.
