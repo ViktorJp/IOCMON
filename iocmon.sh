@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.6.3
+# Version: 0.6.4
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Sep-28
 # ============================================================================================================================
@@ -57,6 +57,7 @@
 #   (v) view the full log behind whichever "Recent..." panel is showing   (t) simulate a detection from a real,
 #   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
 #   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
+#   (r) clear whichever log the "Recent..." panel is currently showing (confirmation required)
 #   (p) pause/resume the countdown timer without triggering a rescan
 #   (x) detach from the background SCREEN session without stopping IOCMON
 #
@@ -88,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.6.3"                 # current script version
+version="0.6.4"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -452,6 +453,7 @@ progressbaroverride()
           [Dd]) alertviewmode="dropbear"; renderdashboard;;
           [Oo]) alertviewmode="ioc"; renderdashboard;;
           [Hh]) alertviewmode="hash"; renderdashboard;;
+          [Rr]) clearcurrentlog;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
@@ -3834,6 +3836,45 @@ vioclog()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# clearcurrentlog wipes whichever log the "Recent..." panel/$alertviewmode is currently showing.
+
+clearcurrentlog()
+{
+  resolvestateroot
+  local viewfile="" label="IoC Detections"
+
+  if [ "$alertviewmode" = "dropbear" ]; then
+    label="Dropbear Attempts"
+    [ -n "$stateroot" ] && viewfile="$stateroot/dropbear_attempts.log"
+  elif [ "$alertviewmode" = "hash" ]; then
+    label="Hash-Check"
+    [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
+  else
+    [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
+  fi
+
+  if [ -z "$viewfile" ]; then
+    renderdashboard
+    return
+  fi
+
+  clear
+  echo -e "${CGreen}[Clear $label Log]${CClear}"
+  echo ""
+  echo -e "This erases $viewfile. This is irreversible."
+  echo ""
+  if promptyn "Do you wish to proceed? [y/n]: "; then
+    : > "$viewfile"
+    echo ""
+    echo ""
+    echo -e "${CGreen}Log cleared.${CClear}"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $label log cleared via (R) hotkey." >> "$logfile"
+    sleep 1
+  fi
+  renderdashboard
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # vfslastfile opens one of the four accumulating filesystem-integrity report files in nano
 
 vfslastfile()
@@ -4615,7 +4656,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
       tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -4625,7 +4666,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
   elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (kept to the last ${CGreen}${logsize}${CClear} lines - press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}D${CClear}] for Dropbear attempts)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
       tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
@@ -4635,7 +4676,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}H${CClear}] for Hash Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
         [ "${#iocline}" -gt 134 ] && iocline="$(printf '%.133s' "$iocline")>"
