@@ -1,10 +1,13 @@
-v0.6.3    - (September 28, 2026)
+v0.6.4    - (September 28, 2026)
           - PATCH: IOCMON v0.6.1 was pushed to production, and v0.6.2 is an identical version with a higher
             version number, created to test the autoupdate functionality. Steps: (1) Update to v0.6.1 on the
             stable track. (2) Switch to the Beta track. (3) Report your findings tomorrow after the autoupdate
             cron job has run.
           - PATCH: Modified menu item 8.6.7 so that it refers to the actual track name (Stable/Beta) instead
             of using a Yes/No, which just made things more cryptic.
+          - PATCH: Includes a new "[R] Clear this Log" as an option on the main UI. This will clear the current
+            log that's currently being viewed, and gives the user an option to back out if needed. Great idea
+            by @JB_1366!
 
 v0.6.1    - (September 28, 2026)
           - PATCH: Fixed some inconsistencies with the -autoupdate switch installing a stable version over a
