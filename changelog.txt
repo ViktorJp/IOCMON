@@ -1,4 +1,4 @@
-v0.6.5    - (September 29, 2026)
+v0.6.6    - (September 29, 2026)
           - PATCH: The -autoupdate switch now restarts IOCMON into the new version after a successful
             download. Previously, it would download the new version, but wouldn't get used until it was
             manually restarted. Thanks @Visortgw for noticing! :)
