@@ -1,3 +1,7 @@
+v0.6.7    - (October 1, 2026)
+          - PATCH: Minor changes to the Github download links to point to the latest releases file, to help
+            enable a more formal release metrics process.
+
 v0.6.6    - (September 29, 2026)
           - PATCH: The -autoupdate switch now restarts IOCMON into the new version after a successful
             download. Previously, it would download the new version, but wouldn't get used until it was
