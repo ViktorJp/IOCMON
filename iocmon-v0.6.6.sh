@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.6.7
+# Version: 0.6.6
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-01
+# Last Updated: 2026-Sep-29
 # ============================================================================================================================
 #
 # Description:
@@ -11,47 +11,47 @@
 #   indicator-of-compromise (IoC) feeds to alert the user of possible compromise or malware on the router.
 #
 # File layout:
-#   /jffs/scripts/iocmon.sh                                             : main script - control plane, survives reboot
-#   /jffs/addons/iocmon.d/iocmon.cfg                                    : config (flat key=value, sourced)
-#   /jffs/addons/iocmon.d/version.txt                                   : stable track version file
-#   /jffs/addons/iocmon.d/beta.txt                                      : beta track version file
-#   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, trimmed)
-#   /jffs/addons/iocmon.d/updating.txt                                  : maintenance-mode lock file
-#   /jffs/addons/iocmon.d/feeds-degraded/                               : small JFFS-safe feed cache used only in degraded mode
-#   /jffs/addons/iocmon.d/state-degraded/                               : small JFFS-safe alert-dedup state used only in degraded mode
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/ips.txt                     : canonical combined IP/netblock indicator list
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/domains.txt                 : canonical combined domain indicator list
+#   /jffs/scripts/iocmon.sh                                           : main script - control plane, survives reboot
+#   /jffs/addons/iocmon.d/iocmon.cfg                                  : config (flat key=value, sourced)
+#   /jffs/addons/iocmon.d/version.txt                                 : stable track version file
+#   /jffs/addons/iocmon.d/beta.txt                                    : beta track version file
+#   /jffs/addons/iocmon.d/iocmon.log                                  : activity/alert log (nano-viewable, trimmed)
+#   /jffs/addons/iocmon.d/updating.txt                                : maintenance-mode lock file
+#   /jffs/addons/iocmon.d/feeds-degraded/                             : small JFFS-safe feed cache used only in degraded mode
+#   /jffs/addons/iocmon.d/state-degraded/                             : small JFFS-safe alert-dedup state used only in degraded mode
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/ips.txt                   : canonical combined IP/netblock indicator list
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/domains.txt               : canonical combined domain indicator list
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/qfeeds_ips.txt/_domains.txt : Q-Feeds bare indicator lists (matched by streaming)
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/hashes.txt                  : canonical combined file-hash indicator list
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
-#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay (see round 62)
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : raw dropbear auth-failure log, trimmed to $logsize
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker              : reference file `find -newer` compares against
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db            : last-seen `cru l` output for the cron-diff heuristic
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_check               : epoch stamp gating the fsintegrityhrs cadence
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_summary.txt         : human-readable last-scan detail (main screen)
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_errors.txt          : this cycle's find stderr, if any
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_size_baseline.db         : per-file size, for mtime-independent MOD detection
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_new.txt             : timestamped log of added filenames, trimmed to $logsize
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_modified.txt        : timestamped log of modified filenames
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_deleted.txt         : timestamped log of deleted filenames
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_permchanged.txt     : timestamped log of permission-only changes
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, trimmed to $logsize
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending               : pending-count + latest summary; presence = red banner up
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/hashes.txt                : canonical combined file-hash indicator list
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                     : per-source raw downloads
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                     : per-source conditional-GET timestamp markers
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db            : "kind|indicator<TAB>epoch" alert dedup records
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint            : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
+#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db             : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay (see round 62)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log     : raw dropbear auth-failure log, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db            : plain sorted file-path list (no stat - see below)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker            : reference file `find -newer` compares against
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db          : last-seen `cru l` output for the cron-diff heuristic
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_check             : epoch stamp gating the fsintegrityhrs cadence
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_summary.txt       : human-readable last-scan detail (main screen)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_errors.txt        : this cycle's find stderr, if any
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_size_baseline.db       : per-file size, for mtime-independent MOD detection
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_new.txt           : timestamped log of added filenames, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_modified.txt      : timestamped log of modified filenames
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_deleted.txt       : timestamped log of deleted filenames
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_permchanged.txt   : timestamped log of permission-only changes
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log            : every real detection ever made, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending             : pending-count + latest summary; presence = red banner up
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log            : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
 #
 # Usage:
-#   iocmon.sh                                                           : interactive monitoring display
-#   iocmon.sh -setup                                                    : configuration menu (drive/feeds/DNS/advanced settings, uninstall)
-#   iocmon.sh -screen [-now]                                            : run the monitoring loop in a background SCREEN session
-#   iocmon.sh -email                                                    : send a test email to confirm AMTM notifications are configured
-#   iocmon.sh -updatefeeds                                              : cron-callable one-shot IoC feed refresh
-#   iocmon.sh -fsintegrity                                              : cron-callable one-shot filesystem-integrity + cron-baseline check
-#   iocmon.sh -h | -help                                                : this output
+#   iocmon.sh                                                         : interactive monitoring display
+#   iocmon.sh -setup                                                  : configuration menu (drive/feeds/DNS/advanced settings, uninstall)
+#   iocmon.sh -screen [-now]                                          : run the monitoring loop in a background SCREEN session
+#   iocmon.sh -email                                                  : send a test email to confirm AMTM notifications are configured
+#   iocmon.sh -updatefeeds                                            : cron-callable one-shot IoC feed refresh
+#   iocmon.sh -fsintegrity                                            : cron-callable one-shot filesystem-integrity + cron-baseline check
+#   iocmon.sh -h | -help                                              : this output
 #
 # Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
 #   (v) view the full log behind whichever "Recent..." panel is showing   (t) simulate a detection from a real,
@@ -89,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.6.7"                 # current script version
+version="0.6.6"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -105,7 +105,6 @@ dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log
 # Repo used for self-update checks.
 iocmonrepostable="https://raw.githubusercontent.com/ViktorJp/IOCMON/main"
 iocmonrepobeta="https://raw.githubusercontent.com/ViktorJp/IOCMON/develop"
-iocmonreposcriptstable="https://github.com/ViktorJp/IOCMON/releases/latest/download/iocmon.sh"
 
 # AMTM Email Notification Variables - shared library reused verbatim from TAILMON/VPNMON-R3
 readonly scriptFileName="${0##*/}"  # this script's own filename
@@ -326,7 +325,7 @@ ScriptUpdateFromAMTM()
 
     echo ""
     echo -e "${InvGreen} ${CClear} Downloading latest ${CGreen}IOCMON${CClear}...Please stand by while we enhance your router's security posture..."
-    curl -fsSL "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
+    curl --silent --retry 3 "$iocmonrepostable/iocmon.sh" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
     DLsuccess=$?
     if [ "$DLsuccess" -eq 0 ]; then
       echo -e "${InvGreen} ${CClear} IOCMON Download/Update Success."
@@ -344,17 +343,9 @@ ScriptUpdateFromAMTM()
 
 downloadiocmonupdate()
 {
-  local url="$1" label="$2" dlrc
+  local url="$1" label="$2"
 
-  if [ "$label" = "STABLE" ]; then
-    curl -fsSL "$iocmonreposcriptstable" -o "${apppath}.new"
-    dlrc=$?
-  else
-    curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"
-    dlrc=$?
-  fi
-
-  if [ "$dlrc" -eq 0 ]; then
+  if curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"; then
     mv "${apppath}.new" "$apppath"
     chmod 755 "$apppath"
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
