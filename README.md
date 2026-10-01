@@ -1,4 +1,4 @@
-# IOCMON v0.6.6
+# IOCMON v0.6.7
 Asus-Merlin Security Intelligence Monitor
 
 Modified: Sep-29-2026
