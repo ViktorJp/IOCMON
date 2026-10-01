@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 0.6.6
+# Version: 0.6.4
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Sep-29
+# Last Updated: 2026-Sep-28
 # ============================================================================================================================
 #
 # Description:
@@ -89,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="0.6.6"                 # current script version
+version="0.6.4"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -97,7 +97,6 @@ dlverpath="/jffs/addons/iocmon.d/version.txt"  # stable-track version file
 bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
 logfile="/jffs/addons/iocmon.d/iocmon.log"  # main activity/alert log
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
-restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately (round 62)
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
@@ -380,11 +379,8 @@ readmenucommand()
 
   if IFS= read -r -t 1 key_press < "$ttydev"; then
     menu_line_submitted=1
-    case "$key_press" in
-      ?) return 0 ;;
-      [Rr]!) return 0 ;;
-      *) return 1 ;;
-    esac
+    [ "${#key_press}" -eq 1 ]
+    return $?
   fi
 
   key_press=""
@@ -458,21 +454,12 @@ progressbaroverride()
           [Oo]) alertviewmode="ioc"; renderdashboard;;
           [Hh]) alertviewmode="hash"; renderdashboard;;
           [Rr]) clearcurrentlog;;
-          [Rr]!) clearcurrentlognow;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) timerpaused=0; progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
-          [Ee])
-            clear
-            echo -e "${CGreen}[Exit IOCMON]${CClear}"
-            echo ""
-            if promptyn "Are you sure you wish to Exit (Y/N): "; then
-              logoNMexit; echo -e "${CClear}\n"; exit 0
-            fi
-            renderdashboard
-            ;;
+          [Xx]) progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
+          [Ee]) logoNMexit; echo -e "${CClear}\n"; exit 0;;
           *) if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi;;
       esac
   elif [ "$menu_line_submitted" -eq 1 ]; then
@@ -860,7 +847,6 @@ initialsetup()
 vsetup()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     resolveiocmonroot
     echo -e "${InvGreen} ${InvDkGray}${CWhite} IOCMON Configuration Menu                                                                                                               ${CClear}"
@@ -895,12 +881,10 @@ vsetup()
       8) vadvanced ;;
       9) vuninstall ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
 
-  exitallmenus=0
   if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
 }
 
@@ -954,7 +938,6 @@ veditlist()
   local varname="$1" title="$2" hint="${3:-absolute path}" desc1="$4" desc2="$5" list count entry idx sel newval delnum newlist overlapmsg
 
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     eval "list=\"\$$varname\""
     clear
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "$title" 136; echo -e "${CClear}"
@@ -1023,7 +1006,6 @@ veditlist()
         fi
         ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *)
         if echo "$sel" | grep -qE '^[0-9]+$' && [ "$sel" -ge 1 ] && [ "$sel" -le "$count" ]; then
           set -- $list
@@ -1076,7 +1058,6 @@ vcronexceptions()
   local count entry idx sel delnum newlist
 
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.4.12 Cron Exceptions                                                                                                                  ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1173,7 +1154,6 @@ EOF
         fi
         ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1185,7 +1165,6 @@ EOF
 vadvanced()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8. Advanced Settings                                                                                                                    ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1213,7 +1192,6 @@ vadvanced()
       5) vadvancednetwork ;;
       6) vadvancedgeneral ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1225,7 +1203,6 @@ vadvanced()
 vadvancedalerting()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.1 Advanced Settings - Alerting & Notifications                                                                                        ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1253,7 +1230,6 @@ vadvancedalerting()
       3) togglesetting alertbanneratbottom ;;
       4) togglesetting alertfeedonly ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1265,7 +1241,6 @@ vadvancedalerting()
 vadvanceddns()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.2 Advanced Settings - DNS Watch & Tunneling Detection                                                                                 ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1333,7 +1308,6 @@ vadvanceddns()
            esac
          fi ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1345,7 +1319,6 @@ vadvanceddns()
 vadvancedbruteforce()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.3 Advanced Settings - Brute-Force Login Detection                                                                                     ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1375,7 +1348,6 @@ vadvancedbruteforce()
          read -p "New sustained-window threshold, failures/window (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && authslowthreshold="$val" && saveconfig; } ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1387,7 +1359,6 @@ vadvancedbruteforce()
 vadvancedfilesystem()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.4 Advanced Settings - Filesystem Integrity & Cron Watch                                                                               ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1432,7 +1403,6 @@ vadvancedfilesystem()
       11) togglesetting enablecrondiff ;;
       12) vcronexceptions ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1444,7 +1414,6 @@ vadvancedfilesystem()
 vadvancednetwork()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.5 Advanced Settings - Network & System Watches                                                                                        ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1470,7 +1439,6 @@ vadvancednetwork()
            "A single IP (204.44.63.22) or a CIDR range (204.44.0.0/16) that conntrack should never compare" \
            "against a feed - checked and excluded first, before any feed indicator is ever considered." ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1482,7 +1450,6 @@ vadvancednetwork()
 vadvancedgeneral()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8.6 Advanced Settings - General / Script Behavior                                                                                       ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1525,7 +1492,6 @@ vadvancedgeneral()
       6) togglesetting updateiocm ;;
       7) togglesetting track ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -1537,7 +1503,6 @@ vadvancedgeneral()
 vfeedsources()
 {
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 2. Feed Sources & API Keys                                                                                                              ${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1591,7 +1556,6 @@ vfeedsources()
          read -p "New Q-Feeds refresh interval in hours (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && saveconfig; } ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -3872,30 +3836,22 @@ vioclog()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# resolvecurrentviewfile sets $viewfile/$viewlabel to whichever log the "Recent..." panel/$alertviewmode is showing.
+# clearcurrentlog wipes whichever log the "Recent..." panel/$alertviewmode is currently showing.
 
-resolvecurrentviewfile()
+clearcurrentlog()
 {
   resolvestateroot
-  viewfile=""; viewlabel="IoC Detections"
+  local viewfile="" label="IoC Detections"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    viewlabel="Dropbear Attempts"
+    label="Dropbear Attempts"
     [ -n "$stateroot" ] && viewfile="$stateroot/dropbear_attempts.log"
   elif [ "$alertviewmode" = "hash" ]; then
-    viewlabel="Hash-Check"
+    label="Hash-Check"
     [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
   else
     [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
   fi
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# clearcurrentlog wipes whichever log resolvecurrentviewfile resolves to, after an explicit (R) confirmation.
-
-clearcurrentlog()
-{
-  resolvecurrentviewfile
 
   if [ -z "$viewfile" ]; then
     renderdashboard
@@ -3903,7 +3859,7 @@ clearcurrentlog()
   fi
 
   clear
-  echo -e "${CGreen}[Clear $viewlabel Log]${CClear}"
+  echo -e "${CGreen}[Clear $label Log]${CClear}"
   echo ""
   echo -e "This erases $viewfile. This is irreversible."
   echo ""
@@ -3912,25 +3868,10 @@ clearcurrentlog()
     echo ""
     echo ""
     echo -e "${CGreen}Log cleared.${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $viewlabel log cleared via (R) hotkey." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $label log cleared via (R) hotkey." >> "$logfile"
     sleep 1
   fi
   renderdashboard
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# clearcurrentlognow is (R!)'s no-confirmation instant clear - stays on the dashboard, no separate screen.
-
-clearcurrentlognow()
-{
-  resolvecurrentviewfile
-
-  if [ -n "$viewfile" ]; then
-    : > "$viewfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $viewlabel log cleared via (R!) instant-clear hotkey." >> "$logfile"
-  fi
-  renderdashboard
-  [ -n "$viewfile" ] && echo -e "${CGreen}$viewlabel log cleared.${CClear}"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4087,7 +4028,6 @@ vupdate()
   local trackdisp remoteversion remotelabel remoteurl selupdate
 
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     updatecheck
     betacheck
 
@@ -4139,11 +4079,6 @@ vupdate()
           echo ""
           read -rsp $'Press any key to continue...\n' -n1 key
         fi
-        ;;
-      [Ee]!)
-        exitallmenus=1
-        if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
-        return
         ;;
       [Nn]|[Ee])
         if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
@@ -4204,7 +4139,6 @@ ventwarecomponents()
   local screenstatus findstatus jqstatus selentware
 
   while true; do
-    [ "$exitallmenus" -eq 1 ] && break
     clear
     if [ -x /opt/sbin/screen ]; then screenstatus="${CGreen}Installed${CClear}"; else screenstatus="${CYellow}Not installed${CClear}"; fi
     if [ -x /opt/bin/find ]; then findstatus="${CGreen}Installed${CClear}"; else findstatus="${CYellow}Not installed${CClear}"; fi
@@ -4245,7 +4179,6 @@ ventwarecomponents()
       3) installentwarepkg "jq" ;;
       4) installentwarepkg "screen findutils jq" ;;
       [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -4336,11 +4269,9 @@ alertviewmode="ioc"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 timerpaused=0
-exitallmenus=0
 
 # Remove Maintenance Mode file lock left over from a prior run
 rm -f "$updatingfile" >/dev/null 2>&1
-rm -f "$restartpendingfile" >/dev/null 2>&1
 
 if [ ! -d "$addonsdir" ]; then
   mkdir -m 755 -p "$addonsdir"
@@ -4450,9 +4381,7 @@ if [ "$1" == "-autoupdate" ]; then
       fi
       if [ -n "$remoteversion" ] && [ "$version" != "$remoteversion" ]; then
         echo > "$updatingfile"
-        if downloadiocmonupdate "$remoteurl" "$remotelabel"; then
-          touch "$restartpendingfile"
-        fi
+        downloadiocmonupdate "$remoteurl" "$remotelabel"
         rm -f "$updatingfile" >/dev/null 2>&1
       fi
     fi
@@ -4575,11 +4504,10 @@ echo "$$" > "$pidfile"
 trap 'rm -f "$pidfile"' EXIT INT TERM
 trap 'progresspromptactive=0' WINCH
 
-# Check for and add/refresh the alias for IOCMON - rebuilt from scratch every start (tagged-line convention,
-# same as schedulecron()'s cru entries) so an older install's alias is migrated to the new form automatically.
-[ -f /jffs/configs/profile.add ] || : > /jffs/configs/profile.add
-sed -i '/# added by iocmon/d' /jffs/configs/profile.add
-echo "alias iocmon=\"sh /jffs/scripts/iocmon.sh -screen -now\" # added by iocmon" >> /jffs/configs/profile.add
+# Check for and add an alias for IOCMON
+if ! grep -F "sh /jffs/scripts/iocmon.sh" /jffs/configs/profile.add >/dev/null 2>/dev/null; then
+  echo "alias iocmon=\"sh /jffs/scripts/iocmon.sh\" # added by iocmon" >> /jffs/configs/profile.add
+fi
 
 # Grab the IOCMON config file and read it in, or run interactive first-time setup (including drive selection)
 if [ -f "$config" ]; then
@@ -4773,12 +4701,6 @@ while true; do
     . "$config"
   else
     initialsetup
-  fi
-
-  if [ -f "$restartpendingfile" ]; then
-    rm -f "$restartpendingfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: A newer IOCMON version was downloaded by -autoupdate - restarting into it now." >> "$logfile"
-    exec sh "$apppath" -noswitch
   fi
 
   checkdrivealive

@@ -1,3 +1,34 @@
+v0.6.6    - (September 29, 2026)
+          - PATCH: The -autoupdate switch now restarts IOCMON into the new version after a successful
+            download. Previously, it would download the new version, but wouldn't get used until it was
+            manually restarted. Thanks @Visortgw for noticing! :)
+          - PATCH: Key combo [R!] (or r!) will instantly-clear the currently-viewed log immediately. This
+            is a hidden easter egg that only @JB_1366 knows about. These release notes will erase themselves
+            in 10 seconds to hide all tracks.
+          - PATCH: Key combo [E!] (or e!) from any of the config menu sub menus will allow you to skip past
+            all the minutia, pass go, collect $200, and return directly to the main UI! Thanks to @JB_1366
+            for the great efficiency ideas.
+          - PATCH: Alias for IOCMON has now been changed to iocmon="sh /jffs/scripts/iocmon.sh -screen -now",
+            which helps keep screen compatibility when just executing "iocmon" from the commandline. Thanks
+            @Visortgw for the idea and validation from @JB_1366!
+          - PATCH: If [P]ause is enabled and you happen to [X] detach from screen like @Visortgw likes to do,
+            the script will now resume it's regular routine and continue watching your environment after you
+            have detached. Thanks @Visortgw!
+          - PATCH: When pressing [E]xit, the script will ask you if you want to continue, just incase you
+            wanted to [X] detach instead. Again, thanks to @Visortgw for the relentless testing! :)
+
+
+v0.6.4    - (September 28, 2026)
+          - PATCH: IOCMON v0.6.1 was pushed to production, and v0.6.4 is an identical version with a higher
+            version number, created to test the autoupdate functionality. Steps: (1) Update to v0.6.1 on the
+            stable track. (2) Switch to the Beta track. (3) Report your findings tomorrow after the autoupdate
+            cron job has run.
+          - PATCH: Modified menu item 8.6.7 so that it refers to the actual track name (Stable/Beta) instead
+            of using a Yes/No, which just made things more cryptic.
+          - PATCH: Includes a new "[R] Clear this Log" as an option on the main UI. This will clear the current
+            log that's currently being viewed, and gives the user an option to back out if needed. Great idea
+            by @JB_1366!
+
 v0.6.1    - (September 28, 2026)
           - PATCH: Fixed some inconsistencies with the -autoupdate switch installing a stable version over a
             beta version, even when the beta track was already selected. Thanks @XIII and @Ripsshod!
