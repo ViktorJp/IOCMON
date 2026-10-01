@@ -46,7 +46,7 @@ public threat-intelligence feeds to catch signs of compromise early, before they
 
 Run from an SSH prompt on your router:
 ```
-curl -fsSL "https://github.com/ViktorJp/IOCMON/releases/latest/download/iocmon-0.6.6.sh" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
+curl -fsSL "https://github.com/ViktorJp/IOCMON/releases/latest/download/iocmon.sh" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
 ```
 
 Or, copy `iocmon.sh` to `/jffs/scripts/iocmon.sh` on your router and make it executable:
