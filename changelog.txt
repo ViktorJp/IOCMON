@@ -1,3 +1,10 @@
+v1.0.0    - (October 3, 2026)
+          - MAJOR: The IOCMON Asus/Merlin Security Intelligence Monitor officially goes live with a wide
+            release today. Thank you to EVERYONE who has been involved in testing, and coming up with great
+            suggestions and additions. Please keep them coming to continue making this tool even better!
+            Up next on the roadmap: A web interface so you can interact with IOCMON from the router UI. Will
+            be dipping my toe into this for the first time, so this will be a work-in-progress. :)
+
 v0.6.7    - (October 1, 2026)
           - PATCH: Minor changes to the Github download links to point to the latest releases file, to help
             enable a more formal release metrics process.
