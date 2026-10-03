@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.0.0
+# Version: 0.6.7
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-03
+# Last Updated: 2026-Oct-01
 # ============================================================================================================================
 #
 # Description:
@@ -89,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.0.0"                 # current script version
+version="0.6.7"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -1866,7 +1866,7 @@ dedupindicators()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# normalizefeeds is the normalize-swap part of the process
+# normalizefeeds is the normalize-swap part of the pipeline
 
 normalizefeeds()
 {
@@ -2088,7 +2088,7 @@ forcefeeds()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# feedsourcecounts prints a compact "source=N source=N" breakdown across all three files.
+# feedsourcecounts prints a compact "source=N source=N" breakdown across all three canonical files.
 
 feedsourcecounts()
 {
