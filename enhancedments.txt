@@ -7,6 +7,7 @@ To-Do:
 - With the addition of Q-Feeds API, I see occasional hits identified by IP address. Please consider adding a clickable link to obtain info on the
   indicated IP address, just like @Adamm does in Skynet (e.g., https://otx.alienvault.com/indicator/ip/xxx.xxx.xxx.xxx), to help identify legitimate vs
   malicious IPs. No urgency, just something to add to your job jar. Thanks. @Visortgw
+- Restructure the DNS exceptions list, multi-column, ability to find using wild cards, being able to identify items already existing.
 
 Done:
 - Integrate Q-Feeds as another feed resource (@Slapdaddy)
