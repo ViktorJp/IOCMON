@@ -3,8 +3,13 @@ Asus-Merlin Security Intelligence Monitor
 
 Modified: Oct-03-2026
 
+> **License:** GPLv3 with additional terms (§7c/§7e) — see [`NOTICE.md`](./NOTICE.md). The code is free to fork and modify; the name **BACKUPMON** is reserved for this project — see [`TRADEMARK.md`](./TRADEMARK.md) before publishing a rebrand or fork.
+
+-----
+
 <img width="1252" height="644" alt="Screenshot 2026-09-07 191836" src="https://github.com/user-attachments/assets/4644b613-7b65-4e23-a336-954c108aace1" />
 
+-----
 # IOCMON — User Manual
 
 ## What is IOCMON?
@@ -198,3 +203,8 @@ be walked back through the initial drive-selection setup. This cannot be undone.
 **Configuration Menu → (7) Uninstall IOCMON** removes the script, its cron jobs, its autostart hook, the
 background SCREEN session, and the shell alias. After a second, separate confirmation, it also removes the
 feed/state data from your USB drive. This is irreversible.
+
+### Support and Discussion Forum
+
+Full support of this script is available on SNB Forums: 
+https://www.snbforums.com/threads/97925/
