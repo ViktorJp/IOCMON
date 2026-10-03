@@ -7,7 +7,7 @@ Modified: Oct-03-2026
 
 -----
 
-<img width="1252" height="644" alt="Screenshot 2026-09-07 191836" src="https://github.com/user-attachments/assets/4644b613-7b65-4e23-a336-954c108aace1" />
+<img width="1250" height="627" alt="image" src="https://github.com/user-attachments/assets/85956ea5-9f73-4d99-99f4-e1faa83e6920" />
 
 -----
 # IOCMON — User Manual
