@@ -1,3 +1,17 @@
+v1.0.2    - (TBA)
+          - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
+            This is currently modeled after the same method used in TAILMON, and is based on the contents of
+            your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
+          - PATCH: Added a new item #6 to the Configuration Menu, allowing you to import/export your IOCMON
+            configuration. This allows you to save your configuration, along with all exceptions you have
+            added over time, and lets you import this same configuration on another router either during the
+            initial setup, or post-setup from the configuration menu. Please note: this option lets you
+            optionally export with or without your API keys. Also, the External Drive path/name is not used
+            as this would most likely change from router to router, and uses the local default. Thanks to
+            @twiglets for this suggestion!
+          - PATCH: Firmed up the processing of items in SERVICES-START, POST-MOUNT and CRU so that they
+            only change items when deemed necessary, and won't be the cause of creating additional alerts.
+
 v1.0.1    - (October 4, 2026)
           - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
             command before having the Screen Entware tool installed yet, and wasn't allowing the user to
