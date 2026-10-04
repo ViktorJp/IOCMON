@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.0.1
+# Version: 1.0.0
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-04
+# Last Updated: 2026-Oct-03
 # ============================================================================================================================
 #
 # Description:
@@ -89,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.0.1"
+version="1.0.0"                 # current script version
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -4507,17 +4507,11 @@ screenreattach()
 if [ "$1" == "-screen" ]; then
     if [ ! -x /opt/sbin/screen ]; then
       clear
-      echo -e "${CGreen}Starting IOCMON under a normal SSH Terminal session...${CClear}"
+      echo -e "${CRed}ERROR: The Entware 'screen' package is required for -screen mode.${CClear}"
+      echo -e "Install it with: opkg install screen"
       echo ""
-      echo -e "${CYellow}WARNING: The Entware 'screen' package is required for -screen mode.${CClear}"
-      echo -e "Optionally install it with command: opkg install screen"
-      echo ""
-      for screenfallbacksec in 5 4 3 2 1; do
-        printf "\rContinuing in %ds..." "$screenfallbacksec"
-        sleep 1
-      done
-      echo ""
-      exec sh "$apppath" -noswitch
+      echo -e "${CClear}"
+      exit 1
     fi
 
     /opt/sbin/screen -wipe >/dev/null 2>&1 # Kill any dead screen sessions

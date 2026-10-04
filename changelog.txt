@@ -1,3 +1,10 @@
+v1.0.1    - (October 4, 2026)
+          - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
+            command before having the Screen Entware tool installed yet, and wasn't allowing the user to
+            run the script. IOCMON will now revert to a standard SSH Terminal session if the Screen tool
+            isn't found and is being run with that command.
+          - PATCH: Cleaned up extra space/comments around version number for compatibility.
+
 v1.0.0    - (October 3, 2026)
           - MAJOR: The IOCMON Asus/Merlin Security Intelligence Monitor officially goes live with a wide
             release today. Thank you to EVERYONE who has been involved in testing, and coming up with great
