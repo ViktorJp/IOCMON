@@ -1,4 +1,4 @@
-v1.0.2    - (TBA)
+v1.0.4    - (TBA)
           - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
             This is currently modeled after the same method used in TAILMON, and is based on the contents of
             your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
@@ -11,6 +11,12 @@ v1.0.2    - (TBA)
             @twiglets for this suggestion!
           - PATCH: Firmed up the processing of items in SERVICES-START, POST-MOUNT and CRU so that they
             only change items when deemed necessary, and won't be the cause of creating additional alerts.
+          - PATCH: Added the proof-of-concept toggles to yes/no items in the menus, greatly inspired by
+            Wireless Report by @JB_1366! Let me know if they visually help distinguish the overall state
+            quicker than it would be to read the yes/no's.
+          - PATCH: Firmed up more governance in the config menus when a primary item is disabled, that the
+            dependent items under it are now grayed out and unavailable to change. If previous values were
+            entered, those items will stay until the primary item is enabled again.
 
 v1.0.1    - (October 4, 2026)
           - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
