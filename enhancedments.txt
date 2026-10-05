@@ -8,6 +8,7 @@ To-Do:
   malicious IPs. No urgency, just something to add to your job jar. Thanks. @Visortgw
 - Restructure the DNS exceptions list, multi-column, ability to find using wild cards, being able to identify items already existing.
 - Make it so that file integrity detection optionally reports on either MOD or HASH or both (@XIII)
+- Organize Config menu into sections, like BACKUPMON
 
 Done:
 - Add VI as an optional text reader (@XIII)
