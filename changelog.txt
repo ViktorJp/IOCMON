@@ -1,4 +1,4 @@
-v1.0.4    - (TBA)
+v1.0.7    - (TBA)
           - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
             This is currently modeled after the same method used in TAILMON, and is based on the contents of
             your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
@@ -17,6 +17,15 @@ v1.0.4    - (TBA)
           - PATCH: Firmed up more governance in the config menus when a primary item is disabled, that the
             dependent items under it are now grayed out and unavailable to change. If previous values were
             entered, those items will stay until the primary item is enabled again.
+          - PATCH: Fixed 9.5.2 and realigned the menu settings per @Visortgw's OCD request. ;)
+          - PATCH: Reorganized the main Configuration menu and added section headers, much like what you
+            would see in BACKUPMON.
+          - PATCH: Added a new menu item 9.4.3 "Critical-path MOD alert mode (.ssh/startup-scripts/.conf.add)"
+            which allows you to choose how you would like to be alerted when critical files are modified.
+            You can choose between "Upon File Modification", when a file is touched, modified, may not
+            change its contents or it may have content changes, or "Upon File Hash Mismatch", when a file
+            actually changes in contents. Thanks to @XIII for the great suggestion.
+          - PATCH: Added /jffs/.ssh to the critical file paths to watch.
 
 v1.0.1    - (October 4, 2026)
           - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
