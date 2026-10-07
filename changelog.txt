@@ -1,4 +1,4 @@
-v1.0.7    - (TBA)
+v1.0.11   - (TBA)
           - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
             This is currently modeled after the same method used in TAILMON, and is based on the contents of
             your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
@@ -26,6 +26,12 @@ v1.0.7    - (TBA)
             change its contents or it may have content changes, or "Upon File Hash Mismatch", when a file
             actually changes in contents. Thanks to @XIII for the great suggestion.
           - PATCH: Added /jffs/.ssh to the critical file paths to watch.
+          - PATCH: Revamped the DNS Exceptions menu (9.2.2) to make the experience dealing with this ever-
+            growing list more manageable. It includes 2 columns, that will span over multiple pages if
+            needed, being able to move next/previous, and search for wildcards.
+          - PATCH: Great suggestion by @JB_1366... the Recent IoC Detections list now includes a [Z] option
+            that allows you to easily add a DNS domain exception using one of the numerical indicators next
+            to the IoC domain entry to be added.
 
 v1.0.1    - (October 4, 2026)
           - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
