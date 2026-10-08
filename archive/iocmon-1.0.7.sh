@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.1.0
+# Version: 1.0.7
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-08
+# Last Updated: 2026-Oct-05
 # ============================================================================================================================
 #
 # Description:
@@ -27,7 +27,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
-#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
+#   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay (see round 62)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : raw dropbear auth-failure log, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker              : reference file `find -newer` compares against
@@ -59,7 +59,6 @@
 #   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
 #   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
 #   (r) clear whichever log the "Recent..." panel is currently showing (confirmation required)
-#   (z) add a numbered "dns" entry's base domain (IoC Detections panel only) to the DNS Exceptions list
 #   (p) pause/resume the countdown timer without triggering a rescan
 #   (x) detach from the background SCREEN session without stopping IOCMON
 #
@@ -91,7 +90,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.1.0"
+version="1.0.7"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -100,7 +99,7 @@ bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
 logfile="/jffs/addons/iocmon.d/iocmon.log"  # main activity/alert log
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate downloaded a newer version; the persistent loop restarts into it next cycle
-dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
+dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately (round 62)
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
 
@@ -432,9 +431,9 @@ drawprogressprompt()
   laststatustext="$status_text"
   lastinputtext="$input_text"
 
-  if [ "$progressfirstdraw" -eq 1 ]; then
-    printf "\033[u\033[0J%b %s\033[2D" "$status_text" "$input_text"
-    progressfirstdraw=0
+  if [ "$progresspromptactive" -ne 1 ]; then
+    printf "\033[2K\r%b %s\033[2D" "$status_text" "$input_text"
+    progresspromptactive=1
   else
     printf "\033[s\r%b\033[u" "$status_text"
   fi
@@ -448,6 +447,8 @@ resetinvalidprogressinput()
 progressbaroverride()
 {
   insertspc=" "
+
+  [ "$1" -eq 1 ] && progresspromptactive=0
 
   if [ $1 -eq -1 ]; then
     printf "\r  $barspaces\r"
@@ -474,6 +475,7 @@ progressbaroverride()
   fi
 
   if readmenucommand; then
+      progresspromptactive=0
       echo ""
       case $key_press in
           [Cc]) vsetup;;
@@ -489,12 +491,11 @@ progressbaroverride()
           [Hh]) alertviewmode="hash"; renderdashboard;;
           [Rr]) clearcurrentlog;;
           [Rr]!) clearcurrentlognow;;
-          [Zz]) addtodnsexception;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) timerpaused=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
+          [Xx]) timerpaused=0; progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
           [Ee])
             clear
             echo -e "${CGreen}[Exit IOCMON]${CClear}"
@@ -1267,206 +1268,6 @@ EOF
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vdnsexceptions is a dedicated 2-column/paginated/find/edit editor for dnsexceptions (the one list expected to grow largest)
-
-vdnsexceptions()
-{
-  local list count page=1 perpage=60 leftwidth=70 totalbudget=136 rightmax badgewidth prefixlen leftbudget rightbudget entrybudget
-  local totalpages pagestart r leftidx rightidx leftentry rightentry leftdisp rightdisp leftbadge rightbadge leftplain leftpad rightout
-  local sel pendingeditnum newval idx entry newlist delnum pattern fcount hp hpad editnum faction fdel
-
-  while true; do
-    [ "$exitallmenus" -eq 1 ] && break
-    pendingeditnum=""
-    list="$dnsexceptions"
-    set -- $list
-    count=$#
-    badgewidth=${#count}
-    [ "$badgewidth" -lt 1 ] && badgewidth=1
-    totalpages=$(( (count + perpage - 1) / perpage ))
-    [ "$totalpages" -lt 1 ] && totalpages=1
-    [ "$page" -gt "$totalpages" ] && page=$totalpages
-    [ "$page" -lt 1 ] && page=1
-
-    prefixlen=$((badgewidth + 5))
-    rightmax=$((totalbudget - leftwidth))
-    leftbudget=$((leftwidth - prefixlen - 3))
-    rightbudget=$((rightmax - prefixlen))
-    entrybudget=$leftbudget
-    [ "$rightbudget" -lt "$entrybudget" ] && entrybudget=$rightbudget
-    [ "$entrybudget" -lt 10 ] && entrybudget=10
-
-    clear
-    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "9.2.2 DNS Domain Exceptions" 136; echo -e "${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Choose an entry number to edit it, (a) to add a new entry, (d) to delete one, (t) to edit${CClear}"
-    echo -e "${InvGreen} ${CClear} an entry, or (f) to find an entry. Page ${CGreen}${page}${CClear}/${CGreen}${totalpages}${CClear}, ${CGreen}${count}${CClear} entries total.${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-
-    if [ "$count" -eq 0 ]; then
-      echo -e "${InvGreen} ${CClear} ${CDkGray}(no entries configured)${CClear}"
-    else
-      pagestart=$(( (page-1) * perpage ))
-      r=1
-      while [ "$r" -le 30 ]; do
-        leftidx=$((pagestart + r))
-        [ "$leftidx" -gt "$count" ] && break
-        eval "leftentry=\"\${$leftidx}\""
-        leftdisp="$leftentry"
-        [ "${#leftdisp}" -gt "$entrybudget" ] && leftdisp="$(printf '%.*s' "$((entrybudget-1))" "$leftdisp")>"
-        leftbadge="$(printf "(%${badgewidth}d)" "$leftidx")"
-        leftplain="${leftbadge} : ${leftdisp}"
-        leftpad=$((leftwidth - ${#leftplain}))
-        [ "$leftpad" -lt 1 ] && leftpad=1
-
-        rightidx=$((leftidx + 30))
-        rightout=""
-        if [ "$rightidx" -le "$count" ]; then
-          eval "rightentry=\"\${$rightidx}\""
-          rightdisp="$rightentry"
-          [ "${#rightdisp}" -gt "$entrybudget" ] && rightdisp="$(printf '%.*s' "$((entrybudget-1))" "$rightdisp")>"
-          rightbadge="$(printf "(%${badgewidth}d)" "$rightidx")"
-          rightout="${InvDkGray}${CWhite}${rightbadge}${CClear} : ${CGreen}${rightdisp}${CClear}"
-        fi
-
-        echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}${leftbadge}${CClear} : ${CGreen}${leftdisp}${CClear}$(printf '%*s' "$leftpad" '')${rightout}"
-        r=$((r+1))
-      done
-    fi
-
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    hp="(a) : Add a new entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(a)${CClear} : Add a new entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(n)${CClear} : Next page${CClear}"
-    hp="(d) : Delete an entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(d)${CClear} : Delete an entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(p)${CClear} : Previous page${CClear}"
-    hp="(f) : Find an entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(f)${CClear} : Find an entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(t)${CClear} : Edit an entry${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo ""
-    read -p "Please select? (1-$count, a=Add, d=Delete, f=Find, t=Edit, n=Next, p=Previous, e=Exit): " sel
-
-    case "$sel" in
-      [Aa])
-        read -p "New domain name entry: " newval
-        if [ -n "$newval" ]; then
-          dnsexceptions="${dnsexceptions:+$dnsexceptions }$newval"
-          saveconfig
-          set -- $dnsexceptions
-          page=$(( ($# + perpage - 1) / perpage ))
-          [ "$page" -lt 1 ] && page=1
-        fi
-        ;;
-      [Dd])
-        [ "$count" -eq 0 ] && continue
-        read -p "Delete which entry number? (1-$count, blank to cancel): " delnum
-        if echo "$delnum" | grep -qE '^[0-9]+$' && [ "$delnum" -ge 1 ] && [ "$delnum" -le "$count" ]; then
-          set -- $list
-          idx=0; newlist=""
-          for entry in "$@"; do
-            idx=$((idx+1))
-            [ "$idx" -eq "$delnum" ] && continue
-            newlist="${newlist:+$newlist }$entry"
-          done
-          dnsexceptions="$newlist"
-          saveconfig
-        fi
-        ;;
-      [Ff])
-        read -p "Enter a search term (wildcards * ? allowed, blank to cancel): " pattern
-        if [ -n "$pattern" ]; then
-          case "$pattern" in
-            *'*'*|*'?'*) ;;
-            *) pattern="*${pattern}*" ;;
-          esac
-          clear
-          echo -e "${CGreen}[Find Results: \"$pattern\"]${CClear}"
-          echo ""
-          set -- $list
-          idx=0; fcount=0
-          for entry in "$@"; do
-            idx=$((idx+1))
-            case "$entry" in
-              $pattern)
-                fcount=$((fcount+1))
-                echo -e "  ${InvDkGray}${CWhite}(${idx})${CClear} : ${CGreen}${entry}${CClear}"
-                ;;
-            esac
-          done
-          echo ""
-          if [ "$fcount" -eq 0 ]; then
-            echo -e "${CYellow}No entries matched.${CClear}"
-            echo ""
-            read -rsp $'Press any key to continue...\n' -n1 key
-          else
-            echo -e "Found ${CGreen}${fcount}${CClear} matching entr$([ "$fcount" -eq 1 ] && echo "y" || echo "ies")."
-            echo ""
-            read -p "Enter an entry number to edit, (d) to delete one, or blank to return: " faction
-            case "$faction" in
-              "") ;;
-              [Dd])
-                read -p "Delete which entry number? (blank to cancel): " fdel
-                if echo "$fdel" | grep -qE '^[0-9]+$' && [ "$fdel" -ge 1 ] && [ "$fdel" -le "$count" ]; then
-                  set -- $list
-                  idx=0; newlist=""
-                  for entry in "$@"; do
-                    idx=$((idx+1))
-                    [ "$idx" -eq "$fdel" ] && continue
-                    newlist="${newlist:+$newlist }$entry"
-                  done
-                  dnsexceptions="$newlist"
-                  saveconfig
-                fi
-                ;;
-              *)
-                if echo "$faction" | grep -qE '^[0-9]+$' && [ "$faction" -ge 1 ] && [ "$faction" -le "$count" ]; then
-                  pendingeditnum="$faction"
-                fi
-                ;;
-            esac
-          fi
-        fi
-        ;;
-      [Tt])
-        read -p "Edit which entry number? (1-$count, blank to cancel): " editnum
-        if echo "$editnum" | grep -qE '^[0-9]+$' && [ "$editnum" -ge 1 ] && [ "$editnum" -le "$count" ]; then
-          pendingeditnum="$editnum"
-        fi
-        ;;
-      [Nn]) [ "$page" -lt "$totalpages" ] && page=$((page+1)) ;;
-      [Pp]) [ "$page" -gt 1 ] && page=$((page-1)) ;;
-      [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
-      *)
-        if echo "$sel" | grep -qE '^[0-9]+$' && [ "$sel" -ge 1 ] && [ "$sel" -le "$count" ]; then
-          pendingeditnum="$sel"
-        fi
-        ;;
-    esac
-
-    if [ -n "$pendingeditnum" ]; then
-      set -- $list
-      eval "entry=\"\${$pendingeditnum}\""
-      echo ""
-      echo -e "Current: ${CGreen}${entry}${CClear}"
-      read -p "New value (blank to keep current): " newval
-      if [ -n "$newval" ]; then
-        set -- $list
-        idx=0; newlist=""
-        for entry in "$@"; do
-          idx=$((idx+1))
-          if [ "$idx" -eq "$pendingeditnum" ]; then newlist="${newlist:+$newlist }$newval"; else newlist="${newlist:+$newlist }$entry"; fi
-        done
-        dnsexceptions="$newlist"
-        saveconfig
-      fi
-    fi
-  done
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
 # vadvanced is the top-level Advanced Settings menu
 
 vadvanced()
@@ -1601,7 +1402,7 @@ vadvanceddns()
            fi
          fi
          ;;
-      2) [ "$enablednswatch" -eq 1 ] && vdnsexceptions ;;
+      2) [ "$enablednswatch" -eq 1 ] && veditlist dnsexceptions "9.2.2 DNS Domain Exceptions" ;;
       3) [ "$enablednswatch" -eq 1 ] && togglesetting enablednstunnel ;;
       4) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelsubthreshold}${CClear}"
          read -p "New distinct-subdomain threshold (>=1, blank to keep current): " val
@@ -3002,14 +2803,6 @@ indnsexceptionlist()
   return 1
 }
 
-# -------------------------------------------------------------------------------------------------------------------------
-# basedomain reduces $1 to its last two dot-separated labels (same approximation checkdns's tunnel heuristic uses)
-
-basedomain()
-{
-  echo "$1" | awk -F. '{n=NF; if (n>=2) print $(n-1)"."$n; else print $0}'
-}
-
 enablednsquerylogging()
 {
   if dnsquerylogenabled; then
@@ -4185,50 +3978,6 @@ acknowledgealert()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# addtodnsexception prompts for a numbered dns entry (from the "Recent IoC Detections" panel) and excepts its base domain.
-
-addtodnsexception()
-{
-  if [ "$alertviewmode" != "ioc" ] || [ ! -s "$dnsnummapfile" ]; then
-    renderdashboard
-    return
-  fi
-
-  local maxnum num origkey domain base displayrange
-  maxnum="$(wc -l < "$dnsnummapfile" | tr -d ' ')"
-  if [ "$maxnum" -ge 10 ]; then displayrange="1-9, 0 for #10"; else displayrange="1-${maxnum}"; fi
-  echo ""
-  read -p "Please enter the corresponding log entry number of the domain to add to the DNS Exceptions List (${displayrange}, blank to cancel): " num
-
-  if [ -z "$num" ]; then
-    renderdashboard
-    return
-  fi
-  origkey="$num"
-  [ "$num" = "0" ] && num=10
-
-  domain="$(awk -F'\t' -v n="$num" '$1==n{print $2}' "$dnsnummapfile")"
-  if [ -z "$domain" ]; then
-    echo -e "${CRed}No DNS entry numbered $origkey is currently shown (valid range: ${displayrange}).${CClear}"
-    sleep 2
-    renderdashboard
-    return
-  fi
-
-  base="$(basedomain "$domain")"
-  if indnsexceptionlist "$base"; then
-    echo -e "${CYellow}${base} is already in the DNS Exceptions list.${CClear}"
-  else
-    dnsexceptions="${dnsexceptions:+$dnsexceptions }$base"
-    saveconfig
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added $base to dnsexceptions via the (Z) hotkey (entry #$origkey: $domain)." >> "$logfile"
-    echo -e "${CGreen}Added ${base} to the DNS Exceptions list.${CClear}"
-  fi
-  sleep 2
-  renderdashboard
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
 # vioclog opens the full log behind whichever "Recent..." panel ($alertviewmode) is currently showing, in nano.
 
 vioclog()
@@ -4434,7 +4183,7 @@ cru a IOCMONFsIntegrity \"$fsintcmd\" # iocmon-cron"
 
 autostart()
 {
-  # one-time cleanup of the services-start hook, independent of post-mount's own state below
+  # one-time cleanup of the pre-round-36 services-start hook, independent of post-mount's own state below
   if [ -f /jffs/scripts/services-start ] && grep -q '# iocmon-autostart' /jffs/scripts/services-start; then
     sed -i '/# iocmon-autostart/d' /jffs/scripts/services-start
   fi
@@ -4883,10 +4632,9 @@ vuninstall()
 # Begin main commandline switch logic
 # -------------------------------------------------------------------------------------------------------------------------
 
+progresspromptactive=0
 laststatustext=""
 lastinputtext=""
-winchpending=0
-progressfirstdraw=0
 driveunmountedalerted=0
 dnsquerylogwarned=0
 dnsquerymissingwarned=0
@@ -4895,7 +4643,6 @@ conntrackchecked=0; conntracklastcheck=""
 dnschecked=0; dnslastcheck=""
 authchecked=0; authlastcheck=""
 alertviewmode="ioc"
-dnsnummapfile="/tmp/iocmon_dns_nummap.$$"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 timerpaused=0
@@ -5142,7 +4889,7 @@ if [ -f "$pidfile" ]; then
 fi
 echo "$$" > "$pidfile"
 trap 'rm -f "$pidfile"' EXIT INT TERM
-trap 'winchpending=1' WINCH
+trap 'progresspromptactive=0' WINCH
 
 # Check for and add/refresh the alias for IOCMON - rebuilt from scratch every start (tagged-line convention,
 # same as schedulecron()'s cru entries) so an older install's alias is migrated to the new form automatically.
@@ -5297,7 +5044,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
       tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -5307,7 +5054,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
   elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
       tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
@@ -5317,24 +5064,11 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, [${CGreen}V${CClear}] Full Log, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
-      : > "$dnsnummapfile"
-      dnsnum=0
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
-        kind="$(echo "$iocline" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')"
-        if [ "$kind" = "dns" ]; then
-          dnsnum=$((dnsnum + 1))
-          domain="$(echo "$iocline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
-          domain="${domain#*->}"
-          printf '%s\t%s\n' "$dnsnum" "$domain" >> "$dnsnummapfile"
-          numstr="$dnsnum"; [ "$dnsnum" -eq 10 ] && numstr=0
-          [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [${CGreen}${numstr}${CClear}] ${CGreen}${iocline}${CClear}"
-        else
-          [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [ ] ${CGreen}${iocline}${CClear}"
-        fi
+        [ "${#iocline}" -gt 134 ] && iocline="$(printf '%.133s' "$iocline")>"
+        echo -e "${InvGreen} ${CClear}   ${CGreen}${iocline}${CClear}"
       done
     else
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No detections logged yet. Press (T) to simulate one and confirm alerting works.${CClear}"
@@ -5345,8 +5079,6 @@ renderdashboard()
     renderalertbanner
   fi
   echo ""
-  printf '\033[s'
-  progressfirstdraw=1
 }
 
 while true; do
@@ -5430,13 +5162,8 @@ while true; do
   renderdashboard
 
   timer=0
-  winchpending=0
   while [ "$timer" -lt "$timerloop" ]; do
     [ "$timerpaused" -ne 1 ] && timer="$((timer+1))"
-    if [ "$winchpending" -eq 1 ]; then
-      winchpending=0
-      renderdashboard
-    fi
     preparebar 46 "|"
     progressbaroverride "$timer" "$timerloop" "" "s" "Standard"
     [ -f "$updatingfile" ] && break

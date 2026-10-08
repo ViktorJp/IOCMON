@@ -1,3 +1,42 @@
+v1.1.0    - (October 8, 2026)
+          - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
+            This is currently modeled after the same method used in TAILMON, and is based on the contents of
+            your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
+          - MINOR: Added a new item #6 to the Configuration Menu, allowing you to import/export your IOCMON
+            configuration. This allows you to save your configuration, along with all exceptions you have
+            added over time, and lets you import this same configuration on another router either during the
+            initial setup, or post-setup from the configuration menu. Please note: this option lets you
+            optionally export with or without your API keys. Also, the External Drive path/name is not used
+            as this would most likely change from router to router, and uses the local default. Thanks to
+            @twiglets for this suggestion!
+          - PATCH: Firmed up the processing of items in SERVICES-START, POST-MOUNT and CRU so that they
+            only change items when deemed necessary, and won't be the cause of creating additional alerts.
+          - PATCH: Added the proof-of-concept toggles to yes/no items in the menus, greatly inspired by
+            Wireless Report by @JB_1366! Let me know if they visually help distinguish the overall state
+            quicker than it would be to read the yes/no's.
+          - PATCH: Firmed up more governance in the config menus when a primary item is disabled, that the
+            dependent items under it are now grayed out and unavailable to change. If previous values were
+            entered, those items will stay until the primary item is enabled again.
+          - PATCH: Fixed 9.5.2 and realigned the menu settings per @Visortgw's OCD request. ;)
+          - PATCH: Reorganized the main Configuration menu and added section headers, much like what you
+            would see in BACKUPMON.
+          - PATCH: Added a new menu item 9.4.3 "Critical-path MOD alert mode (.ssh/startup-scripts/.conf.add)"
+            which allows you to choose how you would like to be alerted when critical files are modified.
+            You can choose between "Upon File Modification", when a file is touched, modified, may not
+            change its contents or it may have content changes, or "Upon File Hash Mismatch", when a file
+            actually changes in contents. Thanks to @XIII for the great suggestion.
+          - PATCH: Added /jffs/.ssh to the critical file paths to watch.
+          - MINOR: Revamped the DNS Exceptions menu (9.2.2) to make the experience dealing with this ever-
+            growing list more manageable. It includes 2 columns, that will span over multiple pages if
+            needed, being able to move next/previous, edit and search for wildcards.
+          - MINOR: Great suggestion by @JB_1366... the Recent IoC Detections list now includes a [Z] option
+            that allows you to easily add a DNS domain exception using one of the numerical indicators next
+            to the IoC domain entry to be added.
+          - PATCH: Think I finally found a fix to the screen corruption issue when rejoining a brand new
+            screen session after a fresh reboot where IOCMON started on its own. This would redraw the timer
+            line after 80 characters repeatedly until you either logged in, or the screen refreshed while
+            logged in. Thanks to the persistence of @JB_1366 to have me nip this in the bud.
+
 v1.0.1    - (October 4, 2026)
           - PATCH: Some minor compatibility tweaks for new installs that run the script with the "-screen"
             command before having the Screen Entware tool installed yet, and wasn't allowing the user to

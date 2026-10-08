@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.1.0
+# Version: 1.0.11
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-08
+# Last Updated: 2026-Oct-06
 # ============================================================================================================================
 #
 # Description:
@@ -91,7 +91,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.1.0"
+version="1.0.11"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -432,9 +432,9 @@ drawprogressprompt()
   laststatustext="$status_text"
   lastinputtext="$input_text"
 
-  if [ "$progressfirstdraw" -eq 1 ]; then
-    printf "\033[u\033[0J%b %s\033[2D" "$status_text" "$input_text"
-    progressfirstdraw=0
+  if [ "$progresspromptactive" -ne 1 ]; then
+    printf "\033[2K\r%b %s\033[2D" "$status_text" "$input_text"
+    progresspromptactive=1
   else
     printf "\033[s\r%b\033[u" "$status_text"
   fi
@@ -448,6 +448,8 @@ resetinvalidprogressinput()
 progressbaroverride()
 {
   insertspc=" "
+
+  [ "$1" -eq 1 ] && progresspromptactive=0
 
   if [ $1 -eq -1 ]; then
     printf "\r  $barspaces\r"
@@ -474,6 +476,7 @@ progressbaroverride()
   fi
 
   if readmenucommand; then
+      progresspromptactive=0
       echo ""
       case $key_press in
           [Cc]) vsetup;;
@@ -494,7 +497,7 @@ progressbaroverride()
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) timerpaused=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
+          [Xx]) timerpaused=0; progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
           [Ee])
             clear
             echo -e "${CGreen}[Exit IOCMON]${CClear}"
@@ -4883,10 +4886,9 @@ vuninstall()
 # Begin main commandline switch logic
 # -------------------------------------------------------------------------------------------------------------------------
 
+progresspromptactive=0
 laststatustext=""
 lastinputtext=""
-winchpending=0
-progressfirstdraw=0
 driveunmountedalerted=0
 dnsquerylogwarned=0
 dnsquerymissingwarned=0
@@ -5142,7 +5144,7 @@ if [ -f "$pidfile" ]; then
 fi
 echo "$$" > "$pidfile"
 trap 'rm -f "$pidfile"' EXIT INT TERM
-trap 'winchpending=1' WINCH
+trap 'progresspromptactive=0' WINCH
 
 # Check for and add/refresh the alias for IOCMON - rebuilt from scratch every start (tagged-line convention,
 # same as schedulecron()'s cru entries) so an older install's alias is migrated to the new form automatically.
@@ -5345,8 +5347,6 @@ renderdashboard()
     renderalertbanner
   fi
   echo ""
-  printf '\033[s'
-  progressfirstdraw=1
 }
 
 while true; do
@@ -5430,13 +5430,8 @@ while true; do
   renderdashboard
 
   timer=0
-  winchpending=0
   while [ "$timer" -lt "$timerloop" ]; do
     [ "$timerpaused" -ne 1 ] && timer="$((timer+1))"
-    if [ "$winchpending" -eq 1 ]; then
-      winchpending=0
-      renderdashboard
-    fi
     preparebar 46 "|"
     progressbaroverride "$timer" "$timerloop" "" "s" "Standard"
     [ -f "$updatingfile" ] && break

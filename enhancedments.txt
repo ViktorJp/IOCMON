@@ -1,16 +1,18 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
-- Add VI as an optional text reader (@XIII)
 - Look at possible integration with Skynet and import IOC threat feeds to prevent outbound contact with malicious actors.
 - Build a web interface (@AvalonOC)
 - With the addition of Q-Feeds API, I see occasional hits identified by IP address. Please consider adding a clickable link to obtain info on the
   indicated IP address, just like @Adamm does in Skynet (e.g., https://otx.alienvault.com/indicator/ip/xxx.xxx.xxx.xxx), to help identify legitimate vs
   malicious IPs. No urgency, just something to add to your job jar. Thanks. @Visortgw
-- Restructure the DNS exceptions list, multi-column, ability to find using wild cards, being able to identify items already existing.
-- Build a configuration settings import/export, in order to easily transfer settings to a new install (@twiglets)
 
 Done:
+- Restructure the DNS exceptions list, multi-column, ability to find using wild cards, being able to identify items already existing.
+- Make it so that file integrity detection optionally reports on either MOD or HASH or both (@XIII)
+- Organize Config menu into sections, like BACKUPMON
+- Add VI as an optional text reader (@XIII)
+- Build a configuration settings import/export, in order to easily transfer settings to a new install (@twiglets)
 - Integrate Q-Feeds as another feed resource (@Slapdaddy)
 - Look at autoupdate logic as it may be failing with 404's (@visortgw)
 - Look into @visortgw's false positive file deletion issue

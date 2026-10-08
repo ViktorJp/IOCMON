@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.1.0
+# Version: 1.0.2
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-08
+# Last Updated: 2026-Oct-04
 # ============================================================================================================================
 #
 # Description:
@@ -36,7 +36,6 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_summary.txt         : human-readable last-scan detail (main screen)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_errors.txt          : this cycle's find stderr, if any
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_size_baseline.db         : per-file size, for mtime-independent MOD detection
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_content_hash.db          : per-file content hash, used only when fsmodalertmode=hash
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_new.txt             : timestamped log of added filenames, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_modified.txt        : timestamped log of modified filenames
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_deleted.txt         : timestamped log of deleted filenames
@@ -59,7 +58,6 @@
 #   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
 #   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
 #   (r) clear whichever log the "Recent..." panel is currently showing (confirmation required)
-#   (z) add a numbered "dns" entry's base domain (IoC Detections panel only) to the DNS Exceptions list
 #   (p) pause/resume the countdown timer without triggering a rescan
 #   (x) detach from the background SCREEN session without stopping IOCMON
 #
@@ -91,7 +89,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.1.0"
+version="1.0.2"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -149,8 +147,7 @@ authslowwindowhrs=24            # sliding window, in hours, for the low-and-slow
 authslowthreshold=15            # same-source-IP login failures across that whole window to trigger a sustained alert
 
 enablefsintegrity=1
-fsmodalertmode="mod"            # "mod" alerts on any mtime/size change to a critical path; "hash" additionally requires the file's own content hash to have actually changed
-fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /jffs/.ssh /tmp/mnt/$extdrivelabel"  # /opt/bin,/opt/sbin,etc. deliberately excluded - already covered via the drive-root watch
+fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /tmp/mnt/$extdrivelabel"  # /opt/bin,/opt/sbin,etc. deliberately excluded - already covered via the drive-root watch
 fswatchexclude="Backups Downloads Media iocmon.d"  # folder NAMES excluded by name anywhere under a watched tree - not a substitute for checkfsintegrity's own iocmonroot self-exclusion
 fsexcludeext=".log .csv .txt .db"  # file EXTENSIONS excluded from every fs-integrity check (new/modified/deleted/permission/hash alike) - leading "." optional
 fsexcludefiles=""               # individual absolute file paths excluded from every fs-integrity check - empty by default
@@ -432,9 +429,9 @@ drawprogressprompt()
   laststatustext="$status_text"
   lastinputtext="$input_text"
 
-  if [ "$progressfirstdraw" -eq 1 ]; then
-    printf "\033[u\033[0J%b %s\033[2D" "$status_text" "$input_text"
-    progressfirstdraw=0
+  if [ "$progresspromptactive" -ne 1 ]; then
+    printf "\033[2K\r%b %s\033[2D" "$status_text" "$input_text"
+    progresspromptactive=1
   else
     printf "\033[s\r%b\033[u" "$status_text"
   fi
@@ -448,6 +445,8 @@ resetinvalidprogressinput()
 progressbaroverride()
 {
   insertspc=" "
+
+  [ "$1" -eq 1 ] && progresspromptactive=0
 
   if [ $1 -eq -1 ]; then
     printf "\r  $barspaces\r"
@@ -474,6 +473,7 @@ progressbaroverride()
   fi
 
   if readmenucommand; then
+      progresspromptactive=0
       echo ""
       case $key_press in
           [Cc]) vsetup;;
@@ -489,12 +489,11 @@ progressbaroverride()
           [Hh]) alertviewmode="hash"; renderdashboard;;
           [Rr]) clearcurrentlog;;
           [Rr]!) clearcurrentlognow;;
-          [Zz]) addtodnsexception;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) timerpaused=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
+          [Xx]) timerpaused=0; progresspromptactive=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
           [Ee])
             clear
             echo -e "${CGreen}[Exit IOCMON]${CClear}"
@@ -512,25 +511,15 @@ progressbaroverride()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# booleantoyesno renders a 0/1 config value as a colored YES/NO toggle-switch for menu display
+# booleantoyesno renders a 0/1 config value as Yes/No for menu display
 
 booleantoyesno()
 {
   if [ "$1" -eq 1 ]; then
-    echo "${CGreen}YES${CClear} |${InvGreen}  ${CClear}  | ${CDkGray}NO${CClear}"
+    echo "Yes"
   else
-    echo "${CDkGray}YES${CClear} |  ${InvDkGray}  ${CClear}| ${CRed}NO${CClear}"
+    echo "No"
   fi
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# stripansi removes color escape codes from $1, leaving only its visible text
-
-stripansi()
-{
-  local esc
-  esc="$(printf '\033')"
-  printf '%b' "$1" | sed "s/${esc}\[[0-9;]*m//g"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -538,30 +527,14 @@ stripansi()
 
 padright()
 {
-  local text="$1" width="$2" stripped visiblelen pad
-  stripped="$(stripansi "$text")"
+  local text="$1" width="$2" esc stripped visiblelen pad
+  esc="$(printf '\033')"
+  stripped="$(printf '%b' "$text" | sed "s/${esc}\[[0-9;]*m//g")"
   visiblelen=${#stripped}
   pad=$((width - visiblelen))
   [ "$pad" -lt 1 ] && pad=1
   printf '%b' "$text"
   printf '%*s' "$pad" ""
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# menurow prints one numbered Advanced Settings row, dimmed (and inert to its own case arm) when $5 is 0
-
-menurow()
-{
-  local badge="$1" label="$2" value="$3" width="${4:-68}" enabled="${5:-1}"
-  if [ "$enabled" -eq 1 ]; then
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}${badge}${CClear} : "
-    padright "$label" "$width"
-    echo -e ": $value"
-  else
-    echo -en "${InvGreen} ${CClear} ${CDkGray}${badge}${CClear} : "
-    padright "${CDkGray}${label}${CClear}" "$width"
-    echo -e ": ${CDkGray}$(stripansi "$value")${CClear}"
-  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -696,7 +669,6 @@ saveconfig()
     echo 'authslowthreshold='$authslowthreshold
 
     echo 'enablefsintegrity='$enablefsintegrity
-    echo 'fsmodalertmode="'"$fsmodalertmode"'"'
     echo 'fswatchdirs="'"$fswatchdirs"'"'
     echo 'fswatchexclude="'"$fswatchexclude"'"'
     echo 'fsexcludeext="'"$fsexcludeext"'"'
@@ -928,7 +900,7 @@ initialsetup()
     *) ;;
   esac
 
-  fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /jffs/.ssh /tmp/mnt/$extdrivelabel"
+  fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /tmp/mnt/$extdrivelabel"
   saveconfig
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
@@ -949,23 +921,18 @@ vsetup()
     echo -e "${InvGreen} ${CClear} storage, feed sources, and detection settings, or perform maintenance actions.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [IOCMON Operations]                                                                                                                     ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : Select Feed Storage Location (Ext. Drive)${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources & API Keys${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [Setup + Configuration]                                                                                                                 ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : Reset IOCMON back to Default Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 6)${CClear} : Import/Export IOCMON Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : Update IOCMON to Latest Version${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : Optional Entware Components${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : Advanced Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : Select Feed Storage Location (Ext. Drive)${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : Select Feed Sources & API Keys${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : Reset IOCMON back to Default Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : Import/Export IOCMON Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : Update IOCMON to Latest Version${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : Optional Entware Components${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(10)${CClear} : Uninstall IOCMON${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
@@ -1165,7 +1132,7 @@ vcronexceptions()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.4.13 Cron Exceptions                                                                                                                  ${CClear}"
+    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.4.12 Cron Exceptions                                                                                                                  ${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Cron entries listed below never raise an alert, even when checkcronbaseline/checkentwarecron${CClear}"
     echo -e "${InvGreen} ${CClear} see them disappear and reappear - for entries a script/addon manages on its own schedule.${CClear}"
@@ -1267,206 +1234,6 @@ EOF
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vdnsexceptions is a dedicated 2-column/paginated/find/edit editor for dnsexceptions (the one list expected to grow largest)
-
-vdnsexceptions()
-{
-  local list count page=1 perpage=60 leftwidth=70 totalbudget=136 rightmax badgewidth prefixlen leftbudget rightbudget entrybudget
-  local totalpages pagestart r leftidx rightidx leftentry rightentry leftdisp rightdisp leftbadge rightbadge leftplain leftpad rightout
-  local sel pendingeditnum newval idx entry newlist delnum pattern fcount hp hpad editnum faction fdel
-
-  while true; do
-    [ "$exitallmenus" -eq 1 ] && break
-    pendingeditnum=""
-    list="$dnsexceptions"
-    set -- $list
-    count=$#
-    badgewidth=${#count}
-    [ "$badgewidth" -lt 1 ] && badgewidth=1
-    totalpages=$(( (count + perpage - 1) / perpage ))
-    [ "$totalpages" -lt 1 ] && totalpages=1
-    [ "$page" -gt "$totalpages" ] && page=$totalpages
-    [ "$page" -lt 1 ] && page=1
-
-    prefixlen=$((badgewidth + 5))
-    rightmax=$((totalbudget - leftwidth))
-    leftbudget=$((leftwidth - prefixlen - 3))
-    rightbudget=$((rightmax - prefixlen))
-    entrybudget=$leftbudget
-    [ "$rightbudget" -lt "$entrybudget" ] && entrybudget=$rightbudget
-    [ "$entrybudget" -lt 10 ] && entrybudget=10
-
-    clear
-    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "9.2.2 DNS Domain Exceptions" 136; echo -e "${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Choose an entry number to edit it, (a) to add a new entry, (d) to delete one, (t) to edit${CClear}"
-    echo -e "${InvGreen} ${CClear} an entry, or (f) to find an entry. Page ${CGreen}${page}${CClear}/${CGreen}${totalpages}${CClear}, ${CGreen}${count}${CClear} entries total.${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-
-    if [ "$count" -eq 0 ]; then
-      echo -e "${InvGreen} ${CClear} ${CDkGray}(no entries configured)${CClear}"
-    else
-      pagestart=$(( (page-1) * perpage ))
-      r=1
-      while [ "$r" -le 30 ]; do
-        leftidx=$((pagestart + r))
-        [ "$leftidx" -gt "$count" ] && break
-        eval "leftentry=\"\${$leftidx}\""
-        leftdisp="$leftentry"
-        [ "${#leftdisp}" -gt "$entrybudget" ] && leftdisp="$(printf '%.*s' "$((entrybudget-1))" "$leftdisp")>"
-        leftbadge="$(printf "(%${badgewidth}d)" "$leftidx")"
-        leftplain="${leftbadge} : ${leftdisp}"
-        leftpad=$((leftwidth - ${#leftplain}))
-        [ "$leftpad" -lt 1 ] && leftpad=1
-
-        rightidx=$((leftidx + 30))
-        rightout=""
-        if [ "$rightidx" -le "$count" ]; then
-          eval "rightentry=\"\${$rightidx}\""
-          rightdisp="$rightentry"
-          [ "${#rightdisp}" -gt "$entrybudget" ] && rightdisp="$(printf '%.*s' "$((entrybudget-1))" "$rightdisp")>"
-          rightbadge="$(printf "(%${badgewidth}d)" "$rightidx")"
-          rightout="${InvDkGray}${CWhite}${rightbadge}${CClear} : ${CGreen}${rightdisp}${CClear}"
-        fi
-
-        echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}${leftbadge}${CClear} : ${CGreen}${leftdisp}${CClear}$(printf '%*s' "$leftpad" '')${rightout}"
-        r=$((r+1))
-      done
-    fi
-
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    hp="(a) : Add a new entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(a)${CClear} : Add a new entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(n)${CClear} : Next page${CClear}"
-    hp="(d) : Delete an entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(d)${CClear} : Delete an entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(p)${CClear} : Previous page${CClear}"
-    hp="(f) : Find an entry"; hpad=$((leftwidth - ${#hp})); [ "$hpad" -lt 1 ] && hpad=1
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(f)${CClear} : Find an entry$(printf '%*s' "$hpad" '')${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(t)${CClear} : Edit an entry${CClear}"
-    echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo ""
-    read -p "Please select? (1-$count, a=Add, d=Delete, f=Find, t=Edit, n=Next, p=Previous, e=Exit): " sel
-
-    case "$sel" in
-      [Aa])
-        read -p "New domain name entry: " newval
-        if [ -n "$newval" ]; then
-          dnsexceptions="${dnsexceptions:+$dnsexceptions }$newval"
-          saveconfig
-          set -- $dnsexceptions
-          page=$(( ($# + perpage - 1) / perpage ))
-          [ "$page" -lt 1 ] && page=1
-        fi
-        ;;
-      [Dd])
-        [ "$count" -eq 0 ] && continue
-        read -p "Delete which entry number? (1-$count, blank to cancel): " delnum
-        if echo "$delnum" | grep -qE '^[0-9]+$' && [ "$delnum" -ge 1 ] && [ "$delnum" -le "$count" ]; then
-          set -- $list
-          idx=0; newlist=""
-          for entry in "$@"; do
-            idx=$((idx+1))
-            [ "$idx" -eq "$delnum" ] && continue
-            newlist="${newlist:+$newlist }$entry"
-          done
-          dnsexceptions="$newlist"
-          saveconfig
-        fi
-        ;;
-      [Ff])
-        read -p "Enter a search term (wildcards * ? allowed, blank to cancel): " pattern
-        if [ -n "$pattern" ]; then
-          case "$pattern" in
-            *'*'*|*'?'*) ;;
-            *) pattern="*${pattern}*" ;;
-          esac
-          clear
-          echo -e "${CGreen}[Find Results: \"$pattern\"]${CClear}"
-          echo ""
-          set -- $list
-          idx=0; fcount=0
-          for entry in "$@"; do
-            idx=$((idx+1))
-            case "$entry" in
-              $pattern)
-                fcount=$((fcount+1))
-                echo -e "  ${InvDkGray}${CWhite}(${idx})${CClear} : ${CGreen}${entry}${CClear}"
-                ;;
-            esac
-          done
-          echo ""
-          if [ "$fcount" -eq 0 ]; then
-            echo -e "${CYellow}No entries matched.${CClear}"
-            echo ""
-            read -rsp $'Press any key to continue...\n' -n1 key
-          else
-            echo -e "Found ${CGreen}${fcount}${CClear} matching entr$([ "$fcount" -eq 1 ] && echo "y" || echo "ies")."
-            echo ""
-            read -p "Enter an entry number to edit, (d) to delete one, or blank to return: " faction
-            case "$faction" in
-              "") ;;
-              [Dd])
-                read -p "Delete which entry number? (blank to cancel): " fdel
-                if echo "$fdel" | grep -qE '^[0-9]+$' && [ "$fdel" -ge 1 ] && [ "$fdel" -le "$count" ]; then
-                  set -- $list
-                  idx=0; newlist=""
-                  for entry in "$@"; do
-                    idx=$((idx+1))
-                    [ "$idx" -eq "$fdel" ] && continue
-                    newlist="${newlist:+$newlist }$entry"
-                  done
-                  dnsexceptions="$newlist"
-                  saveconfig
-                fi
-                ;;
-              *)
-                if echo "$faction" | grep -qE '^[0-9]+$' && [ "$faction" -ge 1 ] && [ "$faction" -le "$count" ]; then
-                  pendingeditnum="$faction"
-                fi
-                ;;
-            esac
-          fi
-        fi
-        ;;
-      [Tt])
-        read -p "Edit which entry number? (1-$count, blank to cancel): " editnum
-        if echo "$editnum" | grep -qE '^[0-9]+$' && [ "$editnum" -ge 1 ] && [ "$editnum" -le "$count" ]; then
-          pendingeditnum="$editnum"
-        fi
-        ;;
-      [Nn]) [ "$page" -lt "$totalpages" ] && page=$((page+1)) ;;
-      [Pp]) [ "$page" -gt 1 ] && page=$((page-1)) ;;
-      [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
-      *)
-        if echo "$sel" | grep -qE '^[0-9]+$' && [ "$sel" -ge 1 ] && [ "$sel" -le "$count" ]; then
-          pendingeditnum="$sel"
-        fi
-        ;;
-    esac
-
-    if [ -n "$pendingeditnum" ]; then
-      set -- $list
-      eval "entry=\"\${$pendingeditnum}\""
-      echo ""
-      echo -e "Current: ${CGreen}${entry}${CClear}"
-      read -p "New value (blank to keep current): " newval
-      if [ -n "$newval" ]; then
-        set -- $list
-        idx=0; newlist=""
-        for entry in "$@"; do
-          idx=$((idx+1))
-          if [ "$idx" -eq "$pendingeditnum" ]; then newlist="${newlist:+$newlist }$newval"; else newlist="${newlist:+$newlist }$entry"; fi
-        done
-        dnsexceptions="$newlist"
-        saveconfig
-      fi
-    fi
-  done
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
 # vadvanced is the top-level Advanced Settings menu
 
 vadvanced()
@@ -1521,7 +1288,7 @@ vadvancedalerting()
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Send an AMTM email whenever a real IOC detection fires" 68; echo -e ": $(booleantoyesno "$enablealertemail")"
-    menurow "(2)" "Maximum alert emails per hour (0 = unlimited)" "${CGreen}$ratelimit${CClear}" 68 "$enablealertemail"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Maximum alert emails per hour (0 = unlimited)" 68; echo -e ": ${CGreen}$ratelimit${CClear}"
     if [ "$alertbanneratbottom" -eq 1 ]; then bannerposdisp="Bottom"; else bannerposdisp="Top"; fi
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "SECURITY ALERT banner screen position (Top/Bottom)" 68; echo -e ": ${CGreen}${bannerposdisp}${CClear}"
     if [ "$alertfeedonly" -eq 1 ]; then alertleveldisp="Feed Matches Only"; else alertleveldisp="All Alerts"; fi
@@ -1534,9 +1301,9 @@ vadvancedalerting()
     read -p "Please select? (1-4, e=Exit): " sel
     case "$sel" in
       1) togglesetting enablealertemail ;;
-      2) [ "$enablealertemail" -eq 1 ] && { echo -e "Current: ${CGreen}${ratelimit}${CClear}"
+      2) echo -e "Current: ${CGreen}${ratelimit}${CClear}"
          read -p "New email rate limit, emails/hr (0=unlimited, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 0 && ratelimit="$val" && saveconfig; }; } ;;
+         [ -n "$val" ] && { validateint "$val" 0 && ratelimit="$val" && saveconfig; } ;;
       3) togglesetting alertbanneratbottom ;;
       4) togglesetting alertfeedonly ;;
       [Ee]) break ;;
@@ -1562,13 +1329,12 @@ vadvanceddns()
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
     if [ "$enablednswatch" -eq 1 ] && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
-    tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
-    menurow "(2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
-    menurow "(3)" "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" "$(booleantoyesno "$enablednstunnel")" 68 "$enablednswatch"
-    menurow "(4)" "  Distinct subdomains/tick under one domain to flag as tunneling" "${CGreen}$dnstunnelsubthreshold${CClear}" 68 "$tunnelon"
-    menurow "(5)" "  Single query-name length (chars) to flag on its own" "${CGreen}$dnstunnelnamelen${CClear}" 68 "$tunnelon"
-    menurow "(6)" "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" "${CGreen}${dnslogpath:-auto}${CClear}" 68 "$enablednswatch"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "DNS domain exceptions (logged, never alerted/emailed)" 68; echo -e ": ${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" 68; echo -e ": $(booleantoyesno "$enablednstunnel")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "  Distinct subdomains/tick under one domain to flag as tunneling" 68; echo -e ": ${CGreen}$dnstunnelsubthreshold${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "  Single query-name length (chars) to flag on its own" 68; echo -e ": ${CGreen}$dnstunnelnamelen${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" 68; echo -e ": ${CGreen}${dnslogpath:-auto}${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1601,15 +1367,15 @@ vadvanceddns()
            fi
          fi
          ;;
-      2) [ "$enablednswatch" -eq 1 ] && vdnsexceptions ;;
-      3) [ "$enablednswatch" -eq 1 ] && togglesetting enablednstunnel ;;
-      4) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelsubthreshold}${CClear}"
+      2) veditlist dnsexceptions "9.2.2 DNS Domain Exceptions" ;;
+      3) togglesetting enablednstunnel ;;
+      4) echo -e "Current: ${CGreen}${dnstunnelsubthreshold}${CClear}"
          read -p "New distinct-subdomain threshold (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && dnstunnelsubthreshold="$val" && saveconfig; }; } ;;
-      5) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
+         [ -n "$val" ] && { validateint "$val" 1 && dnstunnelsubthreshold="$val" && saveconfig; } ;;
+      5) echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
          read -p "New query-name length threshold, chars (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; }; } ;;
-      6) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
+         [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; } ;;
+      6) echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
          read -p "Full path to the file holding dnsmasq's query lines (blank keeps current, 'auto' clears): " val
          if [ "$val" = "auto" ]; then
            dnslogpath=""; dnslogautotime=0; saveconfig
@@ -1619,7 +1385,7 @@ vadvanceddns()
                  dnslogpath="$val"; dnslogautotime=0; saveconfig ;;
              *) echo -e "${CRed}Please enter an absolute path (starting with /).${CClear}"; sleep 2 ;;
            esac
-         fi; } ;;
+         fi ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1642,9 +1408,9 @@ vadvancedbruteforce()
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch router logins for brute-force (repeated failed) attempts" 68; echo -e ": $(booleantoyesno "$enableauthwatch")"
-    menurow "(2)" "  Same-IP login failures within one check to trigger a burst alert" "${CGreen}$authfailthreshold${CClear}" 68 "$enableauthwatch"
-    menurow "(3)" "  Sliding window (hours) for sustained low-and-slow brute-force" "${CGreen}$authslowwindowhrs${CClear}" 68 "$enableauthwatch"
-    menurow "(4)" "  Same-IP login failures across that window to trigger an alert" "${CGreen}$authslowthreshold${CClear}" 68 "$enableauthwatch"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "  Same-IP login failures within one check to trigger a burst alert" 68; echo -e ": ${CGreen}$authfailthreshold${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "  Sliding window (hours) for sustained low-and-slow brute-force" 68; echo -e ": ${CGreen}$authslowwindowhrs${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "  Same-IP login failures across that window to trigger an alert" 68; echo -e ": ${CGreen}$authslowthreshold${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1653,15 +1419,15 @@ vadvancedbruteforce()
     read -p "Please select? (1-4, e=Exit): " sel
     case "$sel" in
       1) togglesetting enableauthwatch ;;
-      2) [ "$enableauthwatch" -eq 1 ] && { echo -e "Current: ${CGreen}${authfailthreshold}${CClear}"
+      2) echo -e "Current: ${CGreen}${authfailthreshold}${CClear}"
          read -p "New burst threshold, failures/tick (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && authfailthreshold="$val" && saveconfig; }; } ;;
-      3) [ "$enableauthwatch" -eq 1 ] && { echo -e "Current: ${CGreen}${authslowwindowhrs}${CClear}"
+         [ -n "$val" ] && { validateint "$val" 1 && authfailthreshold="$val" && saveconfig; } ;;
+      3) echo -e "Current: ${CGreen}${authslowwindowhrs}${CClear}"
          read -p "New sliding-window size in hours (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && authslowwindowhrs="$val" && saveconfig; }; } ;;
-      4) [ "$enableauthwatch" -eq 1 ] && { echo -e "Current: ${CGreen}${authslowthreshold}${CClear}"
+         [ -n "$val" ] && { validateint "$val" 1 && authslowwindowhrs="$val" && saveconfig; } ;;
+      4) echo -e "Current: ${CGreen}${authslowthreshold}${CClear}"
          read -p "New sustained-window threshold, failures/window (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && authslowthreshold="$val" && saveconfig; }; } ;;
+         [ -n "$val" ] && { validateint "$val" 1 && authslowthreshold="$val" && saveconfig; } ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1683,46 +1449,42 @@ vadvancedfilesystem()
     echo -e "${InvGreen} ${CClear} it does with a confirmed malware-hash match, and unexpected new cron entries.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    crondiffon=0; [ "$enablefsintegrity" -eq 1 ] && [ "$enablecrondiff" -eq 1 ] && crondiffon=1
-    menurow "( 1)" "How often to scan watched folders for file changes, in hours" "${CGreen}$fsintegrityhrs${CClear}" 68 "$enablefsintegrity"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "How often to scan watched folders for file changes, in hours" 68; echo -e ": ${CGreen}$fsintegrityhrs${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : "; padright "Watch files/folders below for unexpected changes" 68; echo -e ": $(booleantoyesno "$enablefsintegrity")"
-    if [ "$fsmodalertmode" = "hash" ]; then modalertdisp="${CGreen}Upon File Hash Mismatch${CClear}"; else modalertdisp="${CGreen}Upon File Modification${CClear}"; fi
-    menurow "( 3)" "Critical-path MOD alert mode (.ssh/startup-scripts/.conf.add)" "$modalertdisp" 68 "$enablefsintegrity"
-    menurow "( 4)" "Folders to watch for file changes" "${CGreen}$(echo "$fswatchdirs" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 5)" "Folder NAMES to exclude by name, not by path" "${CGreen}$(echo "$fswatchexclude" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 6)" "File extensions excluded from every check (new/mod/del/perm)" "${CGreen}$(echo "$fsexcludeext" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 7)" "Individual files excluded by absolute path" "${CGreen}$(echo "$fsexcludefiles" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 8)" "Skip hashing files larger than this, in bytes" "${CGreen}$fsmaxhashsize${CClear}" 68 "$enablefsintegrity"
-    menurow "( 9)" "Auto-quarantine files matching a known-malware hash (strips +x," "$(booleantoyesno "$enablequarantine")" 68 "$enablefsintegrity"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : "; padright "Folders to watch for file changes" 68; echo -e ": ${CGreen}$(echo "$fswatchdirs" | wc -w | tr -d ' ')${CClear} configured"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : "; padright "Folder NAMES to exclude by name, not by path" 68; echo -e ": ${CGreen}$(echo "$fswatchexclude" | wc -w | tr -d ' ')${CClear} configured"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : "; padright "File extensions excluded from every check (new/mod/del/perm)" 68; echo -e ": ${CGreen}$(echo "$fsexcludeext" | wc -w | tr -d ' ')${CClear} configured"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 6)${CClear} : "; padright "Individual files excluded by absolute path" 68; echo -e ": ${CGreen}$(echo "$fsexcludefiles" | wc -w | tr -d ' ')${CClear} configured"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : "; padright "Skip hashing files larger than this, in bytes" 68; echo -e ": ${CGreen}$fsmaxhashsize${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : "; padright "Auto-quarantine files matching a known-malware hash (strips +x," 68; echo -e ": $(booleantoyesno "$enablequarantine")"
     echo -e "${InvGreen} ${CClear}         renames to <file>.iocmon-quarantine, never deletes)"
-    menurow "(10)" "Alert when a file is DELETED from a critical path" "$(booleantoyesno "$enablefsdeletionwatch")" 68 "$enablefsintegrity"
-    menurow "(11)" "Alert when WRITE/EXECUTE permission is added with no changes" "$(booleantoyesno "$enablepermwatch")" 68 "$enablefsintegrity"
-    menurow "(12)" "Alert on unexpected new scheduled tasks (cru/Entware cron)" "$(booleantoyesno "$enablecrondiff")" 68 "$enablefsintegrity"
-    menurow "(13)" "Cron entries excepted from unexpected-new-entry alerts" "${CGreen}$([ -z "$cronexceptions" ] && echo 0 || printf '%s\n' "$cronexceptions" | wc -l | tr -d ' ')${CClear} configured" 68 "$crondiffon"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : "; padright "Alert when a file is DELETED from a critical path" 68; echo -e ": $(booleantoyesno "$enablefsdeletionwatch")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(10)${CClear} : "; padright "Alert when WRITE/EXECUTE permission is added with no changes" 68; echo -e ": $(booleantoyesno "$enablepermwatch")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : "; padright "Alert on unexpected new scheduled tasks (cru/Entware cron)" 68; echo -e ": $(booleantoyesno "$enablecrondiff")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(12)${CClear} : "; padright "Cron entries excepted from unexpected-new-entry alerts" 68; echo -e ": ${CGreen}$([ -z "$cronexceptions" ] && echo 0 || printf '%s\n' "$cronexceptions" | wc -l | tr -d ' ')${CClear} configured"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-13, e=Exit): " sel
+    read -p "Please select? (1-12, e=Exit): " sel
     case "$sel" in
-      1) [ "$enablefsintegrity" -eq 1 ] && { echo -e "Current: ${CGreen}${fsintegrityhrs}${CClear}"
+      1) echo -e "Current: ${CGreen}${fsintegrityhrs}${CClear}"
          read -p "New filesystem-integrity scan interval in hours (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && fsintegrityhrs="$val" && saveconfig; }; } ;;
+         [ -n "$val" ] && { validateint "$val" 1 && fsintegrityhrs="$val" && saveconfig; } ;;
       2) togglesetting enablefsintegrity ;;
-      3) [ "$enablefsintegrity" -eq 1 ] && { if [ "$fsmodalertmode" = "hash" ]; then fsmodalertmode="mod"; else fsmodalertmode="hash"; fi; saveconfig; } ;;
-      4) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchdirs "9.4.4 Watched Folders" "absolute path, e.g. /jffs/scripts" ;;
-      5) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchexclude "9.4.5 Excluded Folder Names" "a folder NAME, not a path - matches this name anywhere under a watched folder, e.g. Backups" ;;
-      6) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludeext "9.4.6 Excluded File Extensions" "a file extension, e.g. .log (leading dot optional)" ;;
-      7) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludefiles "9.4.7 Excluded Individual Files" "a complete absolute file path, e.g. /jffs/scripts/sample.sh" ;;
-      8) [ "$enablefsintegrity" -eq 1 ] && { echo -e "Current: ${CGreen}${fsmaxhashsize}${CClear}"
+      3) veditlist fswatchdirs "9.4.3 Watched Folders" "absolute path, e.g. /jffs/scripts" ;;
+      4) veditlist fswatchexclude "9.4.4 Excluded Folder Names" "a folder NAME, not a path - matches this name anywhere under a watched folder, e.g. Backups" ;;
+      5) veditlist fsexcludeext "9.4.5 Excluded File Extensions" "a file extension, e.g. .log (leading dot optional)" ;;
+      6) veditlist fsexcludefiles "9.4.6 Excluded Individual Files" "a complete absolute file path, e.g. /jffs/scripts/sample.sh" ;;
+      7) echo -e "Current: ${CGreen}${fsmaxhashsize}${CClear}"
          read -p "New max hash size in bytes (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && fsmaxhashsize="$val" && saveconfig; }; } ;;
-      9) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablequarantine ;;
-      10) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablefsdeletionwatch ;;
-      11) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablepermwatch ;;
-      12) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablecrondiff ;;
-      13) [ "$crondiffon" -eq 1 ] && vcronexceptions ;;
+         [ -n "$val" ] && { validateint "$val" 1 && fsmaxhashsize="$val" && saveconfig; } ;;
+      8) togglesetting enablequarantine ;;
+      9) togglesetting enablefsdeletionwatch ;;
+      10) togglesetting enablepermwatch ;;
+      11) togglesetting enablecrondiff ;;
+      12) vcronexceptions ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1746,8 +1508,8 @@ vadvancednetwork()
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch active connections for traffic to known-malicious IPs" 68; echo -e ": $(booleantoyesno "$enableconntrackwatch")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Watch security-relevant NVRAM vars (SSH/Telnet, WAN DNS, JFFS)" 68; echo -e ": $(booleantoyesno "$enablenvramwatch")"
-    menurow "(3)" "Alert on new port-forward/DMZ/UPnP rules exposing LAN to WAN" "$(booleantoyesno "$enablefwrulediff")" 68 "$enablefsintegrity"
-    menurow "(4)" "IP/CIDR Exceptions (excluded from conntrack feed matching)" "${CGreen}$(echo "$ipexceptions" | wc -w | tr -d ' ')${CClear} entries" 68 "$enableconntrackwatch"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Alert on new port-forward/DMZ/UPnP rules exposing LAN to WAN" 68; echo -e ": $(booleantoyesno "$enablefwrulediff")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "IP/CIDR Exceptions (excluded from conntrack feed matching)" 68; echo -e ": ${CGreen}$(echo "$ipexceptions" | wc -w | tr -d ' ')${CClear} entries"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1757,8 +1519,8 @@ vadvancednetwork()
     case "$sel" in
       1) togglesetting enableconntrackwatch ;;
       2) togglesetting enablenvramwatch ;;
-      3) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablefwrulediff ;;
-      4) [ "$enableconntrackwatch" -eq 1 ] && veditlist ipexceptions "9.5.4 IP/CIDR Exceptions" "a single IP, e.g. 204.44.63.22, or a CIDR range, e.g. 204.44.0.0/16" \
+      3) togglesetting enablefwrulediff ;;
+      4) veditlist ipexceptions "9.5.4 IP/CIDR Exceptions" "a single IP, e.g. 204.44.63.22, or a CIDR range, e.g. 204.44.0.0/16" \
            "A single IP (204.44.63.22) or a CIDR range (204.44.0.0/16) that conntrack should never compare" \
            "against a feed - checked and excluded first, before any feed indicator is ever considered." ;;
       [Ee]) break ;;
@@ -1786,8 +1548,8 @@ vadvancedgeneral()
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Maximum rows kept in the activity log (0 = unlimited)" 68; echo -e ": ${CGreen}$logsize${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
-    menurow "(5)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
-    menurow "(6)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "  Time of day for that update check (24-hour clock)" 68; echo -e ": ${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "Automatically install IOCMON script updates when found" 68; echo -e ": $(booleantoyesno "$updateiocm")"
     if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
@@ -1805,15 +1567,16 @@ vadvancedgeneral()
          [ -n "$val" ] && { validateint "$val" 0 && logsize="$val" && saveconfig; } ;;
       3) togglesetting autostart ;;
       4) togglesetting schedule ;;
-      5) [ "$schedule" -eq 1 ] && { echo -e "Current: ${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}"
+      5) echo -e "Current: ${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}"
          read -p "New self-update hour (0-23, blank to keep current): " newhr
          read -p "New self-update minute (0-59, blank to keep current): " newmin
          [ -z "$newhr" ] && newhr="$schedulehrs"
          [ -z "$newmin" ] && newmin="$schedulemin"
          if validateint "$newhr" 0 && [ "$newhr" -le 23 ] && validateint "$newmin" 0 && [ "$newmin" -le 59 ]; then
            schedulehrs="$newhr"; schedulemin="$newmin"; saveconfig
-         fi; } ;;
-      6) [ "$schedule" -eq 1 ] && togglesetting updateiocm ;;
+         fi
+         ;;
+      6) togglesetting updateiocm ;;
       7) togglesetting track ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
@@ -1848,7 +1611,7 @@ vfeedsources()
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "Q-Feeds (OSINT IP/domain)" 30; echo -e ": $(booleantoyesno "$enableqfeeds")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : "; padright "  Q-Feeds API Key" 30; echo -e ": ${CGreen}${qfkeydisp}${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Feed refresh interval (hours)" 30; echo -e ": ${CGreen}$feedupdatehrs${CClear}"
-    menurow "(9)" "Q-Feeds refresh (hours)" "${CGreen}$qfeedshrs${CClear}" 30 "$enableqfeeds"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : "; padright "Q-Feeds refresh (hours)" 30; echo -e ": ${CGreen}$qfeedshrs${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1878,9 +1641,9 @@ vfeedsources()
       8) echo -e "Current: ${CGreen}${feedupdatehrs}${CClear}"
          read -p "New feed refresh interval in hours (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && feedupdatehrs="$val" && saveconfig; } ;;
-      9) [ "$enableqfeeds" -eq 1 ] && { echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
+      9) echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
          read -p "New Q-Feeds refresh interval in hours (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && saveconfig; }; } ;;
+         [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && saveconfig; } ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -3002,14 +2765,6 @@ indnsexceptionlist()
   return 1
 }
 
-# -------------------------------------------------------------------------------------------------------------------------
-# basedomain reduces $1 to its last two dot-separated labels (same approximation checkdns's tunnel heuristic uses)
-
-basedomain()
-{
-  echo "$1" | awk -F. '{n=NF; if (n>=2) print $(n-1)"."$n; else print $0}'
-}
-
 enablednsquerylogging()
 {
   if dnsquerylogenabled; then
@@ -3425,37 +3180,6 @@ quarantinefile()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# filecontenthash computes one cheap content hash for $1, whichever of md5/sha1/sha256 is first available
-
-filecontenthash()
-{
-  local path="$1"
-  if which md5sum >/dev/null 2>&1; then md5sum "$path" 2>/dev/null | awk '{print $1}'
-  elif which sha1sum >/dev/null 2>&1; then sha1sum "$path" 2>/dev/null | awk '{print $1}'
-  elif which sha256sum >/dev/null 2>&1; then sha256sum "$path" 2>/dev/null | awk '{print $1}'
-  fi
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# fscontenthashchanged updates $1's stored content-hash baseline and reports whether it genuinely changed since last time
-
-fscontenthashchanged()
-{
-  local path="$1" hashdb newhash oldhash tmpfile
-  [ -z "$stateroot" ] && return 0
-  hashdb="$stateroot/fs_content_hash.db"
-  newhash="$(filecontenthash "$path")"
-  [ -z "$newhash" ] && return 0
-  oldhash="$(awk -F'\t' -v p="$path" '$1==p{print $2}' "$hashdb" 2>/dev/null)"
-  tmpfile="${hashdb}.tmp"
-  awk -F'\t' -v p="$path" '$1!=p' "$hashdb" 2>/dev/null > "$tmpfile"
-  printf '%s\t%s\n' "$path" "$newhash" >> "$tmpfile"
-  mv "$tmpfile" "$hashdb"
-  [ -z "$oldhash" ] && return 1
-  [ "$oldhash" != "$newhash" ]
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
 # hashmatchcheck computes whichever of md5/sha1/sha256 are available for one file and checks them against feeds/hashes.txt.
 
 hashmatchcheck()
@@ -3505,9 +3229,7 @@ processfschange()
 
   case "$path" in
     */.ssh/*)
-      if [ "$changetype" != "MOD" ] || [ "$fsmodalertmode" != "hash" ] || fscontenthashchanged "$path"; then
-        raisealert "fsintegrity" "$path" "ssh-directory-change" "$changetype - review immediately, not hash-matched"
-      fi
+      raisealert "fsintegrity" "$path" "ssh-directory-change" "$changetype - review immediately, not hash-matched"
       ;;
   esac
 
@@ -3515,25 +3237,13 @@ processfschange()
   dir="${path%/*}"
   case " $fsstartupscripts " in
     *" $base "*)
-      if [ "$dir" = "/jffs/scripts" ]; then
-        if [ "$changetype" = "MOD" ] && [ "$fsmodalertmode" = "hash" ]; then
-          fscontenthashchanged "$path" && raisealert "fsintegrity" "$path" "startup-script-edit" "HASH - review file content changes"
-        else
-          raisealert "fsintegrity" "$path" "startup-script-edit" "$changetype - review regardless of hash match"
-        fi
-      fi
+      [ "$dir" = "/jffs/scripts" ] && raisealert "fsintegrity" "$path" "startup-script-edit" "$changetype - review regardless of hash match"
       ;;
   esac
 
   case "$base" in
     *.conf.add)
-      if [ "$dir" = "/jffs/configs" ]; then
-        if [ "$changetype" = "MOD" ] && [ "$fsmodalertmode" = "hash" ]; then
-          fscontenthashchanged "$path" && raisealert "fsintegrity" "$path" "router-config-override" "HASH - review file content changes (e.g. dnsmasq DNS/upstream-resolver tampering)"
-        else
-          raisealert "fsintegrity" "$path" "router-config-override" "$changetype - review regardless of hash match (e.g. dnsmasq DNS/upstream-resolver tampering)"
-        fi
-      fi
+      [ "$dir" = "/jffs/configs" ] && raisealert "fsintegrity" "$path" "router-config-override" "$changetype - review regardless of hash match (e.g. dnsmasq DNS/upstream-resolver tampering)"
       ;;
   esac
 
@@ -4181,50 +3891,6 @@ acknowledgealert()
     rm -f "$stateroot/alert_pending"
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Security alert banner acknowledged." >> "$logfile"
   fi
-  renderdashboard
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# addtodnsexception prompts for a numbered dns entry (from the "Recent IoC Detections" panel) and excepts its base domain.
-
-addtodnsexception()
-{
-  if [ "$alertviewmode" != "ioc" ] || [ ! -s "$dnsnummapfile" ]; then
-    renderdashboard
-    return
-  fi
-
-  local maxnum num origkey domain base displayrange
-  maxnum="$(wc -l < "$dnsnummapfile" | tr -d ' ')"
-  if [ "$maxnum" -ge 10 ]; then displayrange="1-9, 0 for #10"; else displayrange="1-${maxnum}"; fi
-  echo ""
-  read -p "Please enter the corresponding log entry number of the domain to add to the DNS Exceptions List (${displayrange}, blank to cancel): " num
-
-  if [ -z "$num" ]; then
-    renderdashboard
-    return
-  fi
-  origkey="$num"
-  [ "$num" = "0" ] && num=10
-
-  domain="$(awk -F'\t' -v n="$num" '$1==n{print $2}' "$dnsnummapfile")"
-  if [ -z "$domain" ]; then
-    echo -e "${CRed}No DNS entry numbered $origkey is currently shown (valid range: ${displayrange}).${CClear}"
-    sleep 2
-    renderdashboard
-    return
-  fi
-
-  base="$(basedomain "$domain")"
-  if indnsexceptionlist "$base"; then
-    echo -e "${CYellow}${base} is already in the DNS Exceptions list.${CClear}"
-  else
-    dnsexceptions="${dnsexceptions:+$dnsexceptions }$base"
-    saveconfig
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added $base to dnsexceptions via the (Z) hotkey (entry #$origkey: $domain)." >> "$logfile"
-    echo -e "${CGreen}Added ${base} to the DNS Exceptions list.${CClear}"
-  fi
-  sleep 2
   renderdashboard
 }
 
@@ -4883,10 +4549,9 @@ vuninstall()
 # Begin main commandline switch logic
 # -------------------------------------------------------------------------------------------------------------------------
 
+progresspromptactive=0
 laststatustext=""
 lastinputtext=""
-winchpending=0
-progressfirstdraw=0
 driveunmountedalerted=0
 dnsquerylogwarned=0
 dnsquerymissingwarned=0
@@ -4895,7 +4560,6 @@ conntrackchecked=0; conntracklastcheck=""
 dnschecked=0; dnslastcheck=""
 authchecked=0; authlastcheck=""
 alertviewmode="ioc"
-dnsnummapfile="/tmp/iocmon_dns_nummap.$$"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 timerpaused=0
@@ -5142,7 +4806,7 @@ if [ -f "$pidfile" ]; then
 fi
 echo "$$" > "$pidfile"
 trap 'rm -f "$pidfile"' EXIT INT TERM
-trap 'winchpending=1' WINCH
+trap 'progresspromptactive=0' WINCH
 
 # Check for and add/refresh the alias for IOCMON - rebuilt from scratch every start (tagged-line convention,
 # same as schedulecron()'s cru entries) so an older install's alias is migrated to the new form automatically.
@@ -5297,7 +4961,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
       tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -5307,7 +4971,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
   elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}O${CClear}] for IoC Detections, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
       tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
@@ -5317,24 +4981,11 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, [${CGreen}V${CClear}] Full Log, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}V${CClear}] for full log, [${CGreen}D${CClear}] for Dropbear attempts, [${CGreen}H${CClear}] for Hash Log, [${CGreen}R${CClear}] to Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
-      : > "$dnsnummapfile"
-      dnsnum=0
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
-        kind="$(echo "$iocline" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')"
-        if [ "$kind" = "dns" ]; then
-          dnsnum=$((dnsnum + 1))
-          domain="$(echo "$iocline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
-          domain="${domain#*->}"
-          printf '%s\t%s\n' "$dnsnum" "$domain" >> "$dnsnummapfile"
-          numstr="$dnsnum"; [ "$dnsnum" -eq 10 ] && numstr=0
-          [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [${CGreen}${numstr}${CClear}] ${CGreen}${iocline}${CClear}"
-        else
-          [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [ ] ${CGreen}${iocline}${CClear}"
-        fi
+        [ "${#iocline}" -gt 134 ] && iocline="$(printf '%.133s' "$iocline")>"
+        echo -e "${InvGreen} ${CClear}   ${CGreen}${iocline}${CClear}"
       done
     else
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No detections logged yet. Press (T) to simulate one and confirm alerting works.${CClear}"
@@ -5345,8 +4996,6 @@ renderdashboard()
     renderalertbanner
   fi
   echo ""
-  printf '\033[s'
-  progressfirstdraw=1
 }
 
 while true; do
@@ -5430,13 +5079,8 @@ while true; do
   renderdashboard
 
   timer=0
-  winchpending=0
   while [ "$timer" -lt "$timerloop" ]; do
     [ "$timerpaused" -ne 1 ] && timer="$((timer+1))"
-    if [ "$winchpending" -eq 1 ]; then
-      winchpending=0
-      renderdashboard
-    fi
     preparebar 46 "|"
     progressbaroverride "$timer" "$timerloop" "" "s" "Standard"
     [ -f "$updatingfile" ] && break
