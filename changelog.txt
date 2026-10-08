@@ -1,8 +1,8 @@
-v1.0.16   - (TBA)
+v1.1.0    - (October 8, 2026)
           - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
             This is currently modeled after the same method used in TAILMON, and is based on the contents of
             your local "EDITOR=" variable. Thanks to @XIII for bringing this one back! :)
-          - PATCH: Added a new item #6 to the Configuration Menu, allowing you to import/export your IOCMON
+          - MINOR: Added a new item #6 to the Configuration Menu, allowing you to import/export your IOCMON
             configuration. This allows you to save your configuration, along with all exceptions you have
             added over time, and lets you import this same configuration on another router either during the
             initial setup, or post-setup from the configuration menu. Please note: this option lets you
@@ -26,10 +26,10 @@ v1.0.16   - (TBA)
             change its contents or it may have content changes, or "Upon File Hash Mismatch", when a file
             actually changes in contents. Thanks to @XIII for the great suggestion.
           - PATCH: Added /jffs/.ssh to the critical file paths to watch.
-          - PATCH: Revamped the DNS Exceptions menu (9.2.2) to make the experience dealing with this ever-
+          - MINOR: Revamped the DNS Exceptions menu (9.2.2) to make the experience dealing with this ever-
             growing list more manageable. It includes 2 columns, that will span over multiple pages if
             needed, being able to move next/previous, edit and search for wildcards.
-          - PATCH: Great suggestion by @JB_1366... the Recent IoC Detections list now includes a [Z] option
+          - MINOR: Great suggestion by @JB_1366... the Recent IoC Detections list now includes a [Z] option
             that allows you to easily add a DNS domain exception using one of the numerical indicators next
             to the IoC domain entry to be added.
           - PATCH: Think I finally found a fix to the screen corruption issue when rejoining a brand new
