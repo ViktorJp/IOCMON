@@ -6,9 +6,6 @@ To-Do:
 - With the addition of Q-Feeds API, I see occasional hits identified by IP address. Please consider adding a clickable link to obtain info on the
   indicated IP address, just like @Adamm does in Skynet (e.g., https://otx.alienvault.com/indicator/ip/xxx.xxx.xxx.xxx), to help identify legitimate vs
   malicious IPs. No urgency, just something to add to your job jar. Thanks. @Visortgw
-- Suggestion: scheduled auto-export of the IOCMON config - Now that 6 Import/Export exists in v1.1.0, would it be possible to add an option to export the
-  config automatically (e.g. daily or after any change to exceptions), to a user-defined path, keeping the last N copies, and without API keys by default?
-  That way the .ioc file always stays current and can be picked up by BACKUPMON or any external backup without manual steps.
 
 Done:
 - Restructure the DNS exceptions list, multi-column, ability to find using wild cards, being able to identify items already existing.
