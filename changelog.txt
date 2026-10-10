@@ -1,3 +1,8 @@
+v1.1.5    - (TBA)
+          - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
+            also falsely detected a hashed/commented out entry that contained the same string. Built new
+            logic to ignore comments.
+
 v1.1.4    - (October 9, 2026)
           - PATCH: Ran into an issue with Diversion, as it was complaining about a duplicative "log-queries"
             entry in the /jffs/configs/dnsmasq.conf.add file. Built in new logic that checks for the
