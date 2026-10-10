@@ -1,3 +1,12 @@
+v1.1.4    - (October 9, 2026)
+          - PATCH: Ran into an issue with Diversion, as it was complaining about a duplicative "log-queries"
+            entry in the /jffs/configs/dnsmasq.conf.add file. Built in new logic that checks for the
+            existence of the "log-queries" entry in the /etc/dnsmasq.conf file before determining if it          
+            should be written to the .conf.add file.
+          - PATCH: Added a new configuration menu 9.2.7 which allows you to mirror dnsmasq DNS lookups to
+            a local IOCMON-managed log file. This is for those systems who don't have an established way of
+            logging dns queries so that IOCMON has a method of still being to monitor these.
+
 v1.1.0    - (October 8, 2026)
           - PATCH: Added other popular text editors, such as VI, as optional ways of looking at log files.
             This is currently modeled after the same method used in TAILMON, and is based on the contents of
