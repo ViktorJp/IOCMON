@@ -1,4 +1,4 @@
-v1.1.3    - (TBA)
+v1.1.4    - (October 9, 2026)
           - PATCH: Ran into an issue with Diversion, as it was complaining about a duplicative "log-queries"
             entry in the /jffs/configs/dnsmasq.conf.add file. Built in new logic that checks for the
             existence of the "log-queries" entry in the /etc/dnsmasq.conf file before determining if it          
