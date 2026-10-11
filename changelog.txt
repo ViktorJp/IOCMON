@@ -1,4 +1,4 @@
-v1.2.0    - (TBA)
+v1.2.1    - (TBA)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
@@ -7,6 +7,11 @@ v1.2.0    - (TBA)
             tends to be quite large, and will add 200,000+ items to your ban list. As with any fast-changing
             security feed, false positives are possible, so tread lightly. This additions now seems to
             classify IOCMON as a lightweight Asus-Merlin IDS/IPS tool. Ha! :P
+          - PATCH: Added further critical watch capabilities over the sensitive information available under
+            the /etc folder, which includes passwords, groups, permissions, .pem files, etc. This is now
+            hashed separately as other critical file paths currently are, and will generate mandatory alerts
+            when something has changed. Advanced configuration menu items 9.4.14 and 9.4.15 were added,
+            giving you the ability to tweak what is or isn't being watched under /etc.
 
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
