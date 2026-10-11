@@ -1,3 +1,11 @@
+v1.2.0    - (TBA)
+          - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
+            now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
+            option is set through Advanced Settings -> 9.5.5. I've made Q-Feeds an optional component as it
+            tends to be quite large, and will add 200,000+ items to your ban list. As with any fast-
+            changing security feed, false positives are possible, so tread lightly. This additions now seems
+            to classify IOCMON as a lightweight Asus-Merlin IDS/IPS tool. Ha! :P
+
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
             also falsely detected a hashed/commented out entry that contained the same string. Built new
