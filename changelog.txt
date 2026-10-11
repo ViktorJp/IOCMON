@@ -1,6 +1,8 @@
 v1.2.0    - (TBA)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
+            feature will add up-to-date intelligence directly to your inbound/outbound flows on your router,
+            preventing clients from reaching known malicious sites or command & control servers. This
             option is set through Advanced Settings -> 9.5.5. I've made Q-Feeds an optional component as it
             tends to be quite large, and will add 200,000+ items to your ban list. As with any fast-
             changing security feed, false positives are possible, so tread lightly. This additions now seems
