@@ -1918,6 +1918,7 @@ vskynetintegration()
               saveconfig
               resolvefeedsroot
               if [ -n "$feedsroot" ]; then
+              	echo ""
                 echo -e "Importing current feed indicators into Skynet now..."
                 echo ""
                 syncskynetimport; skrc=$?
