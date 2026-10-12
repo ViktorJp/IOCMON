@@ -1,4 +1,4 @@
-v1.2.1    - (TBA)
+v1.2.2    - (TBA)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
@@ -12,6 +12,8 @@ v1.2.1    - (TBA)
             hashed separately as other critical file paths currently are, and will generate mandatory alerts
             when something has changed. Advanced configuration menu items 9.4.14 and 9.4.15 were added,
             giving you the ability to tweak what is or isn't being watched under /etc.
+          - PATCH: Improved reliability of the Skynet import, as I noticed it had failed to import on one of
+            the latest feed refresh cycles.
 
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
