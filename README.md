@@ -1,5 +1,5 @@
 # IOCMON v1.2.1
-Asus-Merlin Security Intelligence Monitor
+Asus-Merlin IDS/IPS Security Intelligence Monitor
 
 Modified: Oct-11-2026
 
@@ -14,9 +14,10 @@ Modified: Oct-11-2026
 
 ## What is IOCMON?
 
-IOCMON is a lightweight, always-on security-intelligence monitor for Asus-Merlin routers. It runs quietly in
-the background and watches your router from four different angles at once, correlating what it sees against
-public threat-intelligence feeds to catch signs of compromise early, before they become a real problem.
+IOCMON is a lightweight, always-on IDS/IPS security-intelligence monitor for Asus-Merlin routers. It runs
+quietly in the background and watches your router from four different angles at once, correlating what it
+sees against public threat-intelligence feeds to catch signs of compromise early, before they become a real
+problem.
 
 **Why run it:**
 
