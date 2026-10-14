@@ -1,4 +1,4 @@
-v1.2.2    - (TBA)
+v1.2.5    - (TBA)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
