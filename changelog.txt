@@ -14,6 +14,12 @@ v1.2.2    - (TBA)
             giving you the ability to tweak what is or isn't being watched under /etc.
           - PATCH: Improved reliability of the Skynet import, as I noticed it had failed to import on one of
             the latest feed refresh cycles.
+          - PATCH: Added new Configuration Menu item 5: "OTX Alienvault Threat Report". Many thanks to
+            @Visortgw for the suggestion to add a way to provide OTX URLs to view the threat analysis using
+            an easy link to get there directly. This report also keeps track of the number of instances
+            a threat was reported, and which local device was involved.
+          - PATCH: Firmed up further fixes with the profile.add and services-start files - thanks @JB_1366!
+          - PATCH: Various spacing and other aesthetic fixes.
 
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
