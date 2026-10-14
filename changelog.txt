@@ -1,4 +1,4 @@
-v1.2.5    - (TBA)
+v1.2.6    - (TBA)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
@@ -20,6 +20,10 @@ v1.2.5    - (TBA)
             a threat was reported, and which local device was involved.
           - PATCH: Firmed up further fixes with the profile.add and services-start files - thanks @JB_1366!
           - PATCH: Various spacing and other aesthetic fixes.
+          - PATCH: Added another hot key to the main UI, for [N]=OTX Report. This will generate a quick OTX
+            AlienVault Threat Report over the last 7 days, sorted by date. Thanks @visortgw for the idea!
+          - PATCH: The (5) OTX AlienVault Treat Report can now be sorted by frequency, or by date, which is
+            user-selectable from an option under this menu.
 
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
