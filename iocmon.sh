@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.1.5
+# Version: 1.2.7
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-10
+# Last Updated: 2026-Oct-15
 # ============================================================================================================================
 #
 # Description:
@@ -15,7 +15,8 @@
 #   /jffs/addons/iocmon.d/iocmon.cfg                                    : config (flat key=value, sourced)
 #   /jffs/addons/iocmon.d/version.txt                                   : stable track version file
 #   /jffs/addons/iocmon.d/beta.txt                                      : beta track version file
-#   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, trimmed)
+#   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, trimmed) - default location
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/iocmon.log                  : optional drive-side activity log location (logfilepath), to spare JFFS writes
 #   /jffs/addons/iocmon.d/updating.txt                                  : maintenance-mode lock file
 #   /jffs/addons/iocmon.d/feeds-degraded/                               : small JFFS-safe feed cache used only in degraded mode
 #   /jffs/addons/iocmon.d/state-degraded/                               : small JFFS-safe alert-dedup state used only in degraded mode
@@ -25,6 +26,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/hashes.txt                  : canonical combined file-hash indicator list
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/skynet_import.hash     : last-imported Skynet IP list hash, so an unchanged list skips the re-push
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
@@ -44,6 +46,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending               : pending-count + latest summary; presence = red banner up
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/etc_critical_hash.db        : per-file content hash baseline for $etccriticalpaths - see checketccritical()
 #
 # Usage:
 #   iocmon.sh                                                           : interactive monitoring display
@@ -60,6 +63,7 @@
 #   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
 #   (r) clear whichever log the "Recent..." panel is currently showing (confirmation required)
 #   (z) add a numbered "dns" entry's base domain (IoC Detections panel only) to the DNS Exceptions list
+#   (n) show a last-7-days, date-sorted OTX AlienVault Threat Report (IoC Detections panel only)
 #   (p) pause/resume the countdown timer without triggering a rescan
 #   (x) detach from the background SCREEN session without stopping IOCMON
 #
@@ -91,13 +95,14 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.1.5"
+version="1.2.7"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
 dlverpath="/jffs/addons/iocmon.d/version.txt"  # stable-track version file
 bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
-logfile="/jffs/addons/iocmon.d/iocmon.log"  # main activity/alert log
+jffslogfile="/jffs/addons/iocmon.d/iocmon.log"  # default (JFFS) activity log location
+logfile="$jffslogfile"  # main activity/alert log actually written to - resolved from logfilepath by resolvelogfile()
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
@@ -145,6 +150,8 @@ dnstunnelsubthreshold=20        # distinct subdomains under one base domain from
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
+enableskynetimport=0            # push current IPv4 feed indicators into Skynet Firewall's own ban list, tagged IOCMON - see syncskynetimport()
+skynetimportqfeeds=0            # also include Q-Feeds' much larger, lower-confidence OSINT IP list in that Skynet import
 enablefwlogwatch=0              # requires an iptables LOG rule; setup menu can add it
 enableauthwatch=1               # dropbear/httpd brute-force detection, no feed dependency
 authfailthreshold=5             # same-source-IP login failures within ONE check tick to trigger a burst alert
@@ -165,6 +172,8 @@ enablenvramwatch=1              # diff a hardcoded security-relevant NVRAM watch
 enablefwrulediff=1              # alert on unexpected new port-forward/DMZ/UPnP NAT rules - see checkfirewallrules()
 enablefsdeletionwatch=1         # alert when a file disappears from the same critical paths that already alert on an addition/edit
 enablepermwatch=0               # detect a write/execute bit added to an already-known file with unchanged content/mtime - off by default, costs one fork per watched file per scan
+enableetccritical=1             # always-alert content-hash watch over a short list of high-value /etc files/dirs (accounts, pam.d, certs, VPN secrets) - see checketccritical()
+etccriticalpaths="/etc/passwd /etc/shadow /etc/group /etc/gshadow /etc/passwd.custom /etc/passwd.static /etc/passwd.openvpn /etc/group.custom /etc/group.static /etc/shadow.chilli /etc/shadow.openvpn /etc/profile /etc/pam.d /etc/ld.so.conf /etc/ipsec.secrets /etc/openssl.cnf /etc/cacert.pem /etc/cacert_gen.pem /etc/cakey.pem /etc/cakey_gen.pem /etc/cert.pem /etc/cert_gen.pem /etc/cert.crt /etc/key.pem /etc/key_gen.pem /etc/server.pem /etc/ipsec.conf /etc/ipsec.d /etc/strongswan.conf /etc/strongswan.d /etc/swanctl /etc/wg /etc/openvpn"  # absolute files/dirs - a missing entry (unused subsystem) is silently skipped
 
 extdrivelabel=""                # resolved USB label, not the live path - drive resolution lands in a later phase
 
@@ -173,12 +182,14 @@ alertbanneratbottom=0           # 0 = SECURITY ALERT banner at top of screen (de
 alertfeedonly=0                 # 0 = alert/email on any detection (default), 1 = only ones matching a feed indicator
 ratelimit=0                     # max emails/hour, 0 = unlimited
 logsize=2000                    # line cap for $logfile and other trimmed log files
+logfilepath="$jffslogfile"      # configured activity log location: JFFS default, or $iocmonroot/state/iocmon.log on the external drive
 autostart=0                     # launch the background monitor via post-mount on boot
 schedule=1                      # run IOCMON's own daily self-update check via cron
 schedulehrs=4                   # hour of day for the daily self-update check
 schedulemin=0                   # minute of hour for the daily self-update check
 updateiocm=0                    # autoupdate IOCMON script itself
 track=0                         # update track: 0 = stable, 1 = beta
+otxreportsort="frequency"       # OTX AlienVault Threat Report sort order: "frequency" (one row per IP, most-matched first) or "date" (every occurrence, newest first)
 
 # Well-known Merlin persistent filenames living directly in /jffs/scripts
 fsstartupscripts="services-start services-stop firewall-start wan-start wan-event nat-start post-mount unmount init-start dhcpc-event openvpn-event wg-event"
@@ -208,6 +219,11 @@ InvCyan="\e[1;46m"
 CWhite="\e[1;37m"
 InvWhite="\e[1;107m"
 CClear="\e[0m"
+
+# -------------------------------------------------------------------------------------------------------------------------
+# Menu numbering - single source of truth so a Configuration Menu reorder never desyncs the Advanced Settings submenus
+
+advsettingsmenunum=10  # Configuration Menu item # for "Advanced Settings" - every 9.x-style submenu/sub-item title below derives from this
 
 # -------------------------------------------------------------------------------------------------------------------------
 # FUNCTIONS BEGIN
@@ -394,6 +410,18 @@ downloadiocmonupdate()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# resolveupdatesource picks remoteurl/remotelabel/remoteversion for the subscribed track - Beta only pulls the develop branch once its version genuinely differs from Stable's, falling back to Stable otherwise.
+
+resolveupdatesource()
+{
+  if [ "$track" = "1" ] && [ -n "$Bversion" ] && [ "$Bversion" != "$DLversion" ]; then
+    remoteversion="$Bversion"; remotelabel="BETA"; remoteurl="$iocmonrepobeta/iocmon.sh"
+  else
+    remoteversion="$DLversion"; remotelabel="STABLE"; remoteurl="$iocmonrepostable/iocmon.sh"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # Preparebar and Progressbar provide the standard IOCMON key+Enter progress prompt (adapted from TAILMON)
 
 preparebar()
@@ -493,6 +521,7 @@ progressbaroverride()
           [Rr]) clearcurrentlog;;
           [Rr]!) clearcurrentlognow;;
           [Zz]) addtodnsexception;;
+          [Nn]) if [ "$alertviewmode" = "ioc" ]; then votxreport quick; fi; renderdashboard;;
           [Tt]) testdetection;;
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
@@ -522,7 +551,7 @@ booleantoyesno()
   if [ "$1" -eq 1 ]; then
     echo "${CGreen}YES${CClear} |${InvGreen}  ${CClear}  | ${CDkGray}NO${CClear}"
   else
-    echo "${CDkGray}YES${CClear} |  ${InvDkGray}  ${CClear}| ${CRed}NO${CClear}"
+    echo "${CDkGray}YES${CClear} |  ${InvRed}  ${CClear}| ${CRed}NO${CClear}"
   fi
 }
 
@@ -585,6 +614,24 @@ fsscanprogress()
     pct=" ($((current * 100 / total))%)"
   fi
   printf '\33[2K\r  %b*%b %s: %s/%s%s...' "$CGreen" "$CClear" "$label" "$current" "$total" "$pct"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# inlinestatus prints a single in-place-overwriting "label..." status line, no count/percent
+
+inlinestatus()
+{
+  printf '\33[2K\r  %b*%b %s...' "$CGreen" "$CClear" "$1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# skynetprogress prints an in-place "Skynet import: label (step/total, pct%)..." status line
+
+skynetprogress()
+{
+  local step="$1" total="$2" label="$3" pct
+  pct=$((step * 100 / total))
+  printf '\33[2K\r  %b*%b Skynet import: %s (%s/%s, %s%%)...' "$CGreen" "$CClear" "$label" "$step" "$total" "$pct"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -695,6 +742,8 @@ saveconfig()
     echo 'dnstunnelnamelen='$dnstunnelnamelen
     echo 'enableconntrackwatch='$enableconntrackwatch
     echo 'ipexceptions="'"$ipexceptions"'"'
+    echo 'enableskynetimport='$enableskynetimport
+    echo 'skynetimportqfeeds='$skynetimportqfeeds
     echo 'enablefwlogwatch='$enablefwlogwatch
     echo 'enableauthwatch='$enableauthwatch
     echo 'authfailthreshold='$authfailthreshold
@@ -715,6 +764,8 @@ saveconfig()
     echo 'enablefwrulediff='$enablefwrulediff
     echo 'enablefsdeletionwatch='$enablefsdeletionwatch
     echo 'enablepermwatch='$enablepermwatch
+    echo 'enableetccritical='$enableetccritical
+    echo 'etccriticalpaths="'"$etccriticalpaths"'"'
 
     echo 'extdrivelabel="'"$extdrivelabel"'"'
 
@@ -723,12 +774,14 @@ saveconfig()
     echo 'alertfeedonly='$alertfeedonly
     echo 'ratelimit='$ratelimit
     echo 'logsize='$logsize
+    echo 'logfilepath="'"$logfilepath"'"'
     echo 'autostart='$autostart
     echo 'schedule='$schedule
     echo 'schedulehrs='$schedulehrs
     echo 'schedulemin='$schedulemin
     echo 'updateiocm='$updateiocm
     echo 'track='$track
+    echo 'otxreportsort="'"$otxreportsort"'"'
   } > "$config"
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON config has been updated." >> "$logfile"
@@ -736,6 +789,7 @@ saveconfig()
   if [ -f "$config" ]; then
     . "$config"
   fi
+  resolvelogfile
 
   schedulecron
   autostart
@@ -781,8 +835,8 @@ selectextdrive()
   clear
   echo -e "${InvGreen} ${InvDkGray}${CWhite} 1. IOCMON External Drive Selection                                                                                                      ${CClear}"
   echo -e "${InvGreen} ${CClear}"
-  echo -e "${InvGreen} ${CClear} IOCMON stores IoC feed data and detection state on an external USB drive to avoid${CClear}"
-  echo -e "${InvGreen} ${CClear} wearing out the router's internal flash storage. Small control files stay on JFFS.${CClear}"
+  echo -e "${InvGreen} ${CClear} IOCMON stores IoC feed data and detection state on an external USB drive to avoid wearing out the router's internal flash storage. Small${CClear}"
+  echo -e "${InvGreen} ${CClear} control files stay on JFFS.${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo ""
 
@@ -799,6 +853,7 @@ selectextdrive()
     if promptyn "[y/n]: "; then
       extdrivelabel=""
       resolveiocmonroot
+      [ "$logfilepath" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
       saveconfig
       echo ""
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Running in degraded JFFS-only mode (no external drive configured)." >> "$logfile"
@@ -861,6 +916,7 @@ selectextdrive()
 
   resolveiocmonroot
   mkdir -m 755 -p "$iocmonroot/feeds/meta" "$iocmonroot/state"
+  [ "$logfilepath" != "$jffslogfile" ] && relocatelogfile "$iocmonroot/state/iocmon.log"
   saveconfig
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: External drive selected: label=$extdrivelabel path=$selecteddrivepath" >> "$logfile"
@@ -897,6 +953,49 @@ checkdrivealive()
     drivestatus="${CGreen}$iocmonroot${CClear}"
     driveunmountedalerted=0
   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# resolvelogfile points $logfile at $logfilepath, using JFFS while that folder is missing and merging those lines back after
+
+resolvelogfile()
+{
+  if [ -z "$logfilepath" ] || [ "$logfilepath" = "$jffslogfile" ]; then
+    logfile="$jffslogfile"
+  elif [ -d "${logfilepath%/*}" ]; then
+    logfile="$logfilepath"
+    if [ -f "$jffslogfile" ]; then
+      cat "$jffslogfile" >> "$logfile" && rm -f "$jffslogfile"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Merged activity log lines written to $jffslogfile while $logfilepath was unavailable." >> "$logfile"
+    fi
+    logfilefallback=0
+  else
+    logfile="$jffslogfile"
+    if [ "$logfilefallback" != "1" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Activity log location $logfilepath is unavailable (drive not mounted?) - logging to $jffslogfile until it returns." >> "$logfile"
+      logfilefallback=1
+    fi
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relocatelogfile moves the current activity log's contents to $1 and points logfilepath/logfile there (caller saves config)
+
+relocatelogfile()
+{
+  local newpath="$1" oldpath="$logfile"
+
+  if [ "$newpath" != "$oldpath" ]; then
+    mkdir -m 755 -p "${newpath%/*}" || return 1
+    if [ -f "$oldpath" ]; then
+      cat "$oldpath" >> "$newpath" || return 1
+      rm -f "$oldpath"
+    fi
+  fi
+  logfilepath="$newpath"
+  logfile="$newpath"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Activity log location set to $newpath (moved from $oldpath)." >> "$logfile"
+  return 0
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -951,8 +1050,8 @@ vsetup()
     resolveiocmonroot
     echo -e "${InvGreen} ${InvDkGray}${CWhite} IOCMON Configuration Menu                                                                                                               ${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Please choose from the various options below, which allow you to configure IOCMON's${CClear}"
-    echo -e "${InvGreen} ${CClear} storage, feed sources, and detection settings, or perform maintenance actions.${CClear}"
+    echo -e "${InvGreen} ${CClear} Please choose from the various options below, which allow you to configure IOCMON's storage, feed sources, and detection settings, or${CClear}"
+    echo -e "${InvGreen} ${CClear} perform maintenance actions.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [IOCMON Operations]                                                                                                                     ${CClear}"
@@ -961,32 +1060,34 @@ vsetup()
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources & API Keys${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : OTX AlienVault Threat Report${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [Setup + Configuration]                                                                                                                 ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : Reset IOCMON back to Default Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 6)${CClear} : Import/Export IOCMON Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : Update IOCMON to Latest Version${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : Optional Entware Components${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : Advanced Settings${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(10)${CClear} : Uninstall IOCMON${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 6)${CClear} : Reset IOCMON back to Default Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : Import/Export IOCMON Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : Update IOCMON to Latest Version${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : Optional Entware Components${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}"; printf '(%2d)' "$advsettingsmenunum"; echo -e "${CClear} : Advanced Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : Uninstall IOCMON${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-10, e=Exit): " selsetup
+    read -p "Please select? (1-11, e=Exit): " selsetup
     case "$selsetup" in
       1) selectextdrive ;;
       2) vfeedsources ;;
       3) forcefeeds ;;
       4) forcefsintegrity ;;
-      5) vresetdefaults ;;
-      6) vimportexport ;;
-      7) vupdate ;;
-      8) ventwarecomponents ;;
-      9) vadvanced ;;
-      10) vuninstall ;;
+      5) votxreport ;;
+      6) vresetdefaults ;;
+      7) vimportexport ;;
+      8) vupdate ;;
+      9) ventwarecomponents ;;
+      "$advsettingsmenunum") vadvanced ;;
+      11) vuninstall ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1037,6 +1138,14 @@ validipcidr()
     [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
   done
   return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# validdatestr checks $1 is a plain YYYY-MM-DD date string (no calendar-day existence check beyond the field widths)
+
+validdatestr()
+{
+  echo "$1" | grep -qE '^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1171,10 +1280,10 @@ vcronexceptions()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.4.13 Cron Exceptions                                                                                                                  ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.4.13 Cron Exceptions" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Cron entries listed below never raise an alert, even when checkcronbaseline/checkentwarecron${CClear}"
-    echo -e "${InvGreen} ${CClear} see them disappear and reappear - for entries a script/addon manages on its own schedule.${CClear}"
+    echo -e "${InvGreen} ${CClear} Cron entries listed below never raise an alert, even when checkcronbaseline/checkentwarecron see them disappear and reappear - for${CClear}"
+    echo -e "${InvGreen} ${CClear} entries a script/addon manages on its own schedule.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
 
@@ -1303,7 +1412,7 @@ vdnsexceptions()
     [ "$entrybudget" -lt 10 ] && entrybudget=10
 
     clear
-    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "9.2.2 DNS Domain Exceptions" 136; echo -e "${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.2.2 DNS Domain Exceptions" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Choose an entry number to edit it, (a) to add a new entry, (d) to delete one, (t) to edit${CClear}"
     echo -e "${InvGreen} ${CClear} an entry, or (f) to find an entry. Page ${CGreen}${page}${CClear}/${CGreen}${totalpages}${CClear}, ${CGreen}${count}${CClear} entries total.${CClear}"
@@ -1480,10 +1589,10 @@ vadvanced()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9. Advanced Settings                                                                                                                    ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}. Advanced Settings" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Please choose from the various options below, which allow you to modify certain${CClear}"
-    echo -e "${InvGreen} ${CClear} customizable parameters that affect the operation of this script.${CClear}"
+    echo -e "${InvGreen} ${CClear} Please choose from the various options below, which allow you to modify certain customizable parameters that affect the operation of${CClear}"
+    echo -e "${InvGreen} ${CClear} this script.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : Alerting & Notifications${CClear}"
@@ -1520,10 +1629,10 @@ vadvancedalerting()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.1 Advanced Settings - Alerting & Notifications                                                                                        ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.1 Advanced Settings - Alerting & Notifications" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls whether/how often IOCMON emails you, where the SECURITY ALERT banner appears on${CClear}"
-    echo -e "${InvGreen} ${CClear} screen, and which detections are allowed to raise it and send email.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls whether/how often IOCMON emails you, where the SECURITY ALERT banner appears on screen, and which detections are allowed to${CClear}"
+    echo -e "${InvGreen} ${CClear} raise it and send email.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Send an AMTM email whenever a real IOC detection fires" 68; echo -e ": $(booleantoyesno "$enablealertemail")"
@@ -1560,10 +1669,10 @@ vadvanceddns()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.2 Advanced Settings - DNS Watch & Tunneling Detection                                                                                 ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.2 Advanced Settings - DNS Watch & Tunneling Detection" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to${CClear}"
-    echo -e "${InvGreen} ${CClear} that matching, and the separate behavioral heuristic for tunneling/exfiltration.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
+    echo -e "${InvGreen} ${CClear} for tunneling/exfiltration.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
@@ -1672,10 +1781,10 @@ vadvancedbruteforce()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.3 Advanced Settings - Brute-Force Login Detection                                                                                     ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.3 Advanced Settings - Brute-Force Login Detection" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls dropbear/httpd login-failure detection: an immediate burst check, and a${CClear}"
-    echo -e "${InvGreen} ${CClear} separate sliding-window check for a slow, sustained attempt that stays under it.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls dropbear/httpd login-failure detection: an immediate burst check, and a separate sliding-window check for a slow, sustained${CClear}"
+    echo -e "${InvGreen} ${CClear} attempt that stays under it.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch router logins for brute-force (repeated failed) attempts" 68; echo -e ": $(booleantoyesno "$enableauthwatch")"
@@ -1714,21 +1823,22 @@ vadvancedfilesystem()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.4 Advanced Settings - Filesystem Integrity & Cron Watch                                                                               ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.4 Advanced Settings - Filesystem Integrity & Cron Watch" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls the periodic filesystem baseline scan, what it watches/skips/hashes, what${CClear}"
-    echo -e "${InvGreen} ${CClear} it does with a confirmed malware-hash match, and unexpected new cron entries.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls the periodic filesystem baseline scan, what it watches/skips/hashes, what it does with a confirmed malware-hash match, and${CClear}"
+    echo -e "${InvGreen} ${CClear} unexpected new cron entries.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     crondiffon=0; [ "$enablefsintegrity" -eq 1 ] && [ "$enablecrondiff" -eq 1 ] && crondiffon=1
+    etccriticalon=0; [ "$enablefsintegrity" -eq 1 ] && [ "$enableetccritical" -eq 1 ] && etccriticalon=1
     menurow "( 1)" "How often to scan watched folders for file changes, in hours" "${CGreen}$fsintegrityhrs${CClear}" 68 "$enablefsintegrity"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : "; padright "Watch files/folders below for unexpected changes" 68; echo -e ": $(booleantoyesno "$enablefsintegrity")"
     if [ "$fsmodalertmode" = "hash" ]; then modalertdisp="${CGreen}Upon File Hash Mismatch${CClear}"; else modalertdisp="${CGreen}Upon File Modification${CClear}"; fi
     menurow "( 3)" "Critical-path MOD alert mode (.ssh/startup-scripts/.conf.add)" "$modalertdisp" 68 "$enablefsintegrity"
     menurow "( 4)" "Folders to watch for file changes" "${CGreen}$(echo "$fswatchdirs" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 5)" "Folder NAMES to exclude by name, not by path" "${CGreen}$(echo "$fswatchexclude" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 6)" "File extensions excluded from every check (new/mod/del/perm)" "${CGreen}$(echo "$fsexcludeext" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
-    menurow "( 7)" "Individual files excluded by absolute path" "${CGreen}$(echo "$fsexcludefiles" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
+    menurow "( 5)" "  Folder NAMES to exclude by name, not by path" "${CGreen}$(echo "$fswatchexclude" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
+    menurow "( 6)" "  File extensions excluded from every check (new/mod/del/perm)" "${CGreen}$(echo "$fsexcludeext" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
+    menurow "( 7)" "  Individual files excluded by absolute path" "${CGreen}$(echo "$fsexcludefiles" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablefsintegrity"
     menurow "( 8)" "Skip hashing files larger than this, in bytes" "${CGreen}$fsmaxhashsize${CClear}" 68 "$enablefsintegrity"
     menurow "( 9)" "Auto-quarantine files matching a known-malware hash (strips +x," "$(booleantoyesno "$enablequarantine")" 68 "$enablefsintegrity"
     echo -e "${InvGreen} ${CClear}         renames to <file>.iocmon-quarantine, never deletes)"
@@ -1736,22 +1846,24 @@ vadvancedfilesystem()
     menurow "(11)" "Alert when WRITE/EXECUTE permission is added with no changes" "$(booleantoyesno "$enablepermwatch")" 68 "$enablefsintegrity"
     menurow "(12)" "Alert on unexpected new scheduled tasks (cru/Entware cron)" "$(booleantoyesno "$enablecrondiff")" 68 "$enablefsintegrity"
     menurow "(13)" "Cron entries excepted from unexpected-new-entry alerts" "${CGreen}$([ -z "$cronexceptions" ] && echo 0 || printf '%s\n' "$cronexceptions" | wc -l | tr -d ' ')${CClear} configured" 68 "$crondiffon"
+    menurow "(14)" "Always-alert watch over critical /etc files" "$(booleantoyesno "$enableetccritical")" 68 "$enablefsintegrity"
+    menurow "(15)" "  Critical /etc files/folders to watch" "${CGreen}$(echo "$etccriticalpaths" | wc -w | tr -d ' ')${CClear} configured" 68 "$etccriticalon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-13, e=Exit): " sel
+    read -p "Please select? (1-15, e=Exit): " sel
     case "$sel" in
       1) [ "$enablefsintegrity" -eq 1 ] && { echo -e "Current: ${CGreen}${fsintegrityhrs}${CClear}"
          read -p "New filesystem-integrity scan interval in hours (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && fsintegrityhrs="$val" && saveconfig; }; } ;;
       2) togglesetting enablefsintegrity ;;
       3) [ "$enablefsintegrity" -eq 1 ] && { if [ "$fsmodalertmode" = "hash" ]; then fsmodalertmode="mod"; else fsmodalertmode="hash"; fi; saveconfig; } ;;
-      4) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchdirs "9.4.4 Watched Folders" "absolute path, e.g. /jffs/scripts" ;;
-      5) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchexclude "9.4.5 Excluded Folder Names" "a folder NAME, not a path - matches this name anywhere under a watched folder, e.g. Backups" ;;
-      6) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludeext "9.4.6 Excluded File Extensions" "a file extension, e.g. .log (leading dot optional)" ;;
-      7) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludefiles "9.4.7 Excluded Individual Files" "a complete absolute file path, e.g. /jffs/scripts/sample.sh" ;;
+      4) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchdirs "${advsettingsmenunum}.4.4 Watched Folders" "absolute path, e.g. /jffs/scripts" ;;
+      5) [ "$enablefsintegrity" -eq 1 ] && veditlist fswatchexclude "${advsettingsmenunum}.4.5 Excluded Folder Names" "a folder NAME, not a path - matches this name anywhere under a watched folder, e.g. Backups" ;;
+      6) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludeext "${advsettingsmenunum}.4.6 Excluded File Extensions" "a file extension, e.g. .log (leading dot optional)" ;;
+      7) [ "$enablefsintegrity" -eq 1 ] && veditlist fsexcludefiles "${advsettingsmenunum}.4.7 Excluded Individual Files" "a complete absolute file path, e.g. /jffs/scripts/sample.sh" ;;
       8) [ "$enablefsintegrity" -eq 1 ] && { echo -e "Current: ${CGreen}${fsmaxhashsize}${CClear}"
          read -p "New max hash size in bytes (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && fsmaxhashsize="$val" && saveconfig; }; } ;;
@@ -1760,6 +1872,8 @@ vadvancedfilesystem()
       11) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablepermwatch ;;
       12) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablecrondiff ;;
       13) [ "$crondiffon" -eq 1 ] && vcronexceptions ;;
+      14) [ "$enablefsintegrity" -eq 1 ] && togglesetting enableetccritical ;;
+      15) [ "$etccriticalon" -eq 1 ] && veditlist etccriticalpaths "${advsettingsmenunum}.4.15 Critical /etc Files/Folders" "an absolute /etc file or directory, e.g. /etc/shadow or /etc/pam.d" "A missing entry (e.g. an unused VPN subsystem) is silently skipped - no error, no alert." ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1775,29 +1889,179 @@ vadvancednetwork()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.5 Advanced Settings - Network & System Watches                                                                                        ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.5 Advanced Settings - Network & System Watches" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls watching active connections against known-malicious IPs, watching a short${CClear}"
-    echo -e "${InvGreen} ${CClear} list of security-relevant router config state, and unexpected new WAN-exposure rules.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls watching active connections against known-malicious IPs, watching a short list of security-relevant router config state, and${CClear}"
+    echo -e "${InvGreen} ${CClear} unexpected new WAN-exposure rules.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch active connections for traffic to known-malicious IPs" 68; echo -e ": $(booleantoyesno "$enableconntrackwatch")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Watch security-relevant NVRAM vars (SSH/Telnet, WAN DNS, JFFS)" 68; echo -e ": $(booleantoyesno "$enablenvramwatch")"
     menurow "(3)" "Alert on new port-forward/DMZ/UPnP rules exposing LAN to WAN" "$(booleantoyesno "$enablefwrulediff")" 68 "$enablefsintegrity"
     menurow "(4)" "IP/CIDR Exceptions (excluded from conntrack feed matching)" "${CGreen}$(echo "$ipexceptions" | wc -w | tr -d ' ')${CClear} entries" 68 "$enableconntrackwatch"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "Skynet Firewall Import Integration" 68; echo -e ": $(booleantoyesno "$enableskynetimport")"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-4, e=Exit): " sel
+    read -p "Please select? (1-5, e=Exit): " sel
     case "$sel" in
       1) togglesetting enableconntrackwatch ;;
       2) togglesetting enablenvramwatch ;;
       3) [ "$enablefsintegrity" -eq 1 ] && togglesetting enablefwrulediff ;;
-      4) [ "$enableconntrackwatch" -eq 1 ] && veditlist ipexceptions "9.5.4 IP/CIDR Exceptions" "a single IP, e.g. 204.44.63.22, or a CIDR range, e.g. 204.44.0.0/16" \
+      4) [ "$enableconntrackwatch" -eq 1 ] && veditlist ipexceptions "${advsettingsmenunum}.5.4 IP/CIDR Exceptions" "a single IP, e.g. 204.44.63.22, or a CIDR range, e.g. 204.44.0.0/16" \
            "A single IP (204.44.63.22) or a CIDR range (204.44.0.0/16) that conntrack should never compare" \
            "against a feed - checked and excluded first, before any feed indicator is ever considered." ;;
+      5) vskynetintegration ;;
+      [Ee]) break ;;
+      [Ee]!) exitallmenus=1; break ;;
+      *) ;;
+    esac
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vskynetintegration is the pop-out explanation/confirmation screen for enabling or disabling the Skynet import
+
+vskynetintegration()
+{
+  local sel detecteddisp skrc beforecount
+
+  while true; do
+    [ "$exitallmenus" -eq 1 ] && break
+    clear
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.5.5 Skynet Firewall Import Integration" 136; echo -e "${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} If Skynet Firewall is installed, IOCMON can push its own current IPv4 threat-feed indicators directly into Skynet's ban list, tagged${CClear}"
+    echo -e "${InvGreen} ${CClear} \"IOCMON\" so they are always identifiable and can be found or removed independently of Skynet's own manual and automatic bans.${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} This goes beyond Skynet's own Custom Filter URL feature: that only ever pulls one static, user-chosen list on Skynet's own schedule,${CClear}"
+    echo -e "${InvGreen} ${CClear} while this keeps IOCMON's own multi-source feed set (Feodo Tracker, Spamhaus DROP/EDROP, ThreatFox, and optionally Q-Feeds)${CClear}"
+    echo -e "${InvGreen} ${CClear} continuously in sync with Skynet's live ban list. The import runs automatically every time IOCMON refreshes its threat feeds (see${CClear}"
+    echo -e "${InvGreen} ${CClear} General Settings for that interval), not just once at setup.${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} These are fresh, continuously-updated security indicators, not a hand-curated list, so false positives are possible. Once imported, and${CClear}"
+    echo -e "${InvGreen} ${CClear} if Skynet is itself configured to block both directions, every one of these IPs will have its inbound AND outbound traffic denied,${CClear}"
+    echo -e "${InvGreen} ${CClear} which gives IOCMON better blocking (IDS/IPS) capabilities, not just read-only alerting.${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} NOTE: Q-Feeds adds 200,000+ lower-confidence OSINT entries on top of the much smaller, higher-confidence core feeds. Item (2) below${CClear}"
+    echo -e "${InvGreen} ${CClear} controls whether those are optionally included in this import too.${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} Disabling this feature removes every IOCMON-tagged entry from Skynet first, before the setting is saved. Items (3) and (4) below${CClear}"
+    echo -e "${InvGreen} ${CClear} let you force a fresh import or a full removal on demand, without waiting for the next scheduled feed refresh.${CClear}"
+    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+
+    if skynetinstalled; then detecteddisp="${CGreen}Yes${CClear} (${skynetstoragepath})"; else detecteddisp="${CYellow}Not detected${CClear}"; fi
+    echo -e "${InvGreen} ${CClear} Skynet detected: ${detecteddisp}${CClear}"
+    echo ""
+    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Enable/Disable Skynet Firewall Import Integration" 78; echo -e ": $(booleantoyesno "$enableskynetimport")"
+    menurow "(2)" "Also include Q-Feeds' larger, lower-confidence IP list in that import" "$(booleantoyesno "$skynetimportqfeeds")" 78 "$enableskynetimport"
+    menurow "(3)" "Force a Skynet import now, from currently downloaded feeds (no new download)" "${CGreen}Run Now${CClear}" 78 "$enableskynetimport"
+    menurow "(4)" "Remove all IOCMON-tagged entries from Skynet's ban list right now" "${CGreen}Run Now${CClear}" 78 "$enableskynetimport"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Network & System Watches${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+    echo ""
+    read -p "Please select? (1-4, e=Exit): " sel
+    case "$sel" in
+      1)
+        if [ "$enableskynetimport" -eq 1 ]; then
+          echo ""
+          echo -e "Disable Skynet Firewall Import Integration?"
+          if promptyn "[y/n]: "; then
+            echo ""
+            inlinestatus "Removing IOCMON-tagged entries from Skynet"
+            removeskynetimports
+            enableskynetimport=0
+            resolvefeedsroot
+            [ -n "$feedsroot" ] && rm -f "$feedsroot/meta/skynet_import.hash"
+            saveconfig
+            echo -e "\33[2K\r${CGreen}Skynet integration disabled - removed ${skynetremovedcount:-0} IOCMON-tagged entry/entries from Skynet's ban list.${CClear}"
+            echo ""
+            read -rsp $'Press any key to continue...\n' -n1 key
+          fi
+        else
+          echo ""
+          echo -e "Enable Skynet Firewall Import Integration?"
+          if promptyn "[y/n]: "; then
+            echo ""
+            if ! skynetinstalled; then
+              echo -e "${CRed}Skynet was not detected at /jffs/scripts/firewall - install it first, then come back here.${CClear}"
+            else
+              enableskynetimport=1
+              saveconfig
+              resolvefeedsroot
+              if [ -n "$feedsroot" ]; then
+              	echo ""
+                echo -e "Importing current feed indicators into Skynet now..."
+                echo ""
+                syncskynetimport; skrc=$?
+                case "$skrc" in
+                  0) echo -e "\33[2K\r${CGreen}Imported ${skynetimportcount:-0} IPv4 indicator(s) into Skynet's ban list, tagged IOCMON.${CClear}" ;;
+                  1) echo -e "\33[2K\r${CGreen}Enabled - nothing to import yet (no feed indicators, or none past your IP/CIDR Exceptions).${CClear}" ;;
+                  *) echo -e "\33[2K\r${CRed}Enabled, but the first import failed - check ${logfile} for details. IOCMON will retry on the next feed refresh.${CClear}" ;;
+                esac
+              else
+                echo -e "${CYellow}Enabled - no feed-storage location is resolved yet, so the first import will happen once one is.${CClear}"
+              fi
+            fi
+            echo ""
+            read -rsp $'Press any key to continue...\n' -n1 key
+          fi
+        fi
+      ;;
+      2) [ "$enableskynetimport" -eq 1 ] && togglesetting skynetimportqfeeds ;;
+      3)
+        if [ "$enableskynetimport" -eq 1 ]; then
+          echo ""
+          if ! skynetinstalled; then
+            echo -e "${CRed}Skynet was not detected at /jffs/scripts/firewall - nothing to import into.${CClear}"
+          else
+            resolvefeedsroot
+            if [ -z "$feedsroot" ]; then
+              echo -e "${CYellow}No feed-storage location is resolved yet - nothing to import from.${CClear}"
+            else
+              echo -e "Recompiling the Skynet import file from currently downloaded feeds and importing now..."
+              echo ""
+              syncskynetimport force; skrc=$?
+              case "$skrc" in
+                0) echo -e "\33[2K\r${CGreen}Imported ${skynetimportcount:-0} IPv4 indicator(s) into Skynet's ban list, tagged IOCMON.${CClear}" ;;
+                1) echo -e "\33[2K\r${CGreen}Nothing to import - no feed indicators are currently downloaded, or none past your IP/CIDR Exceptions.${CClear}" ;;
+                *) echo -e "\33[2K\r${CRed}Import failed - check ${logfile} for details.${CClear}" ;;
+              esac
+            fi
+          fi
+          echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key
+        fi
+      ;;
+      4)
+        if [ "$enableskynetimport" -eq 1 ]; then
+          echo ""
+          if ! skynetinstalled; then
+            echo -e "${CRed}Skynet was not detected at /jffs/scripts/firewall - nothing to remove.${CClear}"
+          else
+            beforecount="$(skynetimportids | wc -l | tr -d ' ')"
+            if [ "$beforecount" -eq 0 ]; then
+              echo -e "${CGreen}No IOCMON-tagged entries are currently present in Skynet's ban list.${CClear}"
+            else
+              inlinestatus "Removing IOCMON-tagged entries from Skynet"
+              removeskynetimports
+              resolvefeedsroot
+              [ -n "$feedsroot" ] && rm -f "$feedsroot/meta/skynet_import.hash"
+              echo -e "\33[2K\r${CGreen}Removed ${skynetremovedcount:-0} of ${beforecount} IOCMON-tagged entry/entries from Skynet's ban list.${CClear}"
+              echo -e "${CDkGray}The next feed refresh (or item (3) above) will re-import a fresh list, since integration is still enabled.${CClear}"
+            fi
+          fi
+          echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key
+        fi
+      ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1813,26 +2077,28 @@ vadvancedgeneral()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9.6 Advanced Settings - General / Script Behavior                                                                                       ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.6 Advanced Settings - General / Script Behavior" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size, autostart, and IOCMON's self-update${CClear}"
-    echo -e "${InvGreen} ${CClear} schedule/track - not specific to any one detection watch.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size and location, autostart, and IOCMON's self-update schedule/track - not specific to any${CClear}"
+    echo -e "${InvGreen} ${CClear} one detection watch.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Main loop / detection refresh interval, in seconds" 68; echo -e ": ${CGreen}$timerloop${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Maximum rows kept in the activity log (0 = unlimited)" 68; echo -e ": ${CGreen}$logsize${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
-    menurow "(5)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
-    menurow "(6)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
+    logloconly=0; [ -n "$extdrivelabel" ] && logloconly=1
+    menurow "(3)" "IOCMON Activity Log folder location" "${CGreen}${logfilepath:-$jffslogfile}${CClear}" 68 "$logloconly"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
+    menurow "(6)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
+    menurow "(7)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
     if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-7, e=Exit): " sel
+    read -p "Please select? (1-8, e=Exit): " sel
     case "$sel" in
       1) echo -e "Current: ${CGreen}${timerloop}${CClear}"
          read -p "New main loop interval in seconds (>=5, blank to keep current): " val
@@ -1840,9 +2106,10 @@ vadvancedgeneral()
       2) echo -e "Current: ${CGreen}${logsize}${CClear}"
          read -p "New log size, rows (0=unlimited, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 0 && logsize="$val" && saveconfig; } ;;
-      3) togglesetting autostart ;;
-      4) togglesetting schedule ;;
-      5) [ "$schedule" -eq 1 ] && { echo -e "Current: ${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}"
+      3) [ "$logloconly" -eq 1 ] && vlogfilelocation ;;
+      4) togglesetting autostart ;;
+      5) togglesetting schedule ;;
+      6) [ "$schedule" -eq 1 ] && { echo -e "Current: ${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}"
          read -p "New self-update hour (0-23, blank to keep current): " newhr
          read -p "New self-update minute (0-59, blank to keep current): " newmin
          [ -z "$newhr" ] && newhr="$schedulehrs"
@@ -1850,13 +2117,54 @@ vadvancedgeneral()
          if validateint "$newhr" 0 && [ "$newhr" -le 23 ] && validateint "$newmin" 0 && [ "$newmin" -le 59 ]; then
            schedulehrs="$newhr"; schedulemin="$newmin"; saveconfig
          fi; } ;;
-      6) [ "$schedule" -eq 1 ] && togglesetting updateiocm ;;
-      7) togglesetting track ;;
+      7) [ "$schedule" -eq 1 ] && togglesetting updateiocm ;;
+      8) togglesetting track ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
     esac
   done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vlogfilelocation swaps the activity log between JFFS and the external drive's state folder, after a y/n confirmation
+
+vlogfilelocation()
+{
+  local target
+
+  resolveiocmonroot
+  if [ -z "$logfilepath" ] || [ "$logfilepath" = "$jffslogfile" ]; then
+    target="$iocmonroot/state/iocmon.log"
+  else
+    target="$jffslogfile"
+  fi
+
+  echo ""
+  if [ "$target" != "$jffslogfile" ] && [ ! -d "$iocmonroot" ]; then
+    echo -e "${CRed}The external drive (label=$extdrivelabel) is not currently mounted - the log can't be moved there right now.${CClear}"
+    echo ""
+    read -rsp $'Press any key to continue...\n' -n1 key
+    return
+  fi
+
+  echo -e "Current location: ${CGreen}${logfilepath:-$jffslogfile}${CClear}"
+  echo -e "New location    : ${CGreen}${target}${CClear}"
+  echo ""
+  echo -e "Are you sure you want to move the IOCMON activity log to this new location?"
+  if promptyn "[y/n]: "; then
+    echo ""
+    echo ""
+    if relocatelogfile "$target"; then
+      saveconfig
+      echo -e "${CGreen}The activity log now lives at $target.${CClear}"
+    else
+      resolvelogfile
+      echo -e "${CRed}The activity log could not be moved to $target - its location was left unchanged.${CClear}"
+    fi
+    echo ""
+    read -rsp $'Press any key to continue...\n' -n1 key
+  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1869,8 +2177,8 @@ vfeedsources()
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 2. Feed Sources & API Keys                                                                                                              ${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off,${CClear}"
-    echo -e "${InvGreen} ${CClear} or to set the ThreatFox / Q-Feeds API keys (a blank ThreatFox key uses its free CSV export; Q-Feeds needs a token).${CClear}"
+    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set the ThreatFox / Q-Feeds API keys (a blank${CClear}"
+    echo -e "${InvGreen} ${CClear} ThreatFox key uses its free CSV export; Q-Feeds needs a token).${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     apikeydisp="<none - using free CSV export>"
@@ -2076,7 +2384,7 @@ fetchthreatfox()
   mv "$tmpfile" "$rawfile"
   echo "$mode" > "$modefile"
   touch "$metafile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ThreatFox feed updated ($mode mode)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ThreatFox feed updated ($mode mode, $(wc -l < "$rawfile" | tr -d ' ') lines)." >> "$logfile"
   return 0
 }
 
@@ -2133,7 +2441,9 @@ fetchqfeeds()
     return 2
   fi
 
+  inlinestatus "Q-Feeds: fetching malware IP list"
   fetchqfeedlist malware_ip "$feedsroot/qfeeds_ips.txt" ip || rc=1
+  inlinestatus "Q-Feeds: fetching malware domain list (rate-limit pause)"
   sleep 11
   fetchqfeedlist malware_domains "$feedsroot/qfeeds_domains.txt" domain || rc=1
 
@@ -2189,6 +2499,7 @@ dedupindicators()
 normalizefeeds()
 {
   local tmpips="$feedsroot/ips.txt.tmp" tmpdomains="$feedsroot/domains.txt.tmp" tmphashes="$feedsroot/hashes.txt.tmp"
+  threatfoxskippedcount=0
 
   : > "$tmpips"
   : > "$tmpdomains"
@@ -2214,8 +2525,9 @@ normalizefeeds()
       local tfmode="csv"
       [ -f "$feedsroot/meta/threatfox.mode" ] && tfmode="$(cat "$feedsroot/meta/threatfox.mode" 2>/dev/null)"
 
+      inlinestatus "Normalizing ThreatFox"
       if [ "$tfmode" = "api" ] && which jq >/dev/null 2>&1; then
-        jq -r 'if .query_status=="ok" then (.data[]? | [(.ioc // ""), (.ioc_type // ""), (.malware_printable // ""), (.confidence_level // "")] | @tsv) else empty end' "$feedsroot/threatfox.raw" 2>/dev/null | \
+        threatfoxskippedcount="$(jq -r 'if .query_status=="ok" then (.data[]? | [(.ioc // ""), (.ioc_type // ""), (.malware_printable // ""), (.confidence_level // "")] | @tsv) else empty end' "$feedsroot/threatfox.raw" 2>/dev/null | \
           awk -F'\t' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
             {
               val=$1; typ=$2; mal=$3; conf=$4
@@ -2229,11 +2541,14 @@ normalizefeeds()
                 sub(/[\/:?].*$/,"",host)
                 if (fam=="") fam="url-host"
                 if (host != "") print host"|threatfox|"fam >> domainsout
+                else skip++
               }
               else if (typ ~ /_hash$/) { if (fam=="") fam=typ; print val"|threatfox|"fam >> hashesout }
-            }'
+              else { skip++ }
+            }
+            END { print skip+0 }')"
       else
-        awk -F',' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
+        threatfoxskippedcount="$(awk -F',' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
           !/^#/ && NF>=4 {
             val=$3; typ=$4
             gsub(/"/,"",val); gsub(/"/,"",typ)
@@ -2245,14 +2560,18 @@ normalizefeeds()
               sub(/^[A-Za-z]+:\/\//,"",host)
               sub(/[\/:?].*$/,"",host)
               if (host != "") print host"|threatfox|url-host" >> domainsout
+              else skip++
             }
             else if (typ ~ /_hash$/) { print val"|threatfox|"typ >> hashesout }
-          }' "$feedsroot/threatfox.raw"
+            else { skip++ }
+          }
+          END { print skip+0 }' "$feedsroot/threatfox.raw")"
       fi
     fi
   fi
 
   if [ -s "$tmpips" ]; then
+    inlinestatus "Deduplicating IP/CIDR indicators"
     dedupindicators "$tmpips"
     mv "$tmpips" "$feedsroot/ips.txt"
   else
@@ -2261,6 +2580,7 @@ normalizefeeds()
   fi
 
   if [ -s "$tmpdomains" ]; then
+    inlinestatus "Deduplicating domain indicators"
     dedupindicators "$tmpdomains"
     mv "$tmpdomains" "$feedsroot/domains.txt"
   else
@@ -2269,6 +2589,7 @@ normalizefeeds()
   fi
 
   if [ -s "$tmphashes" ]; then
+    inlinestatus "Deduplicating hash indicators"
     dedupindicators "$tmphashes"
     mv "$tmphashes" "$feedsroot/hashes.txt"
   else
@@ -2278,77 +2599,270 @@ normalizefeeds()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# resolveskynetloc finds Skynet's own storage directory the same way firewall.sh locates it - parsing skynetloc= off its firewall-start hook.
+
+resolveskynetloc()
+{
+  skynetstoragepath=""
+  [ -f /jffs/scripts/firewall-start ] || return
+  skynetstoragepath="$(awk '$1 == "sh" && $2 == "/jffs/scripts/firewall" && $3 == "start" {
+    for (i = 4; i <= NF; i++) if ($i ~ /^skynetloc=/) { sub(/^skynetloc=/, "", $i); print $i; exit }
+  }' /jffs/scripts/firewall-start 2>/dev/null)"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# skynetinstalled succeeds only when Skynet's firewall.sh and its own rule registry are both actually present.
+
+skynetinstalled()
+{
+  resolveskynetloc
+  [ -x /jffs/scripts/firewall ] && [ -n "$skynetstoragepath" ] && [ -f "$skynetstoragepath/skynet.rules" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# skynetimportids echoes every Skynet import rule ID tagged with our "IOCMON" comment - same registry match Reference/skynet-importcheck.sh uses.
+
+skynetimportids()
+{
+  resolveskynetloc
+  [ -n "$skynetstoragepath" ] && [ -f "$skynetstoragepath/skynet.rules" ] || return
+  awk -F '\t' '
+    $1 == "R2" && $3 == "ban" && $4 == "import" {
+      comment = substr($6, 2)
+      if (index(tolower(comment), "iocmon")) print $2
+    }' "$skynetstoragepath/skynet.rules"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# removeskynetimports deletes every existing IOCMON-tagged Skynet import rule, if any - always run before a fresh import, and on disable.
+
+removeskynetimports()
+{
+  local id removed=0
+  skynetremovedcount=0
+  for id in $(skynetimportids); do
+    if sh /jffs/scripts/firewall rules remove "$id" >/dev/null 2>&1; then
+      removed=$((removed + 1))
+    else
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Failed to remove Skynet import rule $id." >> "$logfile"
+    fi
+  done
+  skynetremovedcount="$removed"
+  [ "$removed" -gt 0 ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed $removed existing IOCMON-tagged Skynet import rule(s)." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# buildskynetimportfile writes a plain, single-column IPv4/CIDR list to $1 from the current feed indicators, minus anything on the IP/CIDR Exceptions list.
+
+buildskynetimportfile()
+{
+  local out="$1"
+
+  skynetprogress 2 6 "Building combined indicator list"
+  : > "$out"
+  [ -s "$feedsroot/ips.txt" ] && cut -d'|' -f1 "$feedsroot/ips.txt" >> "$out"
+  [ "$skynetimportqfeeds" -eq 1 ] && [ -s "$feedsroot/qfeeds_ips.txt" ] && cat "$feedsroot/qfeeds_ips.txt" >> "$out"
+
+  skynetprogress 3 6 "Deduplicating indicator list"
+  sort -u -o "$out" "$out"
+
+  [ -z "$ipexceptions" ] && return
+
+  skynetprogress 4 6 "Filtering IP/CIDR exceptions"
+  awk -v exc="$ipexceptions" '
+    function toint(ip,  a) { split(ip, a, "."); return (a[1]*16777216)+(a[2]*65536)+(a[3]*256)+a[4] }
+    function excepted(entry,    k, ip, pp, d) {
+      if (entry in plainexc) return 1
+      if (index(entry, "/") > 0) return 0
+      ip = entry
+      for (k = 1; k <= excn; k++) {
+        if (!iscidr[k]) continue
+        d = 2 ^ (32 - cidrmask[k])
+        if (int(toint(ip) / d) == int(cidrnet[k] / d)) return 1
+      }
+      return 0
+    }
+    BEGIN {
+      excn = split(exc, ea, " ")
+      for (k = 1; k <= excn; k++) {
+        if (ea[k] == "") continue
+        if (index(ea[k], "/") > 0) {
+          split(ea[k], pp, "/")
+          if ((pp[2] + 0) < 0 || (pp[2] + 0) > 32) continue
+          cidrnet[k] = toint(pp[1]); cidrmask[k] = pp[2] + 0; iscidr[k] = 1
+        } else { plainexc[ea[k]] = 1 }
+      }
+    }
+    { if (!excepted($0)) print }
+  ' "$out" > "${out}.tmp"
+  mv "${out}.tmp" "$out"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# syncskynetimport pushes the current IPv4 feed set into Skynet's ban list, tagged "IOCMON" - only when it actually changed since last time.
+
+syncskynetimport()
+{
+  local force="$1"
+
+  [ "$enableskynetimport" -eq 1 ] || return 2
+
+  skynetprogress 1 6 "Checking Skynet installation"
+  if ! skynetinstalled; then
+    if [ "$skynetmissinglogged" -ne 1 ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Skynet integration is enabled but Skynet was not detected - import skipped." >> "$logfile"
+      skynetmissinglogged=1
+    fi
+    return 2
+  fi
+  skynetmissinglogged=0
+
+  local importfile="/tmp/iocmon_skynet_import.$$" hashfile="$feedsroot/meta/skynet_import.hash" newhash oldhash entrycount
+
+  buildskynetimportfile "$importfile"
+  entrycount="$(wc -l < "$importfile" | tr -d ' ')"
+  newhash="$(filecontenthash "$importfile")"
+  oldhash=""
+  [ -f "$hashfile" ] && oldhash="$(cat "$hashfile" 2>/dev/null)"
+
+  if [ "$force" != "force" ] && [ "$newhash" = "$oldhash" ]; then
+    rm -f "$importfile"
+    return 1
+  fi
+
+  skynetprogress 5 6 "Removing previous IOCMON-tagged rule(s)"
+  removeskynetimports
+
+  if [ "$entrycount" -eq 0 ]; then
+    rm -f "$importfile"
+    echo "$newhash" > "$hashfile"
+    return 1
+  fi
+
+  skynetprogress 6 6 "Importing $entrycount entries into Skynet"
+  local importattempt=0 importrc=1 importoutput=""
+  while [ "$importattempt" -lt 3 ]; do
+    [ "$importattempt" -gt 0 ] && sleep $((importattempt * 3))
+    importoutput="$(sh /jffs/scripts/firewall import blacklist "$importfile" "IOCMON Threat Feed Import ($entrycount entries)" 2>&1)"
+    importrc=$?
+    [ "$importrc" -eq 0 ] && break
+    importattempt=$((importattempt + 1))
+  done
+
+  if [ "$importrc" -eq 0 ]; then
+    echo "$newhash" > "$hashfile"
+    rm -f "$importfile"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Imported $entrycount IPv4 indicator(s) into Skynet's ban list, tagged IOCMON." >> "$logfile"
+    skynetimportcount="$entrycount"
+    return 0
+  else
+    rm -f "$importfile"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Skynet import failed after 3 attempt(s) - will retry next refresh cycle. firewall output: $(echo "$importoutput" | tr '\n' ' ' | cut -c1-300)" >> "$logfile"
+    return 3
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # updatefeeds is the feed-manager orchestrator: fetch each enabled source, then normalize.
 
 updatefeeds()
 {
-  local okcount=0 failcount=0 qrc
+  local okcount=0 failcount=0 qrc skrc
 
   mkdir -m 755 -p "$feedsroot/meta"
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Starting IoC feed refresh cycle." >> "$logfile"
 
   if [ "$enablefeodo" -eq 1 ]; then
+    inlinestatus "Feodo Tracker: fetching"
     if fetchfeedsource "Feodo Tracker" "https://feodotracker.abuse.ch/downloads/ipblocklist_recommended.txt" "$feedsroot/feodo.raw" "$feedsroot/meta/feodo.meta"; then
       okcount=$((okcount+1))
-      echo -e "  ${CGreen}*${CClear} Feodo Tracker: fetched ${CGreen}$(wc -l < "$feedsroot/feodo.raw" 2>/dev/null | tr -d ' ')${CClear} indicators"
+      echo -e "\33[2K\r  ${CGreen}*${CClear} Feodo Tracker: fetched ${CGreen}$(wc -l < "$feedsroot/feodo.raw" 2>/dev/null | tr -d ' ')${CClear} indicators"
     else
       failcount=$((failcount+1))
-      echo -e "  ${CRed}*${CClear} Feodo Tracker: fetch failed (see log)"
+      echo -e "\33[2K\r  ${CRed}*${CClear} Feodo Tracker: fetch failed (see log)"
     fi
   fi
 
   if [ "$feedsdegraded" -eq 0 ]; then
     if [ "$enablespamhaus" -eq 1 ]; then
+      inlinestatus "Spamhaus DROP: fetching"
       if fetchfeedsource "Spamhaus DROP" "https://www.spamhaus.org/drop/drop.txt" "$feedsroot/spamhaus_drop.raw" "$feedsroot/meta/spamhaus_drop.meta"; then
         okcount=$((okcount+1))
-        echo -e "  ${CGreen}*${CClear} Spamhaus DROP: fetched ${CGreen}$(wc -l < "$feedsroot/spamhaus_drop.raw" 2>/dev/null | tr -d ' ')${CClear} netblocks"
+        echo -e "\33[2K\r  ${CGreen}*${CClear} Spamhaus DROP: fetched ${CGreen}$(wc -l < "$feedsroot/spamhaus_drop.raw" 2>/dev/null | tr -d ' ')${CClear} netblocks"
       else
         failcount=$((failcount+1))
-        echo -e "  ${CRed}*${CClear} Spamhaus DROP: fetch failed (see log)"
+        echo -e "\33[2K\r  ${CRed}*${CClear} Spamhaus DROP: fetch failed (see log)"
       fi
+      inlinestatus "Spamhaus EDROP: fetching"
       if fetchfeedsource "Spamhaus EDROP" "https://www.spamhaus.org/drop/edrop.txt" "$feedsroot/spamhaus_edrop.raw" "$feedsroot/meta/spamhaus_edrop.meta"; then
         okcount=$((okcount+1))
-        echo -e "  ${CGreen}*${CClear} Spamhaus EDROP: fetched ${CGreen}$(wc -l < "$feedsroot/spamhaus_edrop.raw" 2>/dev/null | tr -d ' ')${CClear} netblocks"
+        echo -e "\33[2K\r  ${CGreen}*${CClear} Spamhaus EDROP: fetched ${CGreen}$(wc -l < "$feedsroot/spamhaus_edrop.raw" 2>/dev/null | tr -d ' ')${CClear} netblocks"
       else
         failcount=$((failcount+1))
-        echo -e "  ${CRed}*${CClear} Spamhaus EDROP: fetch failed (see log)"
+        echo -e "\33[2K\r  ${CRed}*${CClear} Spamhaus EDROP: fetch failed (see log)"
       fi
     fi
 
     if [ "$enableurlhaus" -eq 1 ]; then
+      inlinestatus "URLhaus: fetching"
       if fetchfeedsource "URLhaus" "https://urlhaus.abuse.ch/downloads/hostfile/" "$feedsroot/urlhaus.raw" "$feedsroot/meta/urlhaus.meta"; then
         okcount=$((okcount+1))
-        echo -e "  ${CGreen}*${CClear} URLhaus: fetched ${CGreen}$(wc -l < "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ')${CClear} malicious hosts"
+        echo -e "\33[2K\r  ${CGreen}*${CClear} URLhaus: fetched ${CGreen}$(wc -l < "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ')${CClear} malicious hosts"
       else
         failcount=$((failcount+1))
-        echo -e "  ${CRed}*${CClear} URLhaus: fetch failed (see log)"
+        echo -e "\33[2K\r  ${CRed}*${CClear} URLhaus: fetch failed (see log)"
       fi
     fi
 
     if [ "$enablethreatfox" -eq 1 ]; then
+      inlinestatus "ThreatFox: fetching"
       if fetchthreatfox; then
         okcount=$((okcount+1))
-        echo -e "  ${CGreen}*${CClear} ThreatFox: fetched ${CGreen}$(wc -l < "$feedsroot/threatfox.raw" 2>/dev/null | tr -d ' ')${CClear} raw IOC records"
+        echo -e "\33[2K\r  ${CGreen}*${CClear} ThreatFox: fetched ${CGreen}$(wc -l < "$feedsroot/threatfox.raw" 2>/dev/null | tr -d ' ')${CClear} raw IOC records"
       else
         failcount=$((failcount+1))
-        echo -e "  ${CRed}*${CClear} ThreatFox: fetch failed (see log)"
+        echo -e "\33[2K\r  ${CRed}*${CClear} ThreatFox: fetch failed (see log)"
       fi
     fi
 
     if [ "$enableqfeeds" -eq 1 ]; then
+      inlinestatus "Q-Feeds: fetching"
       fetchqfeeds "$1"; qrc=$?
       case "$qrc" in
-        0) okcount=$((okcount+1)); echo -e "  ${CGreen}*${CClear} Q-Feeds: fetched ${CGreen}$(qfeedscount)${CClear} OSINT IP/domain indicators" ;;
-        2) echo -e "  ${CGreen}*${CClear} Q-Feeds: skipped (refreshed within the last ${qfeedshrs}h, or no token set)" ;;
-        *) failcount=$((failcount+1)); echo -e "  ${CRed}*${CClear} Q-Feeds: fetch failed (see log)" ;;
+        0) okcount=$((okcount+1)); echo -e "\33[2K\r  ${CGreen}*${CClear} Q-Feeds: fetched ${CGreen}$(qfeedscount)${CClear} OSINT IP/domain indicators" ;;
+        2) echo -e "\33[2K\r  ${CGreen}*${CClear} Q-Feeds: skipped (refreshed within the last ${qfeedshrs}h, or no token set)" ;;
+        *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} Q-Feeds: fetch failed (see log)" ;;
       esac
     fi
   fi
 
+  inlinestatus "Normalizing & deduplicating feed data"
   normalizefeeds
 
-  echo -e "  ${CGreen}*${CClear} Normalized into ${CGreen}$(cat "$feedsroot/ips.txt" "$feedsroot/domains.txt" "$feedsroot/hashes.txt" 2>/dev/null | wc -l | tr -d ' ')${CClear} deduped IoC indicators (${CGreen}${okcount}${CClear} sources ok, ${CRed}${failcount}${CClear} failed)"
+  if [ "$enableskynetimport" -eq 1 ]; then
+    syncskynetimport; skrc=$?
+    case "$skrc" in
+      0) echo -e "\33[2K\r  ${CGreen}*${CClear} Skynet import: pushed ${CGreen}${skynetimportcount:-0}${CClear} IPv4 indicator(s), tagged IOCMON" ;;
+      1) echo -e "\33[2K\r  ${CGreen}*${CClear} Skynet import: unchanged, skipped" ;;
+      2) echo -e "\33[2K\r  ${CGreen}*${CClear} Skynet import: Skynet not detected, skipped" ;;
+      *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} Skynet import: failed (see log)" ;;
+    esac
+  fi
+
+  local ipscount domainscount hashescount qfeedstotal
+  ipscount="$(wc -l < "$feedsroot/ips.txt" 2>/dev/null | tr -d ' ')"; ipscount="${ipscount:-0}"
+  domainscount="$(wc -l < "$feedsroot/domains.txt" 2>/dev/null | tr -d ' ')"; domainscount="${domainscount:-0}"
+  hashescount="$(wc -l < "$feedsroot/hashes.txt" 2>/dev/null | tr -d ' ')"; hashescount="${hashescount:-0}"
+  qfeedstotal="$(qfeedscount)"
+
+  echo -e "\33[2K\r  ${CGreen}*${CClear} Normalized into ${CGreen}$((ipscount + domainscount + hashescount))${CClear} deduped core-feed indicator(s): ${CGreen}${ipscount}${CClear} IP/CIDR, ${CGreen}${domainscount}${CClear} domain(s), ${CGreen}${hashescount}${CClear} hash(es) (${CGreen}${okcount}${CClear} sources ok, ${CRed}${failcount}${CClear} failed)"
+  if [ "$qfeedstotal" -gt 0 ]; then
+    echo -e "  ${CGreen}*${CClear} Plus ${CGreen}${qfeedstotal}${CClear} Q-Feeds indicator(s) kept separately (not deduped) - ${CGreen}$((ipscount + domainscount + hashescount + qfeedstotal))${CClear} total indicator(s) active for conntrack/DNS matching and Skynet import"
+  fi
+  if [ "${threatfoxskippedcount:-0}" -gt 0 ]; then
+    echo -e "  ${CYellow}*${CClear} ThreatFox: ${CYellow}${threatfoxskippedcount}${CClear} raw record(s) skipped (unsupported indicator type, e.g. ja3/tag-only entries)"
+  fi
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IoC feed refresh cycle complete ($okcount ok, $failcount failed)." >> "$logfile"
 }
 
@@ -2802,7 +3316,7 @@ flushemailbatch()
 isfeedmatchsource()
 {
   case "$1" in
-    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule) return 1 ;;
+    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule|etc-critical-new|etc-critical-modified|etc-critical-deleted) return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -4105,7 +4619,7 @@ cronmatchkey()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# checkcronbaseline alerts on any cru entry that appeared since the last check
+# incronexceptionlist checks against the established list of cron exceptions
 
 incronexceptionlist()
 {
@@ -4125,6 +4639,9 @@ EOF
 
   return 1
 }
+
+# -------------------------------------------------------------------------------------------------------------------------
+# checkcronbaseline alerts on any cru entry that appeared since the last check
 
 checkcronbaseline()
 {
@@ -4221,7 +4738,64 @@ checkfirewallrules()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# fsintegritycheck is the main-loop entry point
+# checketccritical always-alerts on any change to $etccriticalpaths (accounts, pam.d, certs, VPN secrets), ignoring fsmodalertmode
+
+checketccritical()
+{
+  [ "$enableetccritical" -eq 1 ] || return
+  [ -n "$stateroot" ] || return
+
+  local hashdb="$stateroot/etc_critical_hash.db" curlist path h entry oldhash
+
+  curlist="$(mktemp 2>/dev/null || echo "/tmp/iocmon_etccritical_cur.$$")"
+  : > "$curlist"
+  for entry in $etccriticalpaths; do
+    if [ -d "$entry" ]; then
+      find "$entry" -type f 2>/dev/null >> "$curlist"
+    elif [ -f "$entry" ]; then
+      echo "$entry" >> "$curlist"
+    fi
+  done
+  sort -u "$curlist" -o "$curlist"
+
+  if [ ! -f "$hashdb" ]; then
+    : > "$hashdb"
+    while IFS= read -r path; do
+      [ -z "$path" ] && continue
+      h="$(filecontenthash "$path")"
+      [ -n "$h" ] && printf '%s\t%s\n' "$path" "$h" >> "$hashdb"
+    done < "$curlist"
+    rm -f "$curlist"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Critical /etc baseline established ($(wc -l < "$hashdb" | tr -d ' ') file(s))." >> "$logfile"
+    return
+  fi
+
+  awk -F'\t' 'FNR==NR{old[$1]=1; next} !($1 in old)' "$hashdb" "$curlist" | while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    raisealert "fsintegrity" "$path" "etc-critical-new" "a new file appeared under a watched critical /etc path - review immediately"
+  done
+
+  awk -F'\t' '{print $1}' "$hashdb" | while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    grep -qxF "$path" "$curlist" || raisealert "fsintegrity" "$path" "etc-critical-deleted" "a critical /etc file was deleted - review immediately"
+  done
+
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    oldhash="$(awk -F'\t' -v p="$path" '$1==p{print $2}' "$hashdb")"
+    [ -z "$oldhash" ] && continue
+    h="$(filecontenthash "$path")"
+    [ -n "$h" ] && [ "$h" != "$oldhash" ] && raisealert "fsintegrity" "$path" "etc-critical-modified" "critical /etc file content changed - review immediately"
+  done < "$curlist"
+
+  : > "$hashdb"
+  while IFS= read -r path; do
+    [ -z "$path" ] && continue
+    h="$(filecontenthash "$path")"
+    [ -n "$h" ] && printf '%s\t%s\n' "$path" "$h" >> "$hashdb"
+  done < "$curlist"
+  rm -f "$curlist"
+}
 
 # -------------------------------------------------------------------------------------------------------------------------
 # fsintegritylock/fsintegrityunlock guard against two overlapping scans (main loop cadence vs -fsintegrity cron vs forced) racing on the same manifest/state files.
@@ -4257,9 +4831,13 @@ runfsintegrityscan()
   checkcronbaseline
   checkentwarecron
   checkfirewallrules
+  checketccritical
   fsintegrityunlock
   return 0
 }
+
+# -------------------------------------------------------------------------------------------------------------------------
+# fsintegritycheck is the main-loop entry point
 
 fsintegritycheck()
 {
@@ -4320,6 +4898,421 @@ forcefsintegrity()
   echo ""
   read -rsp $'Press any key to continue...\n' -n1 key
   if [ "$timerpaused" -eq 1 ]; then renderdashboard; else timer=$timerloop; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# otxiplink echoes the AlienVault OTX indicator-lookup URL for IPv4 address $1
+
+otxiplink()
+{
+  echo "https://otx.alienvault.com/indicator/ip/$1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# daynumof echoes the days-since-1970-01-01 day number for calendar date $1/$2/$3 (year/month/day)
+
+daynumof()
+{
+  awk -v y="$1" -v m="$2" -v d="$3" 'BEGIN {
+    if (m <= 2) y -= 1
+    era = (y >= 0 ? y : y - 399); era = int(era / 400)
+    yoe = y - era * 400
+    doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+    doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+    print era * 146097 + doe - 719468
+  }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# civilfromdaynum echoes the YYYY-MM-DD calendar date for day number $1 (the inverse of daynumof)
+
+civilfromdaynum()
+{
+  awk -v z="$1" 'BEGIN {
+    z += 719468
+    era = int((z >= 0 ? z : z - 146096) / 146097)
+    doe = z - era * 146097
+    yoe = int((doe - int(doe / 1460) + int(doe / 36524) - int(doe / 146096)) / 365)
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + int(yoe / 4) - int(yoe / 100))
+    mp = int((5 * doy + 2) / 153)
+    d = doy - int((153 * mp + 2) / 5) + 1
+    m = mp + (mp < 10 ? 3 : -9)
+    y += (m <= 2)
+    printf "%04d-%02d-%02d\n", y, m, d
+  }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# padexact prints $1 left-justified in a field of exactly $2 visible chars - unlike padright, never forces a minimum pad
+
+padexact()
+{
+  local text="$1" width="$2" pad
+  pad=$((width - ${#text}))
+  [ "$pad" -lt 0 ] && pad=0
+  printf '%s' "$text"
+  printf '%*s' "$pad" ""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# printotxreportrow prints one width-fixed, truncated 5-column row of the OTX report ($6=1 for header, $7=date for date-sort widths)
+
+printotxreportrow()
+{
+  local c1="$1" c2="$2" c3="$3" c4="$4" c5="$5" header="${6:-0}"
+  local w1=6 w2=16 w3=58 w4=28 w5=15
+  [ "$7" = "date" ] && { w1=16; w2=15; w3=55; w4=25; w5=15; }
+
+  [ "${#c1}" -gt "$w1" ] && c1="$(printf '%.*s' "$((w1-1))" "$c1")>"
+  [ "${#c2}" -gt "$w2" ] && c2="$(printf '%.*s' "$((w2-1))" "$c2")>"
+  [ "${#c3}" -gt "$w3" ] && c3="$(printf '%.*s' "$((w3-1))" "$c3")>"
+  [ "${#c4}" -gt "$w4" ] && c4="$(printf '%.*s' "$((w4-1))" "$c4")>"
+  [ "${#c5}" -gt "$w5" ] && c5="$(printf '%.*s' "$((w5-1))" "$c5")>"
+
+  if [ "$header" -eq 1 ]; then
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}"; padexact "$c1" "$w1"
+    echo -en "${CClear} | ${InvDkGray}${CWhite}"; padexact "$c2" "$w2"
+    echo -en "${CClear} | ${InvDkGray}${CWhite}"; padexact "$c3" "$w3"
+    echo -en "${CClear} | ${InvDkGray}${CWhite}"; padexact "$c4" "$w4"
+    echo -e "${CClear} | ${InvDkGray}${CWhite}${c5}${CClear}"
+  else
+    echo -en "${InvGreen} ${CClear} ${CYellow}"; padexact "$c1" "$w1"
+    echo -en "${CClear} | ${CGreen}"; padexact "$c2" "$w2"
+    echo -en "${CClear} | ${CCyan}"; padexact "$c3" "$w3"
+    echo -en "${CClear} | ${CWhite}"; padexact "$c4" "$w4"
+    echo -e "${CClear} | ${CDkGray}${c5}${CClear}"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# votxreport builds a date-ranged, paginated OTX report of conntrack feed matches ($1=quick: dashboard [N] last-7-days date view)
+
+votxreport()
+{
+  local tab rangechoice todayy todaym todayd todayn startday endday startin endin rangelabel swap
+  local oldifs syear smonth sday eyear emonth eday
+  local pagesizeinput pagesize datafile spanfile rowtotal eventtotal logdays page totalpages pagestart pageend pagelabel r more key
+  local rcount rip rsrc rfam rdevs rowcount rdevdisp devcount
+  local quick=0 sortmode sortlabel returnlabel rkey rdate iptotal
+
+  tab="$(printf '\t')"
+  [ "$1" = "quick" ] && quick=1
+
+  while true; do
+    [ "$exitallmenus" -eq 1 ] && break
+    if [ "$otxreportsort" = "date" ]; then sortlabel="Date"; else sortlabel="Frequency"; fi
+    if [ "$quick" -eq 1 ]; then
+      rangechoice=2
+      sortmode="date"
+      returnlabel="the IOCMON main screen"
+    else
+      sortmode="$otxreportsort"
+      returnlabel="the OTX AlienVault Report menu"
+      clear
+      echo -e "${InvGreen} ${InvDkGray}${CWhite} OTX AlienVault Threat Report                                                                                                            ${CClear}"
+      echo -e "${InvGreen} ${CClear}"
+      echo -e "${InvGreen} ${CClear} Builds a report of outbound connections IOCMON's conntrack watch matched against a known-bad threat-feed IP, with a ready-made${CClear}"
+      echo -e "${InvGreen} ${CClear} AlienVault OTX lookup link for each one - either grouped by destination and ranked by how often each was matched (Frequency sort), or${CClear}"
+      echo -e "${InvGreen} ${CClear} listed occurrence by occurrence, newest first (Date sort). Each count reflects distinct alert events IOCMON actually logged to its${CClear}"
+      echo -e "${InvGreen} ${CClear} Recent IoC Detections history (subject to its own 6-hour per-IP dedup window) - not a raw packet/hit counter the way a firewall's own${CClear}"
+      echo -e "${InvGreen} ${CClear} ipset statistics are, so treat it as a frequency indicator rather than an exact tally. Only outbound matches are covered (a device here${CClear}"
+      echo -e "${InvGreen} ${CClear} contacting a listed bad IP) - IOCMON's conntrack watch has no way to see unsolicited inbound traffic a listed bad IP sends toward this${CClear}"
+      echo -e "${InvGreen} ${CClear} router.${CClear}"
+      echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+      echo -e "${InvGreen} ${CClear}"
+      echo -e "${InvGreen} ${CClear} Select a date range for this report:${CClear}"
+      echo -e "${InvGreen} ${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : Today${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : Last 7 days${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : Last 30 days${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : All available history${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : Custom range (enter a start and end date)${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : Sort by: ${CGreen}${sortlabel}${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
+      echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Configuration Menu${CClear}"
+      echo -e "${InvGreen} ${CClear}"
+      echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+      echo ""
+      read -p "Please select? (1-6, e=Exit): " rangechoice
+    fi
+
+    set -- $(date +'%Y %m %d')
+    todayy="$1"; todaym="$2"; todayd="$3"
+    todayn="$(daynumof "$todayy" "$todaym" "$todayd")"
+
+    case "$rangechoice" in
+      1) startday="$todayn"; endday="$todayn" ;;
+      2) startday=$((todayn - 6)); endday="$todayn" ;;
+      3) startday=$((todayn - 29)); endday="$todayn" ;;
+      4) startday=""; endday="" ;;
+      5)
+        echo ""
+        read -p "Start date (YYYY-MM-DD, blank to cancel): " startin
+        [ -z "$startin" ] && continue
+        if ! validdatestr "$startin"; then
+          echo -e "${CRed}\"$startin\" is not a valid YYYY-MM-DD date.${CClear}"
+          sleep 2
+          continue
+        fi
+        read -p "End date (YYYY-MM-DD, blank to cancel): " endin
+        [ -z "$endin" ] && continue
+        if ! validdatestr "$endin"; then
+          echo -e "${CRed}\"$endin\" is not a valid YYYY-MM-DD date.${CClear}"
+          sleep 2
+          continue
+        fi
+        oldifs="$IFS"; IFS=-; set -- $startin; IFS="$oldifs"
+        syear="$1"; smonth="$2"; sday="$3"
+        oldifs="$IFS"; IFS=-; set -- $endin; IFS="$oldifs"
+        eyear="$1"; emonth="$2"; eday="$3"
+        startday="$(daynumof "$syear" "$smonth" "$sday")"
+        endday="$(daynumof "$eyear" "$emonth" "$eday")"
+        if [ "$startday" -gt "$endday" ]; then
+          swap="$startday"; startday="$endday"; endday="$swap"
+        fi
+        ;;
+      6)
+        if [ "$otxreportsort" = "date" ]; then otxreportsort="frequency"; else otxreportsort="date"; fi
+        saveconfig
+        continue
+        ;;
+      [Ee]) break ;;
+      [Ee]!) exitallmenus=1; break ;;
+      *) continue ;;
+    esac
+
+    if [ -z "$startday" ]; then
+      rangelabel="All available history"
+    else
+      rangelabel="$(civilfromdaynum "$startday") to $(civilfromdaynum "$endday")"
+    fi
+
+    if [ "$quick" -eq 1 ]; then
+      pagesize=20
+    else
+      echo ""
+      read -p "How many results per page? (10/20/50, blank defaults to 20): " pagesizeinput
+      case "$pagesizeinput" in
+        10|20|50) pagesize="$pagesizeinput" ;;
+        *) pagesize=20 ;;
+      esac
+    fi
+
+    resolvestateroot
+    if [ -z "$stateroot" ] || [ ! -s "$stateroot/ioc_alerts.log" ]; then
+      clear
+      echo -e "${CRed}No IoC detection history is available yet (no feed storage location resolved, or nothing logged).${CClear}"
+      echo ""
+      read -rsp "Press any key to return to ${returnlabel}..."$'\n' -n1 key
+      [ "$quick" -eq 1 ] && break
+      continue
+    fi
+
+    logdays="$(awk -F'|' '
+      BEGIN {
+        split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
+        for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
+      }
+      function daynum(y, m, d,   era, yoe, doy, doe) {
+        if (m <= 2) y -= 1
+        era = (y >= 0 ? y : y - 399); era = int(era / 400)
+        yoe = y - era * 400
+        doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+        doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+        return era * 146097 + doe - 719468
+      }
+      {
+        datepart = $1
+        gsub(/^[ \t]+|[ \t]+$/, "", datepart)
+        n = split(datepart, dp, " ")
+        if (n < 3) next
+        mon = monthnum[dp[1]] + 0
+        if (mon == 0) next
+        dn = daynum(dp[3] + 0, mon, dp[2] + 0)
+        if (seen == 0 || dn < minday) minday = dn
+        if (seen == 0 || dn > maxday) maxday = dn
+        seen = 1
+      }
+      END { print (seen == 0 ? 1 : maxday - minday + 1) }
+    ' "$stateroot/ioc_alerts.log")"
+
+    datafile="/tmp/iocmon_otxreport.$$"
+    if [ "$sortmode" = "date" ]; then
+      awk -F'|' -v startday="$startday" -v endday="$endday" '
+        BEGIN {
+          split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
+          for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
+        }
+        function daynum(y, m, d,   era, yoe, doy, doe) {
+          if (m <= 2) y -= 1
+          era = (y >= 0 ? y : y - 399); era = int(era / 400)
+          yoe = y - era * 400
+          doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+          doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+          return era * 146097 + doe - 719468
+        }
+        {
+          if (NF < 5) next
+          datepart = $1; kindpart = $2; indpart = $3; srcpart = $4; detpart = $5
+          gsub(/^[ \t]+|[ \t]+$/, "", kindpart)
+          if (kindpart != "conntrack") next
+          gsub(/^[ \t]+|[ \t]+$/, "", datepart)
+          gsub(/^[ \t]+|[ \t]+$/, "", indpart)
+          gsub(/^[ \t]+|[ \t]+$/, "", srcpart)
+          gsub(/^[ \t]+|[ \t]+$/, "", detpart)
+          n = split(datepart, dp, " ")
+          if (n < 3) next
+          mon = monthnum[dp[1]] + 0
+          if (mon == 0) next
+          dn = daynum(dp[3] + 0, mon, dp[2] + 0)
+          if (startday != "" && (dn < startday || dn > endday)) next
+          split(indpart, parts, "->")
+          if (parts[2] == "") next
+          split(dp[4], tp, ":")
+          key = dn * 86400 + (tp[1] + 0) * 3600 + (tp[2] + 0) * 60 + (tp[3] + 0)
+          printf "%d\t%04d-%02d-%02d %s\t%s\t%s\t%s\t%s\n", key, dp[3] + 0, mon, dp[2] + 0, substr(dp[4], 1, 5), parts[2], srcpart, detpart, parts[1]
+        }
+      ' "$stateroot/ioc_alerts.log" | sort -rn > "$datafile"
+      rowtotal="$(wc -l < "$datafile" | tr -d ' ')"
+      eventtotal="$rowtotal"
+      iptotal="$(awk -F"$tab" '{print $3}' "$datafile" | sort -u | wc -l | tr -d ' ')"
+    else
+      awk -F'|' -v startday="$startday" -v endday="$endday" '
+        BEGIN {
+          split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
+          for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
+        }
+        function daynum(y, m, d,   era, yoe, doy, doe) {
+          if (m <= 2) y -= 1
+          era = (y >= 0 ? y : y - 399); era = int(era / 400)
+          yoe = y - era * 400
+          doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+          doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+          return era * 146097 + doe - 719468
+        }
+        {
+          if (NF < 5) next
+          datepart = $1; kindpart = $2; indpart = $3; srcpart = $4; detpart = $5
+          gsub(/^[ \t]+|[ \t]+$/, "", kindpart)
+          if (kindpart != "conntrack") next
+          gsub(/^[ \t]+|[ \t]+$/, "", datepart)
+          gsub(/^[ \t]+|[ \t]+$/, "", indpart)
+          gsub(/^[ \t]+|[ \t]+$/, "", srcpart)
+          gsub(/^[ \t]+|[ \t]+$/, "", detpart)
+          n = split(datepart, dp, " ")
+          if (n < 3) next
+          mon = monthnum[dp[1]] + 0
+          if (mon == 0) next
+          dn = daynum(dp[3] + 0, mon, dp[2] + 0)
+          if (startday != "" && (dn < startday || dn > endday)) next
+          split(indpart, parts, "->")
+          dstip = parts[2]
+          if (dstip == "") next
+          events++
+          count[dstip]++
+          if (index("," srcset[dstip] ",", "," parts[1] ",") == 0) srcset[dstip] = (srcset[dstip] == "" ? parts[1] : srcset[dstip] "," parts[1])
+          if (index("," srcfeed[dstip] ",", "," srcpart ",") == 0) srcfeed[dstip] = (srcfeed[dstip] == "" ? srcpart : srcfeed[dstip] "," srcpart)
+          if (index("," famset[dstip] ",", "," detpart ",") == 0) famset[dstip] = (famset[dstip] == "" ? detpart : famset[dstip] "," detpart)
+        }
+        END {
+          for (ip in count) print count[ip] "\t" ip "\t" srcfeed[ip] "\t" famset[ip] "\t" srcset[ip] "\t" events
+        }
+      ' "$stateroot/ioc_alerts.log" | sort -rn > "$datafile"
+      rowtotal="$(wc -l < "$datafile" | tr -d ' ')"
+      [ "$rowtotal" -gt 0 ] && eventtotal="$(awk -F"$tab" '{print $6}' "$datafile" | head -n1)"
+      iptotal="$rowtotal"
+    fi
+
+    if [ "$rowtotal" -eq 0 ]; then
+      rm -f "$datafile"
+      clear
+      echo -e "${CYellow}No conntrack threat-feed matches were logged in the selected date range (${rangelabel}).${CClear}"
+      [ "$quick" -eq 1 ] && echo -e "${CDkGray}More reporting options (date ranges, page sizes, Frequency/Date sort) are under Configuration Menu item (5) OTX AlienVault Report.${CClear}"
+      echo ""
+      read -rsp "Press any key to return to ${returnlabel}..."$'\n' -n1 key
+      [ "$quick" -eq 1 ] && break
+      continue
+    fi
+
+    page=1
+    totalpages=$(( (rowtotal + pagesize - 1) / pagesize ))
+    [ "$totalpages" -lt 1 ] && totalpages=1
+    more=1
+
+    while [ "$more" -eq 1 ]; do
+      [ "$exitallmenus" -eq 1 ] && break
+      clear
+      if [ "$page" -eq 0 ]; then
+        pagestart=1; pageend="$rowtotal"; pagelabel="all $rowtotal entries"
+      else
+        pagestart=$(( (page - 1) * pagesize + 1 ))
+        pageend=$(( page * pagesize ))
+        [ "$pageend" -gt "$rowtotal" ] && pageend="$rowtotal"
+        pagelabel="page ${page}/${totalpages}"
+      fi
+
+      echo -e "${InvGreen} ${InvDkGray}${CWhite} OTX AlienVault Threat Report                                                                                                            ${CClear}"
+      echo -e "${InvGreen} ${CClear}"
+      if [ "$sortmode" = "date" ]; then
+        echo -e "${InvGreen} ${CClear} Date range: ${CGreen}${rangelabel}${CClear}  -  ${CGreen}${eventtotal}${CClear} alert event(s) across ${CGreen}${iptotal}${CClear} distinct IP(s), newest first  -  showing ${CGreen}${pagelabel}${CClear}${CClear}"
+      else
+        echo -e "${InvGreen} ${CClear} Date range: ${CGreen}${rangelabel}${CClear}  -  ${CGreen}${rowtotal}${CClear} distinct matched IP(s), ${CGreen}${eventtotal}${CClear} alert event(s) total  -  showing ${CGreen}${pagelabel}${CClear}${CClear}"
+      fi
+      echo -e "${InvGreen} ${CClear} Available Log Days: ${CGreen}${logdays}${CClear}${CClear}"
+      echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+      if [ "$sortmode" = "date" ]; then
+        printotxreportrow "Date / Time" "IP Address" "AlienVault OTX Lookup" "Feed Match / Family" "Local Device" 1 date
+      else
+        printotxreportrow "Alerts" "IP Address" "AlienVault OTX Lookup" "Feed Match / Family" "Local Device(s)" 1
+      fi
+      echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+
+      r=0
+      if [ "$sortmode" = "date" ]; then
+        while IFS="$tab" read -r rkey rdate rip rsrc rfam rdevs; do
+          r=$((r+1))
+          [ "$r" -lt "$pagestart" ] && continue
+          [ "$r" -gt "$pageend" ] && break
+          printotxreportrow "$rdate" "$rip" "$(otxiplink "$rip")" "$rsrc / $rfam" "$rdevs" 0 date
+        done < "$datafile"
+      else
+        while IFS="$tab" read -r rcount rip rsrc rfam rdevs _; do
+          r=$((r+1))
+          [ "$r" -lt "$pagestart" ] && continue
+          [ "$r" -gt "$pageend" ] && break
+          rowcount="$(printf '%5dx' "$rcount")"
+          rdevdisp="$rdevs"
+          case "$rdevdisp" in
+            *,*)
+              devcount=$(( $(printf '%s' "$rdevdisp" | awk -F',' '{print NF}') - 1 ))
+              rdevdisp="${rdevdisp%%,*}+${devcount}"
+              ;;
+          esac
+          printotxreportrow "$rowcount" "$rip" "$(otxiplink "$rip")" "$rsrc / $rfam" "$rdevdisp" 0
+        done < "$datafile"
+      fi
+
+      echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+      [ "$quick" -eq 1 ] && echo -e "${InvGreen} ${CClear} ${CDkGray}More reporting options (date ranges, page sizes, Frequency/Date sort) are under Configuration Menu item (5) OTX AlienVault Report.${CClear}"
+      echo ""
+      if [ "$page" -eq 0 ] || [ "$page" -ge "$totalpages" ]; then
+        read -rsp "Press any key to return to ${returnlabel}..."$'\n' -n1 key
+        more=0
+      else
+        read -p "(Enter)=Next Page, (a)=Show All Remaining, (e)=Return to ${returnlabel}: " key
+        case "$key" in
+          [Aa]) page=0 ;;
+          [Ee]) more=0 ;;
+          [Ee]!) [ "$quick" -eq 0 ] && exitallmenus=1; more=0 ;;
+          *) page=$((page + 1)) ;;
+        esac
+      fi
+    done
+
+    rm -f "$datafile"
+    [ "$quick" -eq 1 ] && break
+  done
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4566,9 +5559,11 @@ schedulecron()
   wantedlines="${wantedlines}cru a IOCMONFeeds \"$feedscmd\" # iocmon-cron
 cru a IOCMONFsIntegrity \"$fsintcmd\" # iocmon-cron"
 
-  local currentlines=""
+  local currentlines="" currentsorted wantedsorted
   [ -f /jffs/scripts/services-start ] && currentlines="$(grep '# iocmon-cron' /jffs/scripts/services-start)"
-  [ "$currentlines" = "$wantedlines" ] && return
+  currentsorted="$(printf '%s\n' "$currentlines" | sort)"
+  wantedsorted="$(printf '%s\n' "$wantedlines" | sort)"
+  [ "$currentsorted" = "$wantedsorted" ] && return
 
   if [ -f /jffs/scripts/services-start ]; then
     sed -i '/# iocmon-cron/d' /jffs/scripts/services-start
@@ -4614,9 +5609,9 @@ vresetdefaults()
   clear
   echo -e "${InvGreen} ${InvDkGray}${CWhite} 5. Reset IOCMON to Default Settings                                                                                                     ${CClear}"
   echo -e "${InvGreen} ${CClear}"
-  echo -e "${InvGreen} ${CClear} This erases $config and restarts IOCMON: every toggle, threshold, and list (watched/${CClear}"
-  echo -e "${InvGreen} ${CClear} excluded paths, cron/DNS exceptions, feed sources, etc.) reverts to its shipped default,${CClear}"
-  echo -e "${InvGreen} ${CClear} and you will be walked through initial setup (drive selection) again. This is irreversible.${CClear}"
+  echo -e "${InvGreen} ${CClear} This erases $config and restarts IOCMON: every toggle, threshold, and list (watched/excluded paths, cron/DNS${CClear}"
+  echo -e "${InvGreen} ${CClear} exceptions, feed sources, etc.) reverts to its shipped default, and you will be walked through initial setup (drive selection) again.${CClear}"
+  echo -e "${InvGreen} ${CClear} This is irreversible.${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo ""
   echo -e "Do you wish to proceed?"
@@ -4626,6 +5621,8 @@ vresetdefaults()
       disablednsquerylogging
       [ "$dnsforcefilelog" -eq 1 ] && disablednsfilelogging
     fi
+    [ "$enableskynetimport" -eq 1 ] && removeskynetimports
+    [ "$logfile" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
     rm -f "$config"
     echo ""
     echo -e "${CGreen}Configuration erased. Restarting IOCMON with default settings...${CClear}"
@@ -4639,14 +5636,16 @@ vresetdefaults()
 
 applyimportedconfig()
 {
-  local importfile="$1" keepextdrivelabel="$extdrivelabel" newfswatchdirs="" entry oldlabel translated=0
+  local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
 
   . "$importfile"
 
   extdrivelabel="$keepextdrivelabel"
+  logfilepath="$keeplogfilepath"
   resolveiocmonroot
   dnslogpath=""
   dnsforcefilelog=0
+  enableskynetimport=0
 
   for entry in $fswatchdirs; do
     case "$entry" in
@@ -4774,8 +5773,8 @@ vimportexport()
     clear
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 6. Import/Export IOCMON Settings                                                                                                        ${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Export the current configuration (every toggle, threshold, and exclusion list) to a${CClear}"
-    echo -e "${InvGreen} ${CClear} portable .ioc file, or import one from a previous install or another router.${CClear}"
+    echo -e "${InvGreen} ${CClear} Export the current configuration (every toggle, threshold, and exclusion list) to a portable .ioc file, or import one from a previous${CClear}"
+    echo -e "${InvGreen} ${CClear} install or another router.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : Export current settings to a file${CClear}"
@@ -4828,11 +5827,7 @@ vupdate()
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
 
-    if [ "$track" = "0" ]; then
-      remoteversion="$DLversion"; remotelabel="STABLE"; remoteurl="$iocmonrepostable/iocmon.sh"
-    else
-      remoteversion="$Bversion"; remotelabel="BETA"; remoteurl="$iocmonrepobeta/iocmon.sh"
-    fi
+    resolveupdatesource
 
     if [ -n "$remoteversion" ] && [ "$version" = "$remoteversion" ]; then
       echo -e "You are on the latest ${CGreen}${remotelabel}${CClear} version! Download & overwrite, or change tracks?"
@@ -4929,25 +5924,21 @@ ventwarecomponents()
 
     echo -e "${InvGreen} ${InvDkGray}${CWhite} 8. Optional Entware Components                                                                                                          ${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} IOCMON runs fully in a reduced mode without any of these - each one only unlocks or${CClear}"
-    echo -e "${InvGreen} ${CClear} speeds up one specific feature. All of this requires Entware itself, already installed${CClear}"
-    echo -e "${InvGreen} ${CClear} via the AMTM utility.${CClear}"
+    echo -e "${InvGreen} ${CClear} IOCMON runs fully in a reduced mode without any of these - each one only unlocks or speeds up one specific feature. All of this requires${CClear}"
+    echo -e "${InvGreen} ${CClear} Entware itself, already installed via the AMTM utility.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : screen             : ${screenstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Runs IOCMON continuously in the background so it survives an SSH disconnect and${CClear}"
-    echo -e "${InvGreen} ${CClear}       can autostart on reboot. Required specifically for the -screen/autostart feature -${CClear}"
-    echo -e "${InvGreen} ${CClear}       without it, IOCMON only runs in the foreground while you stay attached to it.${CClear}"
+    echo -e "${InvGreen} ${CClear}       Runs IOCMON continuously in the background so it survives an SSH disconnect and can autostart on reboot. Required specifically for${CClear}"
+    echo -e "${InvGreen} ${CClear}       the -screen/autostart feature - without it, IOCMON only runs in the foreground while you stay attached to it.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : findutils          : ${findstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Full GNU find, used by the filesystem-integrity scan. Without it, IOCMON falls${CClear}"
-    echo -e "${InvGreen} ${CClear}       back to the router's own built-in BusyBox find automatically - scans still run${CClear}"
-    echo -e "${InvGreen} ${CClear}       correctly either way, this only affects how efficiently they run.${CClear}"
+    echo -e "${InvGreen} ${CClear}       Full GNU find, used by the filesystem-integrity scan. Without it, IOCMON falls back to the router's own built-in BusyBox find${CClear}"
+    echo -e "${InvGreen} ${CClear}       automatically - scans still run correctly either way, this only affects how efficiently they run.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : jq                 : ${jqstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Lets ThreatFox's authenticated API mode enrich detections with malware family/${CClear}"
-    echo -e "${InvGreen} ${CClear}       confidence data. Without it, ThreatFox still works fully via its free CSV export -${CClear}"
-    echo -e "${InvGreen} ${CClear}       you only lose that extra detail.${CClear}"
+    echo -e "${InvGreen} ${CClear}       Lets ThreatFox's authenticated API mode enrich detections with malware family/confidence data. Without it, ThreatFox still works${CClear}"
+    echo -e "${InvGreen} ${CClear}       fully via its free CSV export - you only lose that extra detail.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Install all of the above${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
@@ -4978,8 +5969,8 @@ vuninstall()
   clear
   echo -e "${InvGreen} ${InvDkGray}${CWhite} 10. Uninstall Utility                                                                                                                   ${CClear}"
   echo -e "${InvGreen} ${CClear}"
-  echo -e "${InvGreen} ${CClear} This will remove IOCMON from your router: the script, its cron jobs, autostart hook,${CClear}"
-  echo -e "${InvGreen} ${CClear} and its config/log directory. This action is irreversible.${CClear}"
+  echo -e "${InvGreen} ${CClear} This will remove IOCMON from your router: the script, its cron jobs, autostart hook, and its config/log directory. This action is${CClear}"
+  echo -e "${InvGreen} ${CClear} irreversible.${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo ""
   echo -e "Do you wish to proceed?"
@@ -4989,6 +5980,7 @@ vuninstall()
       disablednsquerylogging
       [ "$dnsforcefilelog" -eq 1 ] && disablednsfilelogging
     fi
+    [ "$enableskynetimport" -eq 1 ] && removeskynetimports
     echo -e "${CGreen}Removing scheduled cron jobs...${CClear}"
     cru d IOCMONUpdate >/dev/null 2>&1
     cru d IOCMONFeeds >/dev/null 2>&1
@@ -5047,6 +6039,7 @@ lastinputtext=""
 winchpending=0
 progressfirstdraw=0
 driveunmountedalerted=0
+skynetmissinglogged=0
 dnsquerylogwarned=0
 dnsquerymissingwarned=0
 bypassscreentimer=0
@@ -5071,6 +6064,7 @@ fi
 if [ "$1" = "amtmupdate" ]; then
     shift
     [ -f "$config" ] && . "$config"
+    resolvelogfile
     if [ "${track:-0}" = "1" ]; then
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: AMTM update request ignored - this install is subscribed to the Beta track, which AMTM only ever installs Stable for; use Configuration Menu (6) to update a Beta install instead." >> "$logfile"
       exit 0
@@ -5136,6 +6130,7 @@ if [ "$1" == "-setup" ]; then
     logoNM
     if [ -f "$config" ]; then
       . "$config"
+      resolvelogfile
     else
       initialsetup
     fi
@@ -5150,6 +6145,7 @@ if [ "$1" == "-email" ]; then
       exit 1
     fi
     . "$config"
+    resolvelogfile
     enablealertemail=1
     sendmessage 1 "test" "Test alert" "manual" "requested via -email switch"
     exit 0
@@ -5162,14 +6158,11 @@ if [ "$1" == "-autoupdate" ]; then
       exit 1
     fi
     . "$config"
+    resolvelogfile
     updatecheck
     betacheck
     if [ "$updateiocm" -eq 1 ]; then
-      if [ "$track" = "1" ]; then
-        remoteurl="$iocmonrepobeta/iocmon.sh"; remotelabel="BETA"; remoteversion="$Bversion"
-      else
-        remoteurl="$iocmonrepostable/iocmon.sh"; remotelabel="STABLE"; remoteversion="$DLversion"
-      fi
+      resolveupdatesource
       if [ -n "$remoteversion" ] && [ "$version" != "$remoteversion" ]; then
         echo > "$updatingfile"
         if downloadiocmonupdate "$remoteurl" "$remotelabel"; then
@@ -5188,6 +6181,7 @@ if [ "$1" == "-updatefeeds" ]; then
       exit 1
     fi
     . "$config"
+    resolvelogfile
     checkfeedupdate
     exit 0
 fi
@@ -5199,6 +6193,7 @@ if [ "$1" == "-fsintegrity" ]; then
       exit 1
     fi
     . "$config"
+    resolvelogfile
     fsintegritycheck
     flushemailbatch
     exit 0
@@ -5303,15 +6298,19 @@ echo "$$" > "$pidfile"
 trap 'rm -f "$pidfile"' EXIT INT TERM
 trap 'winchpending=1' WINCH
 
-# Check for and add/refresh the alias for IOCMON - rebuilt from scratch every start (tagged-line convention,
-# same as schedulecron()'s cru entries) so an older install's alias is migrated to the new form automatically.
+# Check for and add/refresh the alias for IOCMON, only touching the file if it's actually missing/stale
 [ -f /jffs/configs/profile.add ] || : > /jffs/configs/profile.add
-sed -i '/# added by iocmon/d' /jffs/configs/profile.add
-echo "alias iocmon=\"sh /jffs/scripts/iocmon.sh -screen -now\" # added by iocmon" >> /jffs/configs/profile.add
+wantedaliasline="alias iocmon=\"sh /jffs/scripts/iocmon.sh -screen -now\" # added by iocmon"
+currentaliasline="$(grep '# added by iocmon' /jffs/configs/profile.add 2>/dev/null)"
+if [ "$currentaliasline" != "$wantedaliasline" ]; then
+  sed -i '/# added by iocmon/d' /jffs/configs/profile.add
+  echo "$wantedaliasline" >> /jffs/configs/profile.add
+fi
 
 # Grab the IOCMON config file and read it in, or run interactive first-time setup (including drive selection)
 if [ -f "$config" ]; then
   . "$config"
+  resolvelogfile
 else
   initialsetup
 fi
@@ -5319,9 +6318,6 @@ fi
 # Check for updates
 updatecheck
 betacheck
-
-# -------------------------------------------------------------------------------------------------------------------------
-# renderdashboard paints the full main-screen dashboard from already-current state/globals
 
 # -------------------------------------------------------------------------------------------------------------------------
 # renderalertbanner prints the SECURITY ALERT block; called from renderdashboard at the top or the bottom.
@@ -5466,7 +6462,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
   elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear Log, [${CGreen}R${CClear}] Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
       tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
@@ -5476,7 +6472,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, [${CGreen}V${CClear}] Full Log, [${CGreen}D${CClear}] Dropbear attempts, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, [${CGreen}V${CClear}] Full Log, [${CGreen}D${CClear}] Dropbear Log, [${CGreen}H${CClear}] Hash Log, [${CGreen}N${CClear}] OTX Rpt, [${CGreen}R${CClear}] Clear this Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
       : > "$dnsnummapfile"
       dnsnum=0
@@ -5514,6 +6510,7 @@ while true; do
 
   if [ -f "$config" ]; then
     . "$config"
+    resolvelogfile
   else
     initialsetup
   fi

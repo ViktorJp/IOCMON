@@ -1,3 +1,32 @@
+v1.2.7    - (October 15, 2026)
+          - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
+            now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
+            feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
+            router, preventing clients from reaching known malicious sites or command & control servers. This
+            option is set through Advanced Settings -> 9.5.5. I've made Q-Feeds an optional component as it
+            tends to be quite large, and will add 200,000+ items to your ban list. As with any fast-changing
+            security feed, false positives are possible, so tread lightly. This additions now seems to
+            classify IOCMON as a lightweight Asus-Merlin IDS/IPS tool. Ha! :P
+          - PATCH: Added further critical watch capabilities over the sensitive information available under
+            the /etc folder, which includes passwords, groups, permissions, .pem files, etc. This is now
+            hashed separately as other critical file paths currently are, and will generate mandatory alerts
+            when something has changed. Advanced configuration menu items 9.4.14 and 9.4.15 were added,
+            giving you the ability to tweak what is or isn't being watched under /etc.
+          - PATCH: Improved reliability of the Skynet import, as I noticed it had failed to import on one of
+            the latest feed refresh cycles.
+          - PATCH: Added new Configuration Menu item 5: "OTX Alienvault Threat Report". Many thanks to
+            @Visortgw for the suggestion to add a way to provide OTX URLs to view the threat analysis using
+            an easy link to get there directly. This report also keeps track of the number of instances
+            a threat was reported, and which local device was involved.
+          - PATCH: Firmed up further fixes with the profile.add and services-start files - thanks @JB_1366!
+          - PATCH: Various spacing and other aesthetic fixes.
+          - PATCH: Added another hot key to the main UI, for [N]=OTX Report. This will generate a quick OTX
+            AlienVault Threat Report over the last 7 days, sorted by date. Thanks @visortgw for the idea!
+          - PATCH: The (5) OTX AlienVault Treat Report can now be sorted by frequency, or by date, which is
+            user-selectable from an option under this menu.
+          - PATCH: Provided for a way to move the iocmon.log from /jffs/addons/iocmon.d to the state folder
+            on your external drive, using menu item 10.6.3. Thanks for the suggestion, @JB_1366!
+
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
             also falsely detected a hashed/commented out entry that contained the same string. Built new
