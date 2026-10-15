@@ -1,4 +1,4 @@
-v1.2.6    - (TBA)
+v1.2.7    - (October 15, 2026)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
@@ -24,6 +24,8 @@ v1.2.6    - (TBA)
             AlienVault Threat Report over the last 7 days, sorted by date. Thanks @visortgw for the idea!
           - PATCH: The (5) OTX AlienVault Treat Report can now be sorted by frequency, or by date, which is
             user-selectable from an option under this menu.
+          - PATCH: Provided for a way to move the iocmon.log from /jffs/addons/iocmon.d to the state folder
+            on your external drive, using menu item 10.6.3. Thanks for the suggestion, @JB_1366!
 
 v1.1.5    - (October 11, 2026)
           - PATCH: Based on a report from @Twiglets, it seemed that the "log-queries" entry detection logic
