@@ -35,7 +35,7 @@ problem.
     exposure, WAN DNS), new port-forward/DMZ/UPnP rules, and unauthorized new cron jobs.
 - **Tells you what changed, not just that something did.** New/modified/deleted/permission-changed files are
   each logged by name and timestamp, not just a bare count.
-- **Optional automatic quarantine** for any file that matches a known-malware hash — strips the execute bit
+- **Optional automatic quarantine** for any file that matches a known-malware hash, strips the execute bit
   and renames it, never deletes, so nothing is lost by mistake.
 - **Email alerts via AMTM**, batched into a single email when several things fire in the same cycle instead of
   flooding your inbox.
@@ -72,7 +72,7 @@ sh /jffs/scripts/iocmon.sh -setup
 The first time IOCMON runs with no existing config, it walks you through a short setup wizard:
 
 - **Feed storage location.** IOCMON needs a place to store its threat-intelligence feed data and detection
-  history. If you have a USB drive already mounted (the common case), IOCMON detects it automatically — confirm
+  history. If you have a USB drive already mounted (the common case), IOCMON detects it automatically, confirm
   it if only one is found, or pick from a numbered list if you have more than one. If no drive is available,
   you can proceed in a reduced **degraded mode** (JFFS-only storage, a smaller feed set) instead.
 - Once a drive is selected (or degraded mode is confirmed), IOCMON writes its default configuration and you're
@@ -81,7 +81,7 @@ The first time IOCMON runs with no existing config, it walks you through a short
 ### 3. Start the background monitor
 
 Network/log-based detection (connections, DNS, logins, NVRAM) only runs while IOCMON's monitor loop is
-actually running — it's not something cron alone can do. Launch it in a persistent background SCREEN session:
+actually running, it's not something cron alone can do. Launch it in a persistent background SCREEN session:
 
 ```
 sh /jffs/scripts/iocmon.sh -screen -now
@@ -91,7 +91,7 @@ To have it start automatically on every reboot, turn on **Autostart** in Advance
 Behavior (see below). This hooks the router's `post-mount` script so it launches once the USB drive is ready.
 
 Two periodic tasks (feed refresh and filesystem-integrity scans) are scheduled via cron automatically whenever
-you save any setting, and run on their own independent of whether the background monitor is up — but for
+you save any setting, and run on their own independent of whether the background monitor is up, but for
 real-time detection of network traffic, DNS lookups, login attempts, and NVRAM changes, the background monitor
 needs to actually be running.
 
@@ -166,10 +166,10 @@ the reduced JFFS-only mode. Alerts from this source read `qfeeds` / `osint-ip` o
 ### Advanced Settings, by what you're trying to achieve
 
 **"I want to control email alerts"** → *Alerting & Notifications*
-Turn alert emails on/off, and cap how many can send per hour (0 = unlimited) — useful if you're worried about
+Turn alert emails on/off, and cap how many can send per hour (0 = unlimited), useful if you're worried about
 a noisy detection flooding your inbox. Choose whether the on-screen SECURITY ALERT banner appears at the top
 of the dashboard (default) or just above the timer/hotkey line at the bottom. Choose whether the banner and
-email fire for every detection (default) or only for ones that match a real IoC feed indicator — the quieter
+email fire for every detection (default) or only for ones that match a real IoC feed indicator, the quieter
 setting skips heuristic/behavioral detections (DNS tunneling, brute-force, cron/config/NVRAM changes, new
 executables) for the banner and email, while every detection still appears in the "Recent IoC Detections" log.
 
@@ -181,7 +181,7 @@ so the router stops logging every lookup. IOCMON finds where dnsmasq's queries a
 (normal syslog, a `log-facility=` file, or a syslog-ng/scribe `dnsmasq.log`); if your setup routes them somewhere
 it can't detect, set the file path yourself under *DNS query log file*. Add domains to the exceptions list for known false positives (e.g. a CDN flagged only
 because a malicious URL was once hosted there). Separately, turn on the behavioral tunneling/exfiltration
-heuristic if you want to catch unusually long or high-volume DNS query patterns — this is off by default since
+heuristic if you want to catch unusually long or high-volume DNS query patterns, this is off by default since
 it can false-positive against legitimate high-subdomain-churn services; the same exceptions list quiets it too.
 
 **"I want to catch brute-force login attempts"** → *Brute-Force Login Detection*
@@ -190,7 +190,7 @@ Two independent layers: a **burst** alert (N failed logins from one IP within a 
 staying under the burst threshold). Tune both thresholds and the sustained window size here.
 
 **"I want to watch files/folders for tampering"** → *Filesystem Integrity & Cron Watch*
-This is the largest section — how often to scan, which folders to watch, and four ways to exclude noise:
+This is the largest section, how often to scan, which folders to watch, and four ways to exclude noise:
 folder names, file extensions, individual files by absolute path, and (further down) cron jobs known to be
 re-added legitimately by another tool. Also controls the hash-size cap, automatic quarantine on a malware-hash
 match, deletion alerts on critical paths, permission-escalation alerts, and the cron-tampering diff itself.
@@ -199,7 +199,7 @@ See **Reducing False Positives**, below, for the exclusion mechanisms specifical
 **"I want to watch the router's own configuration for tampering"** → *Network & System Watches*
 Watch live connections against known-malicious IPs, watch a curated list of security-relevant NVRAM settings
 (SSH/Telnet exposure, WAN DNS), and alert on unexpected new port-forward/DMZ/UPnP rules. If a specific IP or
-CIDR range keeps matching a feed and you know it's safe, add it to the IP/CIDR Exceptions list (item 4) — unlike
+CIDR range keeps matching a feed and you know it's safe, add it to the IP/CIDR Exceptions list (item 4), unlike
 the watched/excluded folder lists under Filesystem Integrity, this is single IPs or ranges (e.g. `204.44.63.22`
 or `204.44.0.0/16`), not a hostname, and it's checked before the connection is ever compared to a feed.
 
@@ -237,7 +237,7 @@ it, and a ready-made `https://otx.alienvault.com/indicator/ip/<ip>` link you can
 AlienVault's free OTX reputation service.
 
 Item (6) on the report's own menu toggles the sort order between **Frequency** (one row per matched IP, most
-alerts first — the default) and **Date** (every individual alert occurrence listed separately, newest first, with
+alerts first, the default) and **Date** (every individual alert occurrence listed separately, newest first, with
 its own date/time and the local device involved). Your choice is saved and used for every later run.
 
 Pick a date range (today, last 7/30 days, all available history, or a custom start/end date), then how many
@@ -245,38 +245,38 @@ rows to show per page (10/20/50). The report's header also shows how many days o
 currently available in the log, so you can judge how much a given range actually covers. If the result spans
 more than one page, press Enter for the next page, `a` to show every remaining row at once, or `e` to return
 to the report's own date-range menu. Any "press any key" prompt also returns you to that same date-range menu
-rather than leaving the report entirely — use `e`/`e!` on the date-range screen itself to go back to the
+rather than leaving the report entirely, use `e`/`e!` on the date-range screen itself to go back to the
 Configuration Menu.
 
 Two things worth knowing about what the numbers mean: the count is how many distinct alert *events* IOCMON
-actually logged for that IP — not a raw packet/connection counter the way a firewall's own ban-list statistics
-are, since repeated hits on the same IP within IOCMON's own 6-hour dedup window only ever log once — so treat
+actually logged for that IP, not a raw packet/connection counter the way a firewall's own ban-list statistics
+are, since repeated hits on the same IP within IOCMON's own 6-hour dedup window only ever log once, so treat
 it as a frequency indicator, not an exact tally. And this report only ever covers *outbound* matches (a device
-here reaching out to a listed bad IP) — IOCMON's conntrack watch has no way to see unsolicited inbound traffic
+here reaching out to a listed bad IP), IOCMON's conntrack watch has no way to see unsolicited inbound traffic
 that a listed bad IP sends toward your router.
 
 ### Importing/Exporting Settings
 
-**Configuration Menu → (7) Import/Export IOCMON Settings** lets you carry your configuration — every toggle,
-threshold, and exclusion list — between routers, or keep a backup before experimenting:
+**Configuration Menu → (7) Import/Export IOCMON Settings** lets you carry your configuration, every toggle,
+threshold, and exclusion list, between routers, or keep a backup before experimenting:
 
 - **Export** writes your current settings to a plain `.ioc` file, defaulting to `<your-router's-hostname>-
   config-export.ioc` on your feed storage drive (you can type a different path/filename instead). It asks
-  separately whether to include your ThreatFox/Q-Feeds API keys — leave them out if you plan to share or store
+  separately whether to include your ThreatFox/Q-Feeds API keys, leave them out if you plan to share or store
   the file somewhere less trusted, and just re-enter them afterward under Select Feed Sources & API Keys.
 - **Import** loads a `.ioc` file and overwrites your current configuration with it, then restarts IOCMON. Your
-  feed storage drive selection is always kept as this router's own — it's never overwritten by the import file.
+  feed storage drive selection is always kept as this router's own, it's never overwritten by the import file.
   Any watched-folder path tied to the *old* router's drive label is automatically updated to this router's own
   label, and a manually-set DNS query log path is reset to auto-detect, since both are specific to the router
   that originally saved them.
-- You can also import a `.ioc` file during first-time setup, right after selecting your feed storage drive — if
+- You can also import a `.ioc` file during first-time setup, right after selecting your feed storage drive, if
   you have one, this replaces the rest of the setup wizard with your imported settings instead.
 
 ### Starting Over
 
 If your configuration has drifted somewhere you don't want, use **Configuration Menu → (6) Reset IOCMON back
 to Default Settings**. After a confirmation prompt explaining exactly what will happen, this erases the saved
-config and restarts IOCMON fresh — every toggle, threshold, and list reverts to its shipped default, and you'll
+config and restarts IOCMON fresh, every toggle, threshold, and list reverts to its shipped default, and you'll
 be walked back through the initial drive-selection setup. This cannot be undone.
 
 ### Uninstalling
