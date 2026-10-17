@@ -1,3 +1,8 @@
+v1.2.8    - (TBA)
+          - PATCH: Built in better logic to detect if an AMTM autoupdate replaced the script, and will now
+            restart the script automatically if it finds a newer version in /jffs/scripts.
+          - PATCH: Small corrections to Entware detection logic.
+
 v1.2.7    - (October 15, 2026)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
