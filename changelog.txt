@@ -1,5 +1,5 @@
 v1.3.2    - (TBA)
-          - MINOR: Added more functionality to the feeds menu (2) and enabled functionality from the AbuseIPDB
+          - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
             Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
             true positives identified by your feed lists if they are found on your conntrack, DNS and dropbear
             connections, and provide you with additional intelligence about the IP in question. This info is
