@@ -1,4 +1,10 @@
-v1.2.8    - (TBA)
+v1.3.2    - (TBA)
+          - MINOR: Added more functionality to the feeds menu (2) and enabled functionality from the AbuseIPDB
+            Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
+            true positives identified by your feed lists if they are found on your conntrack, DNS and dropbear
+            connections, and provide you with additional intelligence about the IP in question. This info is
+            added to various on-screen interfaces, logs and email alerts. Thanks to @SomewhereOverTheRainbow
+            for this suggestion!
           - PATCH: Built in better logic to detect if an AMTM autoupdate replaced the script, and will now
             restart the script automatically if it finds a newer version in /jffs/scripts.
           - PATCH: Small corrections to Entware detection logic.
