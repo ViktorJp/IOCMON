@@ -8,6 +8,7 @@ v1.3.3    - (TBA)
           - PATCH: Built in better logic to detect if an AMTM autoupdate replaced the script, and will now
             restart the script automatically if it finds a newer version in /jffs/scripts.
           - PATCH: Small corrections to Entware detection logic.
+          - PATCH: Changed some of the curl timeout values based on some feedback from @BobWadd
           - PATCH: Small revisions to the #2 Feeds & API menu, and changed some of the layout along with how
             the logic works for enabling a feed/reputation service that requires an API. Thanks @JB_1366!
             
