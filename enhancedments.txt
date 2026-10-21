@@ -4,6 +4,7 @@ To-Do:
 - Build a web interface (@AvalonOC)
 - Optionally use "9.4.14" to jump directly to that menu item, instead of having to step through 9, then 4, then 14.
 - Build integration into the AGH API to pull DNS lookup data - @mason
+- Would love to see more notification methods than just e-mail. E.g. like in connmon, at least Pushover would be really nice. Maybe you can just port that part over from connmon - @Eddga
 
 Done:
 - With the addition of Q-Feeds API, I see occasional hits identified by IP address. Please consider adding a clickable link to obtain info on the
