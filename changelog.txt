@@ -1,4 +1,4 @@
-v1.3.2    - (TBA)
+v1.3.3    - (TBA)
           - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
             Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
             true positives identified by your feed lists if they are found on your conntrack, DNS and dropbear
@@ -8,6 +8,9 @@ v1.3.2    - (TBA)
           - PATCH: Built in better logic to detect if an AMTM autoupdate replaced the script, and will now
             restart the script automatically if it finds a newer version in /jffs/scripts.
           - PATCH: Small corrections to Entware detection logic.
+          - PATCH: Small revisions to the #2 Feeds & API menu, and changed some of the layout along with how
+            the logic works for enabling a feed/reputation service that requires an API. Thanks @JB_1366!
+            
 
 v1.2.7    - (October 15, 2026)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
