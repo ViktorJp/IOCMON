@@ -1,4 +1,4 @@
-v1.3.3    - (TBA)
+v1.3.5    - (TBA)
           - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
             Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
             true positives identified by your feed lists if they are found on your conntrack, DNS and dropbear
@@ -11,7 +11,14 @@ v1.3.3    - (TBA)
           - PATCH: Changed some of the curl timeout values based on some feedback from @BobWadd
           - PATCH: Small revisions to the #2 Feeds & API menu, and changed some of the layout along with how
             the logic works for enabling a feed/reputation service that requires an API. Thanks @JB_1366!
-            
+          - PATCH: This version fixes the change that abuse.ch put into place these last few days where they
+            are now requiring an API key for their URLhaus list, available via API. The good news here is
+            that you can use the same exact API key you have for ThreatFox. Thanks to @ankhazam for bringing
+            this up!
+          - PATCH: Revamped some of the stats, giving a bit more info on what is downloaded, deduped and
+            used in the end, and making sure this all matches what goes into the log files. I know it can be
+            a bit confusing as I'm parsing large json files down to only its usable items, like ThreatFox
+            going from 40K lines down to 4K usable items.
 
 v1.2.7    - (October 15, 2026)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
