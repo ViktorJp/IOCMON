@@ -1430,6 +1430,7 @@ EOF
 $entry"
             fi
             saveconfig
+            echo ""
             echo -e "${CGreen}Exception added.${CClear}"
             sleep 1
           fi
