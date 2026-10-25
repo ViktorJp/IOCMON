@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.3.7
+# Version: 1.3.8
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-23
+# Last Updated: 2026-Oct-24
 # ============================================================================================================================
 #
 # Description:
@@ -97,7 +97,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.3.7"
+version="1.3.8"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -2586,9 +2586,9 @@ fetchfeedsource()
   local tmpfile="${rawfile}.tmp" curlrc
 
   if [ -f "$metafile" ]; then
-    curl --silent --retry 3 --connect-timeout 10 --max-time 30 -z "$metafile" -o "$tmpfile" "$url"
+    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -z "$metafile" -o "$tmpfile" "$url"
   else
-    curl --silent --retry 3 --connect-timeout 10 --max-time 30 -o "$tmpfile" "$url"
+    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -o "$tmpfile" "$url"
   fi
   curlrc=$?
 
@@ -2629,7 +2629,7 @@ fetchthreatfox()
     return 2
   fi
 
-  curl --silent --retry 2 --connect-timeout 5 --max-time 30 \
+  curl --silent --retry 2 --connect-timeout 5 --max-time 180 \
     -H "Auth-Key: $threatfoxapikey" -H "Content-Type: application/json" \
     -d '{"query":"get_iocs","days":3}' \
     -o "$tmpfile" "https://threatfox-api.abuse.ch/api/v1/"
@@ -2716,7 +2716,7 @@ fetchurlhaus()
       return 1 ;;
   esac
 
-  printf 'header = "Auth-Key: %s"\nurl = "https://urlhaus-api.abuse.ch/v1/payloads/recent/limit/1000/"\n' "$urlhausapikey" | curl --silent --retry 2 --connect-timeout 10 --max-time 60 -K - -o "$paytmp"
+  printf 'header = "Auth-Key: %s"\nurl = "https://urlhaus-api.abuse.ch/v1/payloads/recent/limit/1000/"\n' "$urlhausapikey" | curl --silent --retry 2 --connect-timeout 10 --max-time 180 -K - -o "$paytmp"
   if grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$paytmp" 2>/dev/null; then
     mv "$paytmp" "$payfile"
   else
@@ -2751,7 +2751,7 @@ fetchqfeedlist()
 {
   local feed="$1" dest="$2" kind="$3" tmp="$2.tmp" code n
 
-  code="$(printf 'user = "api_token:%s"\n' "$qfeedsapikey" | curl --silent --retry 1 --connect-timeout 10 --max-time 90 -K - -o "$tmp" -w '%{http_code}' "https://api.qfeeds.com/api.php?feed_type=${feed}&type=text&ipv6=0&download=0")"
+  code="$(printf 'user = "api_token:%s"\n' "$qfeedsapikey" | curl --silent --retry 1 --connect-timeout 10 --max-time 180 -K - -o "$tmp" -w '%{http_code}' "https://api.qfeeds.com/api.php?feed_type=${feed}&type=text&ipv6=0&download=0")"
 
   if [ "$code" != "200" ]; then
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Q-Feeds $feed download failed (HTTP ${code:-none}); keeping any previous list." >> "$logfile"
@@ -3244,7 +3244,7 @@ updatefeeds()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# checkfeedupdate is the cadence gate called every main-loop tick
+# checkfeedupdate is called every main-loop tick
 
 checkfeedupdate()
 {
@@ -3801,7 +3801,7 @@ abuseipdbquery()
     rm -f "$body" "$hdrs"
     set -- -G --data-urlencode "ipAddress=$ip" --data "maxAgeInDays=$abuseipdbmaxage"
     [ "$mode" = "verbose" ] && set -- "$@" --data "verbose"
-    code="$(printf 'header = "Key: %s"\n' "$abuseipdbapikey" | curl --silent --connect-timeout 10 --max-time 30 --max-filesize 2097152 -K - -H "Accept: application/json" -D "$hdrs" -o "$body" -w '%{http_code}' "$@" "https://api.abuseipdb.com/api/v2/check")"
+    code="$(printf 'header = "Key: %s"\n' "$abuseipdbapikey" | curl --silent --connect-timeout 10 --max-time 180 --max-filesize 2097152 -K - -H "Accept: application/json" -D "$hdrs" -o "$body" -w '%{http_code}' "$@" "https://api.abuseipdb.com/api/v2/check")"
     rc=$?
     [ "$rc" -eq 63 ] && [ "$mode" = "verbose" ] || break
   done
