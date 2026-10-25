@@ -1,16 +1,38 @@
+v1.3.8    - (October 24, 2026)
+          - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
+            Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
+            true positives identified by your feed lists if they are found on your conntrack, DNS and dropbear
+            connections, and provide you with additional intelligence about the IP in question. This info is
+            added to various on-screen interfaces, logs and email alerts. Thanks to @SomewhereOverTheRainbow
+            for this suggestion!
+          - PATCH: Built in better logic to detect if an AMTM autoupdate replaced the script, and will now
+            restart the script automatically if it finds a newer version in /jffs/scripts.
+          - PATCH: Small corrections to Entware detection logic.
+          - PATCH: Changed some of the curl timeout values based on some feedback from @BobWadd
+          - PATCH: Small revisions to the #2 Feeds & API menu, and changed some of the layout along with how
+            the logic works for enabling a feed/reputation service that requires an API. Thanks @JB_1366!
+          - PATCH: This version fixes the change that abuse.ch put into place these last few days where they
+            are now requiring an API key for their URLhaus list, available via API. The good news here is
+            that you can use the same exact API key you have for ThreatFox. Thanks to @ankhazam for bringing
+            this up!
+          - PATCH: Revamped some of the stats, giving a bit more info on what is downloaded, deduped and
+            used in the end, and making sure this all matches what goes into the log files. I know it can be
+            a bit confusing as I'm parsing large json files down to only its usable items, like ThreatFox
+            going from 40K lines down to 4K usable items.
+
 v1.2.7    - (October 15, 2026)
           - MINOR: Built an integration with @Adamm's excellent Skynet Firewall script, where IOCMON can
             now optionally upload periodic updated feed list content directly into Skynet's Ban list. This
             feature will add up-to-date security intelligence directly to your inbound/outbound flows on your
             router, preventing clients from reaching known malicious sites or command & control servers. This
-            option is set through Advanced Settings -> 9.5.5. I've made Q-Feeds an optional component as it
+            option is set through Advanced Settings -> 10.5.5. I've made Q-Feeds an optional component as it
             tends to be quite large, and will add 200,000+ items to your ban list. As with any fast-changing
             security feed, false positives are possible, so tread lightly. This additions now seems to
             classify IOCMON as a lightweight Asus-Merlin IDS/IPS tool. Ha! :P
           - PATCH: Added further critical watch capabilities over the sensitive information available under
             the /etc folder, which includes passwords, groups, permissions, .pem files, etc. This is now
             hashed separately as other critical file paths currently are, and will generate mandatory alerts
-            when something has changed. Advanced configuration menu items 9.4.14 and 9.4.15 were added,
+            when something has changed. Advanced configuration menu items 10.4.14 and 10.4.15 were added,
             giving you the ability to tweak what is or isn't being watched under /etc.
           - PATCH: Improved reliability of the Skynet import, as I noticed it had failed to import on one of
             the latest feed refresh cycles.

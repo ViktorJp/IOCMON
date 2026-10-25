@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.2.7
+# Version: 1.3.8
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-15
+# Last Updated: 2026-Oct-24
 # ============================================================================================================================
 #
 # Description:
@@ -24,7 +24,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/domains.txt                 : canonical combined domain indicator list
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/qfeeds_ips.txt/_domains.txt : Q-Feeds bare indicator lists (matched by streaming)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/hashes.txt                  : canonical combined file-hash indicator list
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads (urlhaus.raw = abuse.ch CSV export, urlhaus_payloads.raw = payload JSON)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/skynet_import.hash     : last-imported Skynet IP list hash, so an unchanged list skips the re-push
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
@@ -46,6 +46,8 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending               : pending-count + latest summary; presence = red banner up
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/reputation.log              : every AbuseIPDB reputation lookup (or skip reason) for a raised alert, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/abuseipdb_cache.db          : "ip|epoch|score|..." AbuseIPDB results reused for abuseipdbcachehrs (+ abuseipdb_usage/_block quota state)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/etc_critical_hash.db        : per-file content hash baseline for $etccriticalpaths - see checketccritical()
 #
 # Usage:
@@ -60,7 +62,7 @@
 # Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
 #   (v) view the full log behind whichever "Recent..." panel is showing   (t) simulate a detection from a real,
 #   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
-#   (d)/(o)/(h) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check
+#   (d)/(o)/(h)/(u) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check/Reputation
 #   (r) clear whichever log the "Recent..." panel is currently showing (confirmation required)
 #   (z) add a numbered "dns" entry's base domain (IoC Detections panel only) to the DNS Exceptions list
 #   (n) show a last-7-days, date-sorted OTX AlienVault Threat Report (IoC Detections panel only)
@@ -95,7 +97,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.2.7"
+version="1.3.8"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -104,7 +106,7 @@ bverpath="/jffs/addons/iocmon.d/beta.txt"  # beta-track version file
 jffslogfile="/jffs/addons/iocmon.d/iocmon.log"  # default (JFFS) activity log location
 logfile="$jffslogfile"  # main activity/alert log actually written to - resolved from logfilepath by resolvelogfile()
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
-restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate downloaded a newer version; the persistent loop restarts into it next cycle
+restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
@@ -130,14 +132,21 @@ timerloop=60                    # main loop interval, sec
 feedupdatehrs=4                 # IoC feed refresh cadence
 fsintegrityhrs=6                # filesystem baseline diff cadence (independent of timerloop)
 
-enablethreatfox=0               # enable the ThreatFox feed source
-threatfoxapikey=""              # optional - falls back to unauthenticated CSV export if empty
+enablethreatfox=0               # enable the ThreatFox feed source (needs an abuse.ch Auth-Key)
+threatfoxapikey=""              # abuse.ch Auth-Key from auth.abuse.ch (one key works for ThreatFox and URLhaus)
 enablespamhaus=1                # enable the Spamhaus DROP/EDROP feed source
 enablefeodo=1                   # enable the Feodo Tracker feed source
-enableurlhaus=1                 # enable the URLhaus feed source
+enableurlhaus=0                 # enable the URLhaus feed source (needs an abuse.ch Auth-Key)
+urlhausapikey=""                # abuse.ch Auth-Key from auth.abuse.ch (one key works for ThreatFox and URLhaus)
 enableqfeeds=0                  # enable the Q-Feeds OSINT IP/domain feed source (needs an API token)
 qfeedsapikey=""                 # Q-Feeds API token from tip.qfeeds.com (free Community license works)
 qfeedshrs=24                    # Q-Feeds refresh cadence in hours (the free feed only changes about daily)
+enableabuseipdb=0               # look up each flagged public IP in AbuseIPDB's /api/v2/check reputation endpoint (needs an API key)
+abuseipdbapikey=""              # AbuseIPDB API key from abuseipdb.com (free tier = 1,000 checks/day)
+abuseipdbcachehrs=24            # hours a cached AbuseIPDB result is reused before the same IP is looked up again
+abuseipdbmaxage=30              # AbuseIPDB maxAgeInDays - how many days of abuse reports each lookup covers (1-365)
+abuseipdbdailymax=900           # self-imposed daily AbuseIPDB lookup ceiling, kept under the plan's own daily limit
+abuseipdbcyclemax=10            # most AbuseIPDB lookups made in any one scan cycle
 
 enablednswatch=0                # tail dnsmasq log for domain matches against feed data - off by default so a fresh install doesn't start "awaiting dnsmasq setup"
 dnsexceptions=""                # space-separated domains that match a feed but never alert/email, just an INFO log line - for known false positives
@@ -372,6 +381,8 @@ ScriptUpdateFromAMTM()
     curl -fsSL "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
     DLsuccess=$?
     if [ "$DLsuccess" -eq 0 ]; then
+      touch "$restartpendingfile"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated via AMTM to v$(ondiskversion) - any running instance will restart into it." >> "$logfile"
       echo -e "${InvGreen} ${CClear} IOCMON Download/Update Success."
       echo ""
     else
@@ -393,7 +404,7 @@ downloadiocmonupdate()
     curl -fsSL "$iocmonreposcriptstable" -o "${apppath}.new"
     dlrc=$?
   else
-    curl --silent --retry 3 --connect-timeout 3 --max-time 10 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"
+    curl --silent --retry 3 --connect-timeout 10 --max-time 30 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"
     dlrc=$?
   fi
 
@@ -419,6 +430,64 @@ resolveupdatesource()
   else
     remoteversion="$DLversion"; remotelabel="STABLE"; remoteurl="$iocmonrepostable/iocmon.sh"
   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ondiskversion prints the version="..." value of the script file currently on disk (default $apppath).
+
+ondiskversion()
+{
+  sed -n 's/^version="\(.*\)"[[:space:]]*$/\1/p' "${1:-$apppath}" 2>/dev/null | head -n1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# scriptfilevalid succeeds only if $1 is a non-empty, syntactically valid IOCMON script carrying a version line.
+
+scriptfilevalid()
+{
+  [ -s "$1" ] || return 1
+  [ -n "$(ondiskversion "$1")" ] || return 1
+  sh -n "$1" >/dev/null 2>&1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# checkscriptreplaced restarts the running loop into $apppath if a restart was flagged or the on-disk version differs from this process's.
+
+checkscriptreplaced()
+{
+  local diskver reason sizebefore
+
+  [ -f "$updatingfile" ] && return 0
+  diskver="$(ondiskversion)"
+  if [ -f "$restartpendingfile" ]; then
+    reason="a newer IOCMON version was downloaded by an update"
+  elif [ -n "$diskver" ] && [ "$diskver" != "$version" ]; then
+    reason="the IOCMON script on disk was replaced (running v$version, on disk v$diskver)"
+  else
+    return 0
+  fi
+
+  sizebefore="$(wc -c < "$apppath" 2>/dev/null | tr -d ' ')"
+  sleep 3
+  [ "$(wc -c < "$apppath" 2>/dev/null | tr -d ' ')" = "$sizebefore" ] || return 0
+  if ! scriptfilevalid "$apppath"; then
+    if [ "$scriptreplacewarned" -eq 0 ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Detected that $reason, but $apppath failed validation - staying on v$version until a valid copy is in place." >> "$logfile"
+      scriptreplacewarned=1
+    fi
+    return 0
+  fi
+
+  rm -f "$restartpendingfile"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Detected that $reason - restarting into v${diskver} now." >> "$logfile"
+  clear
+  if [ "$diskver" = "$version" ]; then
+    echo -e "${CGreen}An updated copy of IOCMON v${diskver} was installed - restarting into it...${CClear}"
+  else
+    echo -e "${CGreen}IOCMON v${diskver} was installed while v$version was running - restarting into the new version...${CClear}"
+  fi
+  sleep 2
+  exec sh "$apppath" -noswitch
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -518,6 +587,7 @@ progressbaroverride()
           [Dd]) alertviewmode="dropbear"; renderdashboard;;
           [Oo]) alertviewmode="ioc"; renderdashboard;;
           [Hh]) alertviewmode="hash"; renderdashboard;;
+          [Uu]) alertviewmode="reputation"; renderdashboard;;
           [Rr]) clearcurrentlog;;
           [Rr]!) clearcurrentlognow;;
           [Zz]) addtodnsexception;;
@@ -678,7 +748,7 @@ vercompare()
 updatecheck()
 {
   UpdateNotify=0
-  curl --silent --retry 3 --connect-timeout 3 --max-time 6 --retry-delay 1 --retry-all-errors --fail "$iocmonrepostable/version.txt" -o "$dlverpath"
+  curl --silent --retry 3 --connect-timeout 10 --max-time 30 --retry-delay 1 --retry-all-errors --fail "$iocmonrepostable/version.txt" -o "$dlverpath"
 
   if [ -f "$dlverpath" ]; then
     DLversion=$(cat "$dlverpath")
@@ -698,7 +768,7 @@ updatecheck()
 betacheck()
 {
   BUpdateNotify=0
-  curl --silent --retry 3 --connect-timeout 3 --max-time 6 --retry-delay 1 --retry-all-errors --fail "$iocmonrepobeta/version.txt" -o "$bverpath"
+  curl --silent --retry 3 --connect-timeout 10 --max-time 30 --retry-delay 1 --retry-all-errors --fail "$iocmonrepobeta/version.txt" -o "$bverpath"
 
   if [ -f "$bverpath" ]; then
     Bversion=$(cat "$bverpath")
@@ -727,9 +797,16 @@ saveconfig()
     echo 'enablespamhaus='$enablespamhaus
     echo 'enablefeodo='$enablefeodo
     echo 'enableurlhaus='$enableurlhaus
+    echo 'urlhausapikey="'"$urlhausapikey"'"'
     echo 'enableqfeeds='$enableqfeeds
     echo 'qfeedsapikey="'"$qfeedsapikey"'"'
     echo 'qfeedshrs='$qfeedshrs
+    echo 'enableabuseipdb='$enableabuseipdb
+    echo 'abuseipdbapikey="'"$abuseipdbapikey"'"'
+    echo 'abuseipdbcachehrs='$abuseipdbcachehrs
+    echo 'abuseipdbmaxage='$abuseipdbmaxage
+    echo 'abuseipdbdailymax='$abuseipdbdailymax
+    echo 'abuseipdbcyclemax='$abuseipdbcyclemax
 
     echo 'enablednswatch='$enablednswatch
     echo 'dnsexceptions="'"$dnsexceptions"'"'
@@ -1057,7 +1134,7 @@ vsetup()
     echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [IOCMON Operations]                                                                                                                     ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : Select Feed Storage Location (Ext. Drive)${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources & API Keys${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources, Reputation & API Keys${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : OTX AlienVault Threat Report${CClear}"
@@ -1070,7 +1147,7 @@ vsetup()
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : Optional Entware Components${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}"; printf '(%2d)' "$advsettingsmenunum"; echo -e "${CClear} : Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : Uninstall IOCMON${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} |  ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
@@ -1304,12 +1381,14 @@ EOF
 
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(a)${CClear} : Add an exception (pick from current cron jobs)${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(b)${CClear} : Add all current cron jobs as exceptions${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(c)${CClear} : Clear all exceptions from the list${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(d)${CClear} : Delete an exception${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (a=Add, d=Delete, e=Exit): " sel
+    read -p "Please select? (a=Add, b=Add All, c=Clear All, d=Delete, e=Exit): " sel
 
     case "$sel" in
       [Aa])
@@ -1351,9 +1430,47 @@ EOF
 $entry"
             fi
             saveconfig
+            echo ""
             echo -e "${CGreen}Exception added.${CClear}"
             sleep 1
           fi
+        fi
+        ;;
+      [Bb])
+        local addall addedcount=0
+        addall="$(listlivecronjobs)"
+        echo ""
+        if [ -z "$addall" ]; then
+          echo -e "${CRed}No cron entries were found to add.${CClear}"
+        else
+          while IFS= read -r entry; do
+            [ -z "$entry" ] && continue
+            incronexceptionlist "$entry" && continue
+            if [ -z "$cronexceptions" ]; then cronexceptions="$entry"; else cronexceptions="$cronexceptions
+$entry"; fi
+            addedcount=$((addedcount+1))
+          done <<EOF
+$addall
+EOF
+          if [ "$addedcount" -gt 0 ]; then
+            saveconfig
+            echo -e "${CGreen}Added $addedcount cron entr$([ "$addedcount" -eq 1 ] && echo y || echo ies) as exceptions.${CClear}"
+          else
+            echo -e "${CYellow}Every current cron entry is already excepted.${CClear}"
+          fi
+        fi
+        sleep 2
+        ;;
+      [Cc])
+        [ "$count" -eq 0 ] && continue
+        echo ""
+        if promptyn "Remove all $count exception(s) from the list? [y/n]: "; then
+          cronexceptions=""
+          saveconfig
+          echo ""
+          echo ""
+          echo -e "${CGreen}All cron exceptions cleared.${CClear}"
+          sleep 2
         fi
         ;;
       [Dd])
@@ -1937,7 +2054,7 @@ vskynetintegration()
     echo -e "${InvGreen} ${CClear} \"IOCMON\" so they are always identifiable and can be found or removed independently of Skynet's own manual and automatic bans.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} This goes beyond Skynet's own Custom Filter URL feature: that only ever pulls one static, user-chosen list on Skynet's own schedule,${CClear}"
-    echo -e "${InvGreen} ${CClear} while this keeps IOCMON's own multi-source feed set (Feodo Tracker, Spamhaus DROP/EDROP, ThreatFox, and optionally Q-Feeds)${CClear}"
+    echo -e "${InvGreen} ${CClear} while this keeps IOCMON's own multi-source feed set (Feodo, Spamhaus, URLhaus, ThreatFox, and optionally Q-Feeds)${CClear}"
     echo -e "${InvGreen} ${CClear} continuously in sync with Skynet's live ban list. The import runs automatically every time IOCMON refreshes its threat feeds (see${CClear}"
     echo -e "${InvGreen} ${CClear} General Settings for that interval), not just once at setup.${CClear}"
     echo -e "${InvGreen} ${CClear}"
@@ -1955,7 +2072,7 @@ vskynetintegration()
 
     if skynetinstalled; then detecteddisp="${CGreen}Yes${CClear} (${skynetstoragepath})"; else detecteddisp="${CYellow}Not detected${CClear}"; fi
     echo -e "${InvGreen} ${CClear} Skynet detected: ${detecteddisp}${CClear}"
-    echo ""
+    echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Enable/Disable Skynet Firewall Import Integration" 78; echo -e ": $(booleantoyesno "$enableskynetimport")"
@@ -2168,66 +2285,231 @@ vlogfilelocation()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vfeedsources is the Feed Sources & API Keys submenu: per-source toggles and the optional ThreatFox API key.
+# feedkeycell prints the right-hand API-key cell of a menu 2 toggle row, dimmed when $4 is 0
+
+feedkeycell()
+{
+  if [ "$4" -eq 1 ]; then
+    printf '%s' "   |  ${InvDkGray}${CWhite}$1${CClear} : $(padright "$2" 19): ${CGreen}$3${CClear}"
+  else
+    printf '%s' "   |  ${CDkGray}$1${CClear} : $(padright "${CDkGray}$2${CClear}" 19): ${CDkGray}$3${CClear}"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# feedsaveconfig saves menu 2, writing any key-dependent feed as off on disk while it is switched on without a key
+
+feedsaveconfig()
+{
+  local pendqf="$enableqfeeds" pendaipdb="$enableabuseipdb" penduh="$enableurlhaus" pendtf="$enablethreatfox"
+  [ -z "$qfeedsapikey" ] && enableqfeeds=0
+  [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
+  [ -z "$urlhausapikey" ] && enableurlhaus=0
+  [ -z "$threatfoxapikey" ] && enablethreatfox=0
+  saveconfig
+  enableqfeeds="$pendqf"; enableabuseipdb="$pendaipdb"; enableurlhaus="$penduh"; enablethreatfox="$pendtf"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# feedkeylessrevert switches Q-Feeds/AbuseIPDB back off on leaving menu 2 if either was switched on but no key was entered
+
+feedkeylessrevert()
+{
+  local reverted
+  reverted="$(keylessfeeds)"
+  [ -n "$reverted" ] || return
+  [ -z "$urlhausapikey" ] && enableurlhaus=0
+  [ -z "$threatfoxapikey" ] && enablethreatfox=0
+  [ -z "$qfeedsapikey" ] && enableqfeeds=0
+  [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
+  saveconfig
+  echo ""
+  echo -e "${CYellow}$reverted left switched off - no API key was entered.${CClear}"; sleep 3
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# keylessfeeds echoes a comma-separated list of the key-dependent feeds currently switched on without a key
+
+keylessfeeds()
+{
+  local list=""
+  [ "$enableurlhaus" -eq 1 ] && [ -z "$urlhausapikey" ] && list="URLhaus"
+  [ "$enablethreatfox" -eq 1 ] && [ -z "$threatfoxapikey" ] && list="${list:+$list, }ThreatFox"
+  [ "$enableqfeeds" -eq 1 ] && [ -z "$qfeedsapikey" ] && list="${list:+$list, }Q-Feeds"
+  [ "$enableabuseipdb" -eq 1 ] && [ -z "$abuseipdbapikey" ] && list="${list:+$list, }AbuseIPDB"
+  echo "$list"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abusechkeyoffer offers to reuse the other abuse.ch feed's Auth-Key when URLhaus/ThreatFox ($1) is switched on without one
+
+abusechkeyoffer()
+{
+  local other otherkey
+  if [ "$1" = "urlhaus" ]; then
+    [ -n "$urlhausapikey" ] && return
+    other="ThreatFox"; otherkey="$threatfoxapikey"
+  else
+    [ -n "$threatfoxapikey" ] && return
+    other="URLhaus"; otherkey="$urlhausapikey"
+  fi
+  [ -n "$otherkey" ] || return
+  echo ""
+  echo -e "Your $other Auth-Key is an abuse.ch key, and one abuse.ch key works for both URLhaus and ThreatFox."
+  echo ""
+  if promptyn "Use the same key here? [y/n]: "; then
+    echo ""
+    if [ "$1" = "urlhaus" ]; then urlhausapikey="$otherkey"; else threatfoxapikey="$otherkey"; fi
+  else
+    echo ""
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# migratefeedkeys switches off, once at startup, any key-dependent feed left on without a key (e.g. URLhaus/ThreatFox from before keys were required)
+
+migratefeedkeys()
+{
+  local reverted
+  reverted="$(keylessfeeds)"
+  [ -n "$reverted" ] || return
+  [ -z "$urlhausapikey" ] && enableurlhaus=0
+  [ -z "$threatfoxapikey" ] && enablethreatfox=0
+  [ -z "$qfeedsapikey" ] && enableqfeeds=0
+  [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
+  saveconfig
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $reverted switched off - an API key is now required (abuse.ch no longer offers keyless URLhaus/ThreatFox downloads). Set it under Configuration Menu 2." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abusechemaillinks prints abuse.ch lookup links (email HTML) for an alert whose source ($3) includes urlhaus/threatfox
+
+abusechemaillinks()
+{
+  local kind="$1" indicator="$2" source="$3" detail="$4" value=""
+  case "$source" in *urlhaus*|*threatfox*) ;; *) return ;; esac
+  case "$kind" in
+    conntrack|dns) value="${indicator#*->}" ;;
+    fsintegrity) value="$(echo "$detail" | sed -n 's/^hash match \([0-9a-fA-F]*\).*/\1/p')" ;;
+  esac
+  [ -n "$value" ] || return
+  case "$source" in *urlhaus*)
+    if [ "$kind" = "fsintegrity" ]; then printf '<b>URLhaus:</b> <a href="https://urlhaus.abuse.ch/browse.php?search=%s">https://urlhaus.abuse.ch/browse.php?search=%s</a>\n' "$value" "$value"
+    else printf '<b>URLhaus:</b> <a href="https://urlhaus.abuse.ch/host/%s/">https://urlhaus.abuse.ch/host/%s/</a>\n' "$value" "$value"; fi ;;
+  esac
+  case "$source" in *threatfox*)
+    printf '<b>ThreatFox:</b> <a href="https://threatfox.abuse.ch/browse.php?search=ioc%%3A%s">https://threatfox.abuse.ch/browse.php?search=ioc%%3A%s</a>\n' "$value" "$value" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vfeedsources is the Feed Sources, Reputation & API Keys submenu: feed toggles, API keys and the AbuseIPDB reputation check.
 
 vfeedsources()
 {
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 2. Feed Sources & API Keys                                                                                                              ${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2. Feed Sources, Reputation & API Keys" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set the ThreatFox / Q-Feeds API keys (a blank${CClear}"
-    echo -e "${InvGreen} ${CClear} ThreatFox key uses its free CSV export; Q-Feeds needs a token).${CClear}"
+    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set its API key. URLhaus and ThreatFox each${CClear}"
+    echo -e "${InvGreen} ${CClear} need a free abuse.ch Auth-Key (one key from auth.abuse.ch works for both) and Q-Feeds needs a token; each key field becomes active once${CClear}"
+    echo -e "${InvGreen} ${CClear} its feed is switched on. The optional AbuseIPDB reputation check (items 11-16) looks up the public IP behind each conntrack, DNS,${CClear}"
+    echo -e "${InvGreen} ${CClear} dropbear or httpd alert as it is raised, and adds its abuse score, report history, top report categories, country, ISP and usage type${CClear}"
+    echo -e "${InvGreen} ${CClear} to the dashboard, the Reputation log ([U]), the IoC log and alert emails.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    apikeydisp="<none - using free CSV export>"
+    urlhauskeydisp="<none - required for URLhaus>"
+    [ -n "$urlhausapikey" ] && urlhauskeydisp="<set>"
+    apikeydisp="<none - required for ThreatFox>"
     [ -n "$threatfoxapikey" ] && apikeydisp="<set>"
     qfkeydisp="<none - required for Q-Feeds>"
     [ -n "$qfeedsapikey" ] && qfkeydisp="<set>"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Feodo Tracker" 30; echo -e ": $(booleantoyesno "$enablefeodo")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Spamhaus DROP/EDROP" 30; echo -e ": $(booleantoyesno "$enablespamhaus")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "URLhaus" 30; echo -e ": $(booleantoyesno "$enableurlhaus")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "ThreatFox" 30; echo -e ": $(booleantoyesno "$enablethreatfox")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "  ThreatFox API Key" 30; echo -e ": ${CGreen}${apikeydisp}${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(6)${CClear} : "; padright "Q-Feeds (OSINT IP/domain)" 30; echo -e ": $(booleantoyesno "$enableqfeeds")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(7)${CClear} : "; padright "  Q-Feeds API Key" 30; echo -e ": ${CGreen}${qfkeydisp}${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Feed refresh interval (hours)" 30; echo -e ": ${CGreen}$feedupdatehrs${CClear}"
-    menurow "(9)" "Q-Feeds refresh (hours)" "${CGreen}$qfeedshrs${CClear}" 30 "$enableqfeeds"
+    aipdbkeydisp="<none - required for AbuseIPDB>"
+    [ -n "$abuseipdbapikey" ] && aipdbkeydisp="<set>"
+    resolvestateroot
+    echo -e "${InvGreen} ${CClear} ${CWhite}Security Intelligence Feeds${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Feodo Tracker" 30; echo -e ": $(booleantoyesno "$enablefeodo")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : "; padright "Spamhaus DROP/EDROP" 30; echo -e ": $(booleantoyesno "$enablespamhaus")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : "; padright "URLhaus" 30; echo -e ": $(booleantoyesno "$enableurlhaus")$(feedkeycell "( 4)" "URLhaus API Key" "$urlhauskeydisp" "$enableurlhaus")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : "; padright "ThreatFox" 30; echo -e ": $(booleantoyesno "$enablethreatfox")$(feedkeycell "( 6)" "ThreatFox API Key" "$apikeydisp" "$enablethreatfox")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : "; padright "General Feed refresh (hours)" 30; echo -e ": ${CGreen}$feedupdatehrs${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : "; padright "Q-Feeds (OSINT IP/domain)" 30; echo -e ": $(booleantoyesno "$enableqfeeds")$(feedkeycell "( 9)" "Q-Feeds API Key" "$qfkeydisp" "$enableqfeeds")"
+    menurow "(10)" "Q-Feeds refresh (hours)" "${CGreen}$qfeedshrs${CClear}" 30 "$enableqfeeds"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Reputation Checks${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : "; padright "AbuseIPDB reputation check" 30; echo -e ": $(booleantoyesno "$enableabuseipdb")$(feedkeycell "(12)" "AbuseIPDB API Key" "$aipdbkeydisp" "$enableabuseipdb")"
+    menurow "(13)" "  Cache lifetime (hours)" "${CGreen}$abuseipdbcachehrs${CClear}" 30 "$enableabuseipdb"
+    menurow "(14)" "  Report age window (days)" "${CGreen}$abuseipdbmaxage${CClear}" 30 "$enableabuseipdb"
+    menurow "(15)" "  Daily lookup ceiling" "${CGreen}$abuseipdbdailymax${CClear}" 30 "$enableabuseipdb"
+    menurow "(16)" "  Max lookups per scan cycle" "${CGreen}$abuseipdbcyclemax${CClear}" 30 "$enableabuseipdb"
+    menurow " |--" "  Lookup(s) used today" "${CGreen}$(abuseipdbusedtoday) of ${abuseipdbdailymax}${CClear}" 30 "$enableabuseipdb"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Exit${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-9, e=Exit): " selfeed
+    read -p "Please select? (1-16, e=Exit): " selfeed
     case "$selfeed" in
-      1) if [ "$enablefeodo" -eq 1 ]; then enablefeodo=0; else enablefeodo=1; fi; saveconfig ;;
-      2) if [ "$enablespamhaus" -eq 1 ]; then enablespamhaus=0; else enablespamhaus=1; fi; saveconfig ;;
-      3) if [ "$enableurlhaus" -eq 1 ]; then enableurlhaus=0; else enableurlhaus=1; fi; saveconfig ;;
-      4) if [ "$enablethreatfox" -eq 1 ]; then enablethreatfox=0; else enablethreatfox=1; fi; saveconfig ;;
-      5) read -p "Enter ThreatFox API key (blank to clear): " threatfoxapikey; saveconfig ;;
-      6) if [ "$enableqfeeds" -eq 1 ]; then
-           enableqfeeds=0; qfeedsclearfiles
-         elif [ -z "$qfeedsapikey" ]; then
-           echo -e "${CRed}Q-Feeds needs an API token - set it first (item 7).${CClear}"; sleep 3
-         else
-           enableqfeeds=1
+      1) if [ "$enablefeodo" -eq 1 ]; then enablefeodo=0; else enablefeodo=1; fi; feedsaveconfig ;;
+      2) if [ "$enablespamhaus" -eq 1 ]; then enablespamhaus=0; else enablespamhaus=1; fi; feedsaveconfig ;;
+      3) if [ "$enableurlhaus" -eq 1 ]; then enableurlhaus=0; else enableurlhaus=1; abusechkeyoffer urlhaus; fi; feedsaveconfig ;;
+      4) [ "$enableurlhaus" -eq 1 ] && { echo ""; read -p "Enter URLhaus (abuse.ch) Auth-Key (blank to clear): " urlhausapikey
+         if [ -z "$urlhausapikey" ]; then
+           enableurlhaus=0
+           echo ""
+           echo -e "${CYellow}Key cleared - URLhaus has been switched off.${CClear}"; sleep 3
          fi
-         saveconfig ;;
-      7) read -p "Enter Q-Feeds API token (blank to clear): " qfeedsapikey
-         if [ -z "$qfeedsapikey" ] && [ "$enableqfeeds" -eq 1 ]; then
+         feedsaveconfig; } ;;
+      5) if [ "$enablethreatfox" -eq 1 ]; then enablethreatfox=0; else enablethreatfox=1; abusechkeyoffer threatfox; fi; feedsaveconfig ;;
+      6) [ "$enablethreatfox" -eq 1 ] && { echo ""; read -p "Enter ThreatFox (abuse.ch) Auth-Key (blank to clear): " threatfoxapikey
+         if [ -z "$threatfoxapikey" ]; then
+           enablethreatfox=0
+           echo ""
+           echo -e "${CYellow}Key cleared - ThreatFox has been switched off.${CClear}"; sleep 3
+         fi
+         feedsaveconfig; } ;;
+      7) echo ""; echo -e "Current: ${CGreen}${feedupdatehrs}${CClear}"
+         read -p "New feed refresh interval in hours (>=1, blank to keep current): " val
+         [ -n "$val" ] && { validateint "$val" 1 && feedupdatehrs="$val" && feedsaveconfig; } ;;
+      8) if [ "$enableqfeeds" -eq 1 ]; then enableqfeeds=0; qfeedsclearfiles; else enableqfeeds=1; fi
+         feedsaveconfig ;;
+      9) [ "$enableqfeeds" -eq 1 ] && { echo ""; read -p "Enter Q-Feeds API token (blank to clear): " qfeedsapikey
+         if [ -z "$qfeedsapikey" ]; then
            enableqfeeds=0; qfeedsclearfiles
+           echo ""
            echo -e "${CYellow}Token cleared - Q-Feeds has been switched off.${CClear}"; sleep 3
          fi
-         saveconfig ;;
-      8) echo -e "Current: ${CGreen}${feedupdatehrs}${CClear}"
-         read -p "New feed refresh interval in hours (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && feedupdatehrs="$val" && saveconfig; } ;;
-      9) [ "$enableqfeeds" -eq 1 ] && { echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
-         read -p "New Q-Feeds refresh interval in hours (>=1, blank to keep current): " val
-         [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && saveconfig; }; } ;;
-      [Ee]) break ;;
-      [Ee]!) exitallmenus=1; break ;;
+         feedsaveconfig; } ;;
+      10) [ "$enableqfeeds" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
+          read -p "New Q-Feeds refresh interval in hours (>=1, blank to keep current): " val
+          [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && feedsaveconfig; }; } ;;
+      11) if [ "$enableabuseipdb" -eq 1 ]; then enableabuseipdb=0; else enableabuseipdb=1; fi
+          feedsaveconfig ;;
+      12) [ "$enableabuseipdb" -eq 1 ] && { echo ""; read -p "Enter AbuseIPDB API key (blank to clear): " abuseipdbapikey
+          if [ -z "$abuseipdbapikey" ]; then
+            enableabuseipdb=0
+            echo ""
+            echo -e "${CYellow}Key cleared - the AbuseIPDB reputation check has been switched off.${CClear}"; sleep 3
+          fi
+          [ -n "$stateroot" ] && rm -f "$stateroot/abuseipdb_block"
+          feedsaveconfig; } ;;
+      13) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcachehrs}${CClear}"
+          read -p "Hours to reuse a cached AbuseIPDB result before looking that IP up again (>=1, blank to keep current): " val
+          [ -n "$val" ] && { validateint "$val" 1 && abuseipdbcachehrs="$val" && feedsaveconfig; }; } ;;
+      14) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbmaxage}${CClear}"
+          read -p "Days of AbuseIPDB reports each lookup covers (1-365, blank to keep current): " val
+          [ -n "$val" ] && { validateint "$val" 1 && [ "$val" -le 365 ] && abuseipdbmaxage="$val" && feedsaveconfig; }; } ;;
+      15) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbdailymax}${CClear}"
+          read -p "Most AbuseIPDB lookups per day (>=1, keep it below your plan's limit - free = 1000, blank to keep current): " val
+          [ -n "$val" ] && { validateint "$val" 1 && abuseipdbdailymax="$val" && feedsaveconfig; }; } ;;
+      16) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcyclemax}${CClear}"
+          read -p "Most AbuseIPDB lookups in a single scan cycle (>=1, blank to keep current): " val
+          [ -n "$val" ] && { validateint "$val" 1 && abuseipdbcyclemax="$val" && feedsaveconfig; }; } ;;
+      [Ee]) feedkeylessrevert; break ;;
+      [Ee]!) feedkeylessrevert; exitallmenus=1; break ;;
       *) ;;
     esac
   done
@@ -2304,9 +2586,9 @@ fetchfeedsource()
   local tmpfile="${rawfile}.tmp" curlrc
 
   if [ -f "$metafile" ]; then
-    curl --silent --retry 2 --connect-timeout 5 --max-time 30 -z "$metafile" -o "$tmpfile" "$url"
+    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -z "$metafile" -o "$tmpfile" "$url"
   else
-    curl --silent --retry 2 --connect-timeout 5 --max-time 30 -o "$tmpfile" "$url"
+    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -o "$tmpfile" "$url"
   fi
   curlrc=$?
 
@@ -2320,6 +2602,7 @@ fetchfeedsource()
     rm -f "$tmpfile"
     if [ -s "$rawfile" ]; then
       touch "$metafile"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $name feed unchanged since the last fetch ($(wc -l < "$rawfile" | tr -d ' ') lines kept)." >> "$logfile"
       return 0
     else
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: $name feed returned no content and no prior cache exists." >> "$logfile"
@@ -2334,39 +2617,33 @@ fetchfeedsource()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# fetchthreatfox has two transports fetchfeedsource can't handle: authenticated JSON (key + jq) or free CSV export.
+# fetchthreatfox downloads ThreatFox's authenticated get_iocs JSON (an abuse.ch Auth-Key is required; jq is optional).
 
 fetchthreatfox()
 {
   local rawfile="$feedsroot/threatfox.raw" metafile="$feedsroot/meta/threatfox.meta"
-  local modefile="$feedsroot/meta/threatfox.mode" tmpfile="$rawfile.tmp" curlrc mode
+  local modefile="$feedsroot/meta/threatfox.mode" tmpfile="$rawfile.tmp" curlrc
 
-  if [ -n "$threatfoxapikey" ] && which jq >/dev/null 2>&1; then
-    mode="api"
-    curl --silent --retry 2 --connect-timeout 5 --max-time 30 \
-      -H "Auth-Key: $threatfoxapikey" -H "Content-Type: application/json" \
-      -d '{"query":"get_iocs","days":3}' \
-      -o "$tmpfile" "https://threatfox-api.abuse.ch/api/v1/"
-    curlrc=$?
-  else
-    mode="csv"
-    if [ -f "$metafile" ]; then
-      curl --silent --retry 2 --connect-timeout 5 --max-time 30 -z "$metafile" -o "$tmpfile" "https://threatfox.abuse.ch/export/csv/recent/"
-    else
-      curl --silent --retry 2 --connect-timeout 5 --max-time 30 -o "$tmpfile" "https://threatfox.abuse.ch/export/csv/recent/"
-    fi
-    curlrc=$?
+  if [ -z "$threatfoxapikey" ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: ThreatFox is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
+    return 2
   fi
 
+  curl --silent --retry 2 --connect-timeout 5 --max-time 180 \
+    -H "Auth-Key: $threatfoxapikey" -H "Content-Type: application/json" \
+    -d '{"query":"get_iocs","days":3}' \
+    -o "$tmpfile" "https://threatfox-api.abuse.ch/api/v1/"
+  curlrc=$?
+
   if [ "$curlrc" -ne 0 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download ThreatFox feed ($mode mode) - curl exit $curlrc." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download ThreatFox feed - curl exit $curlrc." >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
 
   if [ ! -s "$tmpfile" ]; then
     rm -f "$tmpfile"
-    if [ -s "$rawfile" ]; then
+    if [ -s "$rawfile" ] && [ "$(cat "$modefile" 2>/dev/null)" = "api" ]; then
       touch "$metafile"
       return 0
     else
@@ -2375,17 +2652,96 @@ fetchthreatfox()
     fi
   fi
 
-  if [ "$mode" = "api" ] && ! grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$tmpfile"; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: ThreatFox API returned an unexpected response (bad key or rate limit)." >> "$logfile"
+  if ! grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$tmpfile"; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: ThreatFox API returned an unexpected response (bad Auth-Key or rate limit): $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
 
   mv "$tmpfile" "$rawfile"
-  echo "$mode" > "$modefile"
+  echo "api" > "$modefile"
   touch "$metafile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ThreatFox feed updated ($mode mode, $(wc -l < "$rawfile" | tr -d ' ') lines)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ThreatFox feed updated ($(grep -o '"ioc_type"' "$rawfile" | wc -l | tr -d ' ') IOC records)." >> "$logfile"
   return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# fetchurlhaus downloads URLhaus's authenticated 30-day CSV export plus its recent-payloads JSON (malware file hashes).
+
+fetchurlhaus()
+{
+  local rawfile="$feedsroot/urlhaus.raw" metafile="$feedsroot/meta/urlhaus.meta" tmpfile="$feedsroot/urlhaus.raw.tmp"
+  local payfile="$feedsroot/urlhaus_payloads.raw" paytmp="$feedsroot/urlhaus_payloads.raw.tmp" code curlrc
+
+  if [ -z "$urlhausapikey" ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: URLhaus is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
+    return 2
+  fi
+
+  if [ -f "$metafile" ] && grep -q '^"[0-9]' "$rawfile" 2>/dev/null; then
+    code="$(printf 'url = "https://urlhaus-api.abuse.ch/v2/files/exports/%s/recent.csv"\n' "$urlhausapikey" | curl --silent --retry 3 --connect-timeout 10 --max-time 180 -K - -z "$metafile" -o "$tmpfile" -w '%{http_code}')"
+  else
+    code="$(printf 'url = "https://urlhaus-api.abuse.ch/v2/files/exports/%s/recent.csv"\n' "$urlhausapikey" | curl --silent --retry 3 --connect-timeout 10 --max-time 180 -K - -o "$tmpfile" -w '%{http_code}')"
+  fi
+  curlrc=$?
+
+  if [ "$curlrc" -ne 0 ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download the URLhaus export - curl exit $curlrc." >> "$logfile"
+    rm -f "$tmpfile"
+    return 1
+  fi
+
+  case "$code" in
+    304) rm -f "$tmpfile"; touch "$metafile"; urlhauslogstate="unchanged since the last fetch" ;;
+    200)
+      if [ "$(head -c 2 "$tmpfile")" = "PK" ] && which unzip >/dev/null 2>&1; then
+        unzip -p "$tmpfile" > "${tmpfile}.csv" 2>/dev/null; mv "${tmpfile}.csv" "$tmpfile"
+      fi
+      if grep -q '^"[0-9]' "$tmpfile" 2>/dev/null; then
+        mv "$tmpfile" "$rawfile"; touch "$metafile"; urlhauslogstate="updated"
+      elif [ ! -s "$tmpfile" ] && grep -q '^"[0-9]' "$rawfile" 2>/dev/null; then
+        rm -f "$tmpfile"; touch "$metafile"; urlhauslogstate="unchanged since the last fetch"
+      else
+        echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: The URLhaus export was not in the expected CSV format: $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
+        rm -f "$tmpfile"
+        return 1
+      fi ;;
+    401|403)
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: URLhaus rejected the Auth-Key (HTTP $code) - check it under Configuration Menu 2, item 4." >> "$logfile"
+      rm -f "$tmpfile"
+      return 1 ;;
+    *)
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: The URLhaus export returned HTTP ${code:-000}: $(head -c 200 "$tmpfile" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
+      rm -f "$tmpfile"
+      return 1 ;;
+  esac
+
+  printf 'header = "Auth-Key: %s"\nurl = "https://urlhaus-api.abuse.ch/v1/payloads/recent/limit/1000/"\n' "$urlhausapikey" | curl --silent --retry 2 --connect-timeout 10 --max-time 180 -K - -o "$paytmp"
+  if grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$paytmp" 2>/dev/null; then
+    mv "$paytmp" "$payfile"
+  else
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: The URLhaus recent-payloads query failed; keeping the previous payload hash list: $(head -c 200 "$paytmp" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
+    rm -f "$paytmp"
+  fi
+
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# threatfoxtsv prints ThreatFox's get_iocs JSON ($1) as "ioc<TAB>type<TAB>malware<TAB>confidence<TAB>threat_type<TAB>tags" lines, via jq or awk.
+
+threatfoxtsv()
+{
+  if which jq >/dev/null 2>&1; then
+    jq -r 'if .query_status=="ok" then (.data[]? | [(.ioc // ""), (.ioc_type // ""), (.malware_printable // ""), (.confidence_level // ""), (.threat_type // ""), ((.tags // []) | join(" "))] | @tsv) else empty end' "$1" 2>/dev/null
+  else
+    awk -v RS='}' '
+      function jv(k,  r) { if (match($0, "\""k"\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) { r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*"/, "", r); sub(/"$/, "", r); gsub("\\\\/", "/", r); return r } return "" }
+      function jn(k,  r) { if (match($0, "\""k"\"[[:space:]]*:[[:space:]]*[0-9]+")) { r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*/, "", r); return r } return "" }
+      function jt(  r) { if (match($0, /"tags"[[:space:]]*:[[:space:]]*\[[^]]*\]/)) { r = substr($0, RSTART, RLENGTH); sub(/^[^[]*\[/, "", r); sub(/\]$/, "", r); gsub(/"/, "", r); gsub(/[[:space:]]*,[[:space:]]*/, " ", r); gsub(/^[[:space:]]+|[[:space:]]+$/, "", r); return r } return "" }
+      { v = jv("ioc"); t = jv("ioc_type"); if (v == "" || t == "") next; printf "%s\t%s\t%s\t%s\t%s\t%s\n", v, t, jv("malware_printable"), jn("confidence_level"), jv("threat_type"), jt() }
+    ' "$1"
+  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2395,7 +2751,7 @@ fetchqfeedlist()
 {
   local feed="$1" dest="$2" kind="$3" tmp="$2.tmp" code n
 
-  code="$(printf 'user = "api_token:%s"\n' "$qfeedsapikey" | curl --silent --retry 1 --connect-timeout 5 --max-time 90 -K - -o "$tmp" -w '%{http_code}' "https://api.qfeeds.com/api.php?feed_type=${feed}&type=text&ipv6=0&download=0")"
+  code="$(printf 'user = "api_token:%s"\n' "$qfeedsapikey" | curl --silent --retry 1 --connect-timeout 10 --max-time 180 -K - -o "$tmp" -w '%{http_code}' "https://api.qfeeds.com/api.php?feed_type=${feed}&type=text&ipv6=0&download=0")"
 
   if [ "$code" != "200" ]; then
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Q-Feeds $feed download failed (HTTP ${code:-none}); keeping any previous list." >> "$logfile"
@@ -2499,74 +2855,94 @@ dedupindicators()
 normalizefeeds()
 {
   local tmpips="$feedsroot/ips.txt.tmp" tmpdomains="$feedsroot/domains.txt.tmp" tmphashes="$feedsroot/hashes.txt.tmp"
-  threatfoxskippedcount=0
+  threatfoxskippedcount=0; urlhauskeptcount=0; urlhauspayloadcount=0
 
   : > "$tmpips"
   : > "$tmpdomains"
   : > "$tmphashes"
 
-  if [ -s "$feedsroot/feodo.raw" ]; then
+  if [ "$enablefeodo" -eq 1 ] && [ -s "$feedsroot/feodo.raw" ]; then
     awk '!/^#/ && NF {print $1"|feodo|botnet-c2"}' "$feedsroot/feodo.raw" >> "$tmpips"
   fi
 
   if [ "$feedsdegraded" -eq 0 ]; then
-    if [ -s "$feedsroot/spamhaus_drop.raw" ]; then
+    if [ "$enablespamhaus" -eq 1 ] && [ -s "$feedsroot/spamhaus_drop.raw" ]; then
       awk '!/^;/ && NF {print $1"|spamhaus-drop|netblock"}' "$feedsroot/spamhaus_drop.raw" >> "$tmpips"
     fi
-    if [ -s "$feedsroot/spamhaus_edrop.raw" ]; then
+    if [ "$enablespamhaus" -eq 1 ] && [ -s "$feedsroot/spamhaus_edrop.raw" ]; then
       awk '!/^;/ && NF {print $1"|spamhaus-edrop|netblock"}' "$feedsroot/spamhaus_edrop.raw" >> "$tmpips"
     fi
 
-    if [ -s "$feedsroot/urlhaus.raw" ]; then
-      awk '!/^#/ && NF>=2 {print $2"|urlhaus|malware-distribution"}' "$feedsroot/urlhaus.raw" >> "$tmpdomains"
+    if [ "$enableurlhaus" -eq 1 ] && grep -q '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null; then
+      inlinestatus "Normalizing URLhaus"
+      urlhauskeptcount="$(awk -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v today="$(date +'%Y %m %d')" '
+        function dn(y, m, d,  era, yoe, doy) { if (m <= 2) y--; era = int((y >= 0 ? y : y - 399) / 400); yoe = y - era * 400; doy = int((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + d - 1; return era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy }
+        BEGIN { split(today, t, " "); now = dn(t[1] + 0, t[2] + 0, t[3] + 0) }
+        /^"[0-9]/ {
+          line = $0; sub(/\r$/, "", line); sub(/^"/, "", line); sub(/"$/, "", line)
+          if (split(line, f, /","/) < 7) next
+          if (f[4] != "online" && now - dn(substr(f[2], 1, 4) + 0, substr(f[2], 6, 2) + 0, substr(f[2], 9, 2) + 0) > 2) next
+          host = f[3]; sub(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", host); sub(/[\/?#].*$/, "", host); sub(/^.*@/, "", host)
+          if (host ~ /^\[/) next
+          sub(/:[0-9]+$/, "", host); host = tolower(host)
+          if (host == "") next
+          if (!(host in cnt)) order[++hn] = host
+          cnt[host]++
+          if (f[6] != "" && index(" "thr[host]" ", " "f[6]" ") == 0) thr[host] = (thr[host] == "" ? f[6] : thr[host]" "f[6])
+          nt = split(f[7], tg, ",")
+          for (i = 1; i <= nt; i++) { g = tg[i]; gsub(/^ +| +$|\|/, "", g); if (g != "" && g != "None" && ntag[host] < 6 && index(" "tags[host]" ", " "g" ") == 0) { tags[host] = (tags[host] == "" ? g : tags[host]" "g); ntag[host]++ } }
+        }
+        END {
+          for (i = 1; i <= hn; i++) {
+            h = order[i]; fam = (thr[h] != "" ? thr[h] : "malware_download")"; "cnt[h]" URL(s)"
+            if (tags[h] != "") fam = fam"; tags: "tags[h]
+            if (h ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print h"|urlhaus|"fam >> ipsout; else print h"|urlhaus|"fam >> domainsout
+          }
+          print hn + 0
+        }' "$feedsroot/urlhaus.raw")"
     fi
 
-    if [ -s "$feedsroot/threatfox.raw" ]; then
-      local tfmode="csv"
-      [ -f "$feedsroot/meta/threatfox.mode" ] && tfmode="$(cat "$feedsroot/meta/threatfox.mode" 2>/dev/null)"
+    if [ "$enableurlhaus" -eq 1 ] && [ -s "$feedsroot/urlhaus_payloads.raw" ]; then
+      urlhauspayloadcount="$(awk -v RS='}' -v hashesout="$tmphashes" '
+        function jv(k,  r) { if (match($0, "\""k"\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) { r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*"/, "", r); sub(/"$/, "", r); return r } return "" }
+        {
+          sha = jv("sha256_hash"); if (sha == "") next
+          md5 = jv("md5_hash"); sig = jv("signature"); ft = jv("file_type")
+          fam = (sig != "" ? sig : "malware payload"); if (ft != "") fam = fam" ("ft" file)"; gsub(/\|/, "/", fam)
+          print tolower(sha)"|urlhaus|"fam >> hashesout; if (md5 != "") print tolower(md5)"|urlhaus|"fam >> hashesout
+          n++
+        }
+        END { print n + 0 }' "$feedsroot/urlhaus_payloads.raw")"
+    fi
 
+    if [ -n "$urlhauslogstate" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: URLhaus feed $urlhauslogstate ($(grep -c '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ') URL records -> ${urlhauskeptcount:-0} active host(s), online or added in the last 2 days; ${urlhauspayloadcount:-0} payload(s))." >> "$logfile"
+      urlhauslogstate=""
+    fi
+
+    if [ "$enablethreatfox" -eq 1 ] && [ -s "$feedsroot/threatfox.raw" ] && [ "$(cat "$feedsroot/meta/threatfox.mode" 2>/dev/null)" = "api" ]; then
       inlinestatus "Normalizing ThreatFox"
-      if [ "$tfmode" = "api" ] && which jq >/dev/null 2>&1; then
-        threatfoxskippedcount="$(jq -r 'if .query_status=="ok" then (.data[]? | [(.ioc // ""), (.ioc_type // ""), (.malware_printable // ""), (.confidence_level // "")] | @tsv) else empty end' "$feedsroot/threatfox.raw" 2>/dev/null | \
-          awk -F'\t' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
-            {
-              val=$1; typ=$2; mal=$3; conf=$4
-              if (val=="" || typ=="") next
-              if (mal != "") { fam = (conf != "") ? mal" (confidence: "conf")" : mal } else { fam = "" }
-              if (typ=="ip:port") { sub(/:[0-9]+$/,"",val); if (fam=="") fam="ip"; print val"|threatfox|"fam >> ipsout }
-              else if (typ=="domain") { if (fam=="") fam="domain"; print val"|threatfox|"fam >> domainsout }
-              else if (typ=="url") {
-                host=val
-                sub(/^[A-Za-z]+:\/\//,"",host)
-                sub(/[\/:?].*$/,"",host)
-                if (fam=="") fam="url-host"
-                if (host != "") print host"|threatfox|"fam >> domainsout
-                else skip++
-              }
-              else if (typ ~ /_hash$/) { if (fam=="") fam=typ; print val"|threatfox|"fam >> hashesout }
-              else { skip++ }
+      threatfoxskippedcount="$(threatfoxtsv "$feedsroot/threatfox.raw" | \
+        awk -F'\t' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
+          {
+            val = $1; typ = $2; mal = $3; conf = $4; tt = $5; tags = $6
+            if (val == "" || typ == "") next
+            extra = tt
+            if (conf != "") extra = (extra != "" ? extra"; " : "")"confidence: "conf
+            if (tags != "") extra = (extra != "" ? extra"; " : "")"tags: "tags
+            if (typ == "ip:port") { sub(/:[0-9]+$/, "", val); out = ipsout; base = "ip" }
+            else if (typ == "domain") { out = domainsout; base = "domain" }
+            else if (typ == "url") {
+              sub(/^[A-Za-z]+:\/\//, "", val); sub(/[\/?#].*$/, "", val); sub(/:[0-9]+$/, "", val)
+              if (val == "") { skip++; next }
+              out = (val ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) ? ipsout : domainsout; base = "url-host"
             }
-            END { print skip+0 }')"
-      else
-        threatfoxskippedcount="$(awk -F',' -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v hashesout="$tmphashes" '
-          !/^#/ && NF>=4 {
-            val=$3; typ=$4
-            gsub(/"/,"",val); gsub(/"/,"",typ)
-            gsub(/^[ \t\r]+|[ \t\r]+$/,"",val); gsub(/^[ \t\r]+|[ \t\r]+$/,"",typ)
-            if (typ=="ip:port") { sub(/:[0-9]+$/,"",val); print val"|threatfox|ip" >> ipsout }
-            else if (typ=="domain") { print val"|threatfox|domain" >> domainsout }
-            else if (typ=="url") {
-              host=val
-              sub(/^[A-Za-z]+:\/\//,"",host)
-              sub(/[\/:?].*$/,"",host)
-              if (host != "") print host"|threatfox|url-host" >> domainsout
-              else skip++
-            }
-            else if (typ ~ /_hash$/) { print val"|threatfox|"typ >> hashesout }
-            else { skip++ }
+            else if (typ ~ /_hash$/) { out = hashesout; base = typ }
+            else { skip++; next }
+            fam = (mal != "" ? mal : base); if (extra != "") fam = fam" ("extra")"; gsub(/\|/, "/", fam)
+            print val"|threatfox|"fam >> out
           }
-          END { print skip+0 }' "$feedsroot/threatfox.raw")"
-      fi
+          END { print skip+0 }')"
     fi
   fi
 
@@ -2806,24 +3182,22 @@ updatefeeds()
 
     if [ "$enableurlhaus" -eq 1 ]; then
       inlinestatus "URLhaus: fetching"
-      if fetchfeedsource "URLhaus" "https://urlhaus.abuse.ch/downloads/hostfile/" "$feedsroot/urlhaus.raw" "$feedsroot/meta/urlhaus.meta"; then
-        okcount=$((okcount+1))
-        echo -e "\33[2K\r  ${CGreen}*${CClear} URLhaus: fetched ${CGreen}$(wc -l < "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ')${CClear} malicious hosts"
-      else
-        failcount=$((failcount+1))
-        echo -e "\33[2K\r  ${CRed}*${CClear} URLhaus: fetch failed (see log)"
-      fi
+      fetchurlhaus; urc=$?
+      case "$urc" in
+        0) okcount=$((okcount+1)); echo -e "\33[2K\r  ${CGreen}*${CClear} URLhaus: fetched ${CGreen}$(grep -c '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null)${CClear} malware URL record(s) and ${CGreen}$(grep -o '"sha256_hash"' "$feedsroot/urlhaus_payloads.raw" 2>/dev/null | wc -l | tr -d ' ')${CClear} payload record(s)" ;;
+        2) echo -e "\33[2K\r  ${CYellow}*${CClear} URLhaus: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 4)" ;;
+        *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} URLhaus: fetch failed (see log)" ;;
+      esac
     fi
 
     if [ "$enablethreatfox" -eq 1 ]; then
       inlinestatus "ThreatFox: fetching"
-      if fetchthreatfox; then
-        okcount=$((okcount+1))
-        echo -e "\33[2K\r  ${CGreen}*${CClear} ThreatFox: fetched ${CGreen}$(wc -l < "$feedsroot/threatfox.raw" 2>/dev/null | tr -d ' ')${CClear} raw IOC records"
-      else
-        failcount=$((failcount+1))
-        echo -e "\33[2K\r  ${CRed}*${CClear} ThreatFox: fetch failed (see log)"
-      fi
+      fetchthreatfox; trc=$?
+      case "$trc" in
+        0) okcount=$((okcount+1)); echo -e "\33[2K\r  ${CGreen}*${CClear} ThreatFox: fetched ${CGreen}$(grep -o '"ioc_type"' "$feedsroot/threatfox.raw" 2>/dev/null | wc -l | tr -d ' ')${CClear} IOC records" ;;
+        2) echo -e "\33[2K\r  ${CYellow}*${CClear} ThreatFox: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 6)" ;;
+        *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} ThreatFox: fetch failed (see log)" ;;
+      esac
     fi
 
     if [ "$enableqfeeds" -eq 1 ]; then
@@ -2860,6 +3234,9 @@ updatefeeds()
   if [ "$qfeedstotal" -gt 0 ]; then
     echo -e "  ${CGreen}*${CClear} Plus ${CGreen}${qfeedstotal}${CClear} Q-Feeds indicator(s) kept separately (not deduped) - ${CGreen}$((ipscount + domainscount + hashescount + qfeedstotal))${CClear} total indicator(s) active for conntrack/DNS matching and Skynet import"
   fi
+  if [ "${urlhauskeptcount:-0}" -gt 0 ] || [ "${urlhauspayloadcount:-0}" -gt 0 ]; then
+    echo -e "  ${CGreen}*${CClear} URLhaus: ${CGreen}${urlhauskeptcount:-0}${CClear} host(s) kept (online, or added in the last 2 days) and ${CGreen}${urlhauspayloadcount:-0}${CClear} payload hash pair(s)"
+  fi
   if [ "${threatfoxskippedcount:-0}" -gt 0 ]; then
     echo -e "  ${CYellow}*${CClear} ThreatFox: ${CYellow}${threatfoxskippedcount}${CClear} raw record(s) skipped (unsupported indicator type, e.g. ja3/tag-only entries)"
   fi
@@ -2867,7 +3244,7 @@ updatefeeds()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# checkfeedupdate is the cadence gate called every main-loop tick
+# checkfeedupdate is called every main-loop tick
 
 checkfeedupdate()
 {
@@ -3106,7 +3483,7 @@ loadcemlibrary()
 
 sendmessage()
 {
-  local success="$1" kind="$2" indicator="$3" source="$4" detail="$5"
+  local success="$1" kind="$2" indicator="$3" source="$4" detail="$5" repip="$6"
 
   [ "$enablealertemail" = "1" ] || return
 
@@ -3220,6 +3597,9 @@ sendmessage()
         ;;
     esac
 
+    abusechemaillinks "$kind" "$indicator" "$source" "$detail" >> "$tmpEMailBodyFile"
+    [ -n "$repip" ] && reputationemailblock "$repip" "$kind" >> "$tmpEMailBodyFile"
+
     _SendEMailNotification_ "IOCMON v$version" "$emailSubject" "$tmpEMailBodyFile" "$emailBodyTitle"
 
   fi
@@ -3254,11 +3634,13 @@ sendbatchmessage()
       printf "\n"
       printf "<b>IOCMON</b> detected <b>%s</b> separate security events during a single scan cycle. Rather than send %s separate emails, they are grouped below:\n" "$count" "$count"
       printf "\n"
-      local i=0 bkind bindicator bsource bdetail
-      while IFS="$tab" read -r bkind bindicator bsource bdetail; do
+      local i=0 bkind bindicator bsource bdetail brepip
+      while IFS="$tab" read -r bkind bindicator bsource bdetail brepip; do
         i=$((i+1))
         printf "<b>%d. [%s]</b> %s\n" "$i" "$bkind" "$bindicator"
         printf "&nbsp;&nbsp;&nbsp;&nbsp;Source: %s<br>&nbsp;&nbsp;&nbsp;&nbsp;Detail: %s\n" "$bsource" "$bdetail"
+        abusechemaillinks "$bkind" "$bindicator" "$bsource" "$bdetail" | sed 's/^/\&nbsp;\&nbsp;\&nbsp;\&nbsp;/'
+        [ -n "$brepip" ] && reputationemailblock "$brepip" "$bkind"
         printf "\n"
       done < "$batchfile"
       printf "Please review each item above.\n"
@@ -3274,7 +3656,7 @@ sendbatchmessage()
 
 queueemailalert()
 {
-  local kind="$1" indicator="$2" source="$3" detail="$4"
+  local kind="$1" indicator="$2" source="$3" detail="$4" repip="$5"
 
   resolvestateroot
   if [ -z "$stateroot" ]; then
@@ -3283,7 +3665,7 @@ queueemailalert()
   fi
 
   mkdir -m 755 -p "$stateroot"
-  printf '%s\t%s\t%s\t%s\n' "$kind" "$indicator" "$source" "$detail" >> "$stateroot/email_batch.pending"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$indicator" "$source" "$detail" "$repip" >> "$stateroot/email_batch.pending"
 }
 
 flushemailbatch()
@@ -3299,15 +3681,357 @@ flushemailbatch()
   count="$(wc -l < "$sendfile" | tr -d ' ')"
 
   if [ "$count" -le 1 ]; then
-    local kind indicator source detail
+    local kind indicator source detail repip
     tab="$(printf '\t')"
-    IFS="$tab" read -r kind indicator source detail < "$sendfile"
-    sendmessage 1 "$kind" "$indicator" "$source" "$detail"
+    IFS="$tab" read -r kind indicator source detail repip < "$sendfile"
+    sendmessage 1 "$kind" "$indicator" "$source" "$detail" "$repip"
   else
     sendbatchmessage "$sendfile" "$count"
   fi
 
   rm -f "$sendfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ispublicip succeeds only for a globally routable IPv4/IPv6 address worth an AbuseIPDB lookup
+
+ispublicip()
+{
+  local a b
+  case "$1" in
+    *:*) case "$1" in [23]*) return 0 ;; *) return 1 ;; esac ;;
+  esac
+  echo "$1" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || return 1
+  a="${1%%.*}"; b="${1#*.}"; b="${b%%.*}"
+  case "$a" in 0|10|127) return 1 ;; esac
+  [ "$a" -ge 224 ] && return 1
+  [ "$a" -eq 169 ] && [ "$b" -eq 254 ] && return 1
+  [ "$a" -eq 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ] && return 1
+  [ "$a" -eq 192 ] && [ "$b" -eq 168 ] && return 1
+  [ "$a" -eq 100 ] && [ "$b" -ge 64 ] && [ "$b" -le 127 ] && return 1
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# shortusagetype abbreviates an AbuseIPDB usageType for the compact dashboard/IoC-log tag
+
+shortusagetype()
+{
+  case "$1" in
+    "Data Center/Web Hosting/Transit") echo "DC/Hosting" ;;
+    "Fixed Line ISP") echo "ISP" ;;
+    "Mobile ISP") echo "MobileISP" ;;
+    "Content Delivery Network") echo "CDN" ;;
+    "Organization") echo "Org" ;;
+    "Government") echo "Gov" ;;
+    "University/College/School") echo "Edu" ;;
+    "Search Engine Spider") echo "Spider" ;;
+    "") echo "n/a" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsreplyip finds the last public IP dnsmasq's own reply/cached log lines gave for $1 (or a subdomain of it) - never resolves anything itself
+
+dnsreplyip()
+{
+  local dom="$1" logf="${dnslogresolved:-/tmp/syslog.log}"
+  [ -n "$dom" ] && [ -f "$logf" ] || return
+  tail -n 20000 "$logf" | grep -F 'dnsmasq' | grep -E ' (reply|cached) ' | awk -v d="$dom" '
+    function usable(v) {
+      if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return (v !~ /^(0|10|127)\./ && v !~ /^192\.168\./)
+      return (v ~ /^[23][0-9a-fA-F]*:[0-9a-fA-F:]+$/)
+    }
+    {
+      name = ""; val = ""
+      for (i = 1; i <= NF - 3; i++) if (($i == "reply" || $i == "cached") && $(i+2) == "is") { name = $(i+1); val = $(i+3); break }
+      if (name == "") { chase = 0; next }
+      hit = (name == d || substr(name, length(name) - length(d)) == "." d)
+      if (hit && usable(val)) { ip = val; chase = 0; next }
+      if (hit && val == "<CNAME>") { chase = 1; next }
+      if (chase && usable(val)) { ip = val; chase = 0; next }
+      if (val != "<CNAME>") chase = 0
+    }
+    END { if (ip != "") print ip }
+  '
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abuseipdbusedtoday echoes how many AbuseIPDB lookups IOCMON has made today
+
+abuseipdbusedtoday()
+{
+  [ -n "$stateroot" ] && [ -f "$stateroot/abuseipdb_usage" ] || { echo 0; return; }
+  awk -F'\t' -v t="$(date +%Y%m%d)" '$1==t{c=$2} END{print c+0}' "$stateroot/abuseipdb_usage"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abuseipdbblocked succeeds while a 429/bad-key back-off is in force, echoing its reason
+
+abuseipdbblocked()
+{
+  local until reason
+  [ -n "$stateroot" ] && [ -f "$stateroot/abuseipdb_block" ] || return 1
+  IFS="$(printf '\t')" read -r until reason < "$stateroot/abuseipdb_block"
+  validateint "$until" 0 || return 1
+  [ "$(date +%s)" -lt "$until" ] || { rm -f "$stateroot/abuseipdb_block"; return 1; }
+  echo "$reason"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abuseipdbcached echoes $1's cache record if it is younger than abuseipdbcachehrs
+
+abuseipdbcached()
+{
+  [ -f "$stateroot/abuseipdb_cache.db" ] || return
+  awk -F'|' -v ip="$1" -v cut="$(( $(date +%s) - abuseipdbcachehrs * 3600 ))" '$1==ip && $2+0>=cut' "$stateroot/abuseipdb_cache.db" | tail -n1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# abuseipdbquery calls /api/v2/check (verbose) for $1 and caches the parsed result; sets $repfailreason on failure
+
+abuseipdbquery()
+{
+  local ip="$1" body="/tmp/iocmon_aipdb_body.$$" hdrs="/tmp/iocmon_aipdb_hdr.$$" mode code rc nowepoch today used
+  local remaining limit reset retry rec cats cache="$stateroot/abuseipdb_cache.db" usagefile="$stateroot/abuseipdb_usage"
+  repfailreason=""
+  for mode in verbose plain; do
+    rm -f "$body" "$hdrs"
+    set -- -G --data-urlencode "ipAddress=$ip" --data "maxAgeInDays=$abuseipdbmaxage"
+    [ "$mode" = "verbose" ] && set -- "$@" --data "verbose"
+    code="$(printf 'header = "Key: %s"\n' "$abuseipdbapikey" | curl --silent --connect-timeout 10 --max-time 180 --max-filesize 2097152 -K - -H "Accept: application/json" -D "$hdrs" -o "$body" -w '%{http_code}' "$@" "https://api.abuseipdb.com/api/v2/check")"
+    rc=$?
+    [ "$rc" -eq 63 ] && [ "$mode" = "verbose" ] || break
+  done
+
+  nowepoch=$(date +%s); today=$(date +%Y%m%d)
+  remaining="$(grep -i '^x-ratelimit-remaining:' "$hdrs" 2>/dev/null | tail -n1 | tr -d '\r' | awk '{print $2}')"
+  limit="$(grep -i '^x-ratelimit-limit:' "$hdrs" 2>/dev/null | tail -n1 | tr -d '\r' | awk '{print $2}')"
+  reset="$(grep -i '^x-ratelimit-reset:' "$hdrs" 2>/dev/null | tail -n1 | tr -d '\r' | awk '{print $2}')"
+  retry="$(grep -i '^retry-after:' "$hdrs" 2>/dev/null | tail -n1 | tr -d '\r' | awk '{print $2}')"
+
+  if [ -n "$code" ] && [ "$code" != "000" ]; then
+    used="$(abuseipdbusedtoday)"
+    if [ -f "$usagefile" ]; then
+      [ -n "$remaining" ] || remaining="$(cut -f3 "$usagefile" | tail -n1)"
+      [ -n "$limit" ] || limit="$(cut -f4 "$usagefile" | tail -n1)"
+      [ -n "$reset" ] || reset="$(cut -f5 "$usagefile" | tail -n1)"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$today" "$((used + 1))" "$remaining" "$limit" "$reset" > "$usagefile"
+  fi
+
+  case "$code" in
+    200) ;;
+    429)
+      validateint "$retry" 1 || retry=3600
+      validateint "$reset" 1 && [ "$reset" -gt "$nowepoch" ] && retry=$((reset - nowepoch))
+      printf '%s\t%s\n' "$((nowepoch + retry))" "AbuseIPDB rate limit reached (HTTP 429)" > "$stateroot/abuseipdb_block"
+      repfailreason="AbuseIPDB rate limit reached (HTTP 429) - lookups paused for ${retry}s"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
+      rm -f "$body" "$hdrs"; return 1 ;;
+    401|403)
+      printf '%s\t%s\n' "$((nowepoch + 3600))" "API key rejected (HTTP $code)" > "$stateroot/abuseipdb_block"
+      repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 12 under Feed Sources, Reputation & API Keys"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
+      rm -f "$body" "$hdrs"; return 1 ;;
+    *)
+      repfailreason="AbuseIPDB lookup failed (curl exit $rc, HTTP ${code:-000})"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
+      rm -f "$body" "$hdrs"; return 1 ;;
+  esac
+
+  cats="$(grep -o '"categories":\[[0-9,]*\]' "$body" 2>/dev/null | sed 's/.*\[//; s/\]//' | tr ',' '\n' | grep -E '^[0-9]+$' | sort | uniq -c | sort -rn | head -n 3 | awk '
+    BEGIN { split("DNS Compromise,DNS Poisoning,Fraud Orders,DDoS Attack,FTP Brute-Force,Ping of Death,Phishing,Fraud VoIP,Open Proxy,Web Spam,Email Spam,Blog Spam,VPN IP,Port Scan,Hacking,SQL Injection,Spoofing,Brute-Force,Bad Web Bot,Exploited Host,Web App Attack,SSH,IoT Targeted", cn, ",") }
+    { nm = ($2 + 0 >= 1 && $2 + 0 <= 23) ? cn[$2 + 0] : "Category " $2; printf "%s%s(%s)", (NR > 1 ? "," : ""), nm, $1 }
+  ')"
+
+  rec="$(sed 's/"reports":.*//' "$body" | awk -v ip="$ip" -v now="$nowepoch" -v cats="$cats" '
+    function jv(s, k,   p, r, c, out) {
+      p = index(s, "\"" k "\":"); if (p == 0) return ""
+      r = substr(s, p + length(k) + 3); sub(/^ +/, "", r)
+      if (substr(r, 1, 1) == "\"") {
+        r = substr(r, 2); out = ""
+        while (length(r) > 0) {
+          c = substr(r, 1, 1)
+          if (c == "\\") { out = out substr(r, 2, 1); r = substr(r, 3); continue }
+          if (c == "\"") break
+          out = out c; r = substr(r, 2)
+        }
+        return out
+      }
+      if (match(r, /^[^],}]*/)) { out = substr(r, 1, RLENGTH); return (out == "null" ? "" : out) }
+      return ""
+    }
+    function cl(v) { gsub(/[\t|]/, " ", v); return v }
+    { s = s $0 }
+    END {
+      if (index(s, "\"abuseConfidenceScore\":") == 0) exit 1
+      hn = ""; q = index(s, "\"hostnames\":[")
+      if (q > 0) { hn = substr(s, q + 13); hn = substr(hn, 1, index(hn, "]") - 1); gsub(/"/, "", hn) }
+      last = jv(s, "lastReportedAt"); sub(/T.*/, "", last)
+      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", ip, now, jv(s, "abuseConfidenceScore") + 0, jv(s, "totalReports") + 0, jv(s, "numDistinctUsers") + 0, last, cl(jv(s, "countryCode")), cl(jv(s, "countryName")), cl(jv(s, "usageType")), cl(jv(s, "isp")), cl(jv(s, "domain")), jv(s, "isTor"), jv(s, "isWhitelisted"), cl(hn), cats
+    }
+  ')"
+  rm -f "$body" "$hdrs"
+
+  if [ -z "$rec" ]; then
+    repfailreason="AbuseIPDB returned an unreadable reply (HTTP 200)"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
+    return 1
+  fi
+
+  { [ -f "$cache" ] && awk -F'|' -v ip="$ip" -v cut="$((nowepoch - abuseipdbcachehrs * 3600))" '$1!=ip && $2+0>=cut' "$cache"; printf '%s\n' "$rec"; } > "${cache}.tmp"
+  mv "${cache}.tmp" "$cache"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# reputationlookup enriches one conntrack/dns/auth alert via AbuseIPDB, setting $reptag (compact) and $repip (cache key)
+
+reputationlookup()
+{
+  local kind="$1" indicator="$2" source="$3" ip="" target="" rec="" reason="" cachednote="" cyclefile="${abuseipdbcyclefile:-/tmp/iocmon_aipdb_cycle.$$}" cyclecount=0 now
+  local rip epoch score total users last cc cname usage isp domain tor wl hostnames cats flags="" catnames testmark="" testtag=""
+  reptag=""; repip=""; repreason=""
+  [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ -n "$stateroot" ] || return
+  [ "$kind" = "simulated" ] && { testmark=" [SIMULATED TEST]"; testtag="TEST "; }
+
+  case "$kind" in
+    conntrack|auth)
+      target="${indicator#*->}"; ip="$target"
+      ispublicip "$ip" || return ;;
+    dns)
+      target="${indicator#*->}"
+      ip="$(dnsreplyip "$target")"
+      if [ -z "$ip" ]; then
+        reason="no public IP for this domain in dnsmasq's reply log"
+      elif ! ispublicip "$ip"; then
+        reason="dnsmasq answered with non-public $ip"; ip=""
+      fi ;;
+    simulated)
+      target="${indicator%%/*}"
+      if ispublicip "$target"; then
+        ip="$target"
+      elif echo "$target" | grep -qE '^[0-9a-fA-F]{32,}$'; then
+        reason="the test indicator is a file hash - AbuseIPDB only checks IP addresses"
+      elif echo "$target" | grep -q '[A-Za-z].*\.'; then
+        ip="$(dnsreplyip "$target")"
+        [ -n "$ip" ] && ispublicip "$ip" || { reason="no public IP for this test domain in dnsmasq's reply log"; ip=""; }
+      else
+        reason="the test indicator $target is not a public IP address"
+      fi ;;
+    *) return ;;
+  esac
+
+  if [ -n "$ip" ]; then
+    [ -z "$testtag" ] && rec="$(abuseipdbcached "$ip")"
+    if [ -n "$rec" ]; then
+      cachednote=" (cached)"
+    elif reason="$(abuseipdbblocked)"; then
+      reason="paused: $reason"
+    elif [ "$(abuseipdbusedtoday)" -ge "$abuseipdbdailymax" ]; then
+      reason="daily lookup ceiling ($abuseipdbdailymax) reached"
+    else
+      reason=""
+      [ -f "$cyclefile" ] && cyclecount="$(cat "$cyclefile" 2>/dev/null)"
+      validateint "$cyclecount" 0 || cyclecount=0
+      if [ -z "$testtag" ] && [ "$cyclecount" -ge "$abuseipdbcyclemax" ]; then
+        reason="per-cycle lookup limit ($abuseipdbcyclemax) reached"
+      else
+        echo "$((cyclecount + 1))" > "$cyclefile"
+        inlinestatus "AbuseIPDB reputation lookup for $ip"
+        if abuseipdbquery "$ip"; then rec="$(abuseipdbcached "$ip")"; else reason="$repfailreason"; fi
+      fi
+    fi
+  fi
+
+  now="$(date +'%b %d %Y %X')"
+  mkdir -m 755 -p "$stateroot"
+  if [ -z "$rec" ]; then
+    [ -n "$reason" ] || return
+    repreason="$reason"
+    echo "$now | ${ip:-$target} | not checked: $reason | $kind/$source $indicator$testmark" >> "$stateroot/reputation.log"
+    trimlogfile "$stateroot/reputation.log" "$logsize"
+    return
+  fi
+
+  IFS='|' read -r rip epoch score total users last cc cname usage isp domain tor wl hostnames cats <<EOF
+$rec
+EOF
+  [ "$tor" = "true" ] && flags="Tor exit"
+  [ "$wl" = "true" ] && flags="${flags:+$flags, }AbuseIPDB-whitelisted"
+  catnames="$(echo "$cats" | sed 's/([0-9]*)//g')"
+
+  repip="$ip"
+  reptag="${testtag}AbuseIPDB $ip ${score}% ${total}r/${users}u ${cc:-??} $(shortusagetype "$usage")"
+  [ "$tor" = "true" ] && reptag="$reptag Tor"
+  [ "$wl" = "true" ] && reptag="$reptag Whitelisted"
+  [ -n "$catnames" ] && reptag="$reptag $catnames"
+
+  echo "$now | $ip | ${score}% | ${total} reports/${users} users | last ${last:-never} | ${cc:-??} | $(shortusagetype "$usage") | ${isp:-n/a} | ${flags:-no flags} | ${cats:-no categories} | $kind/$source $indicator${cachednote}${testmark}" >> "$stateroot/reputation.log"
+  trimlogfile "$stateroot/reputation.log" "$logsize"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ${testtag:+SIMULATED TEST - }AbuseIPDB reputation for $ip ($kind $indicator): ${score}% abuse confidence, ${total} report(s) from ${users} user(s) in the last ${abuseipdbmaxage} days, last reported ${last:-never}, ${cname:-${cc:-unknown country}}, ${usage:-unknown usage}, ISP ${isp:-n/a}${flags:+, $flags}${cats:+, categories: $cats}${cachednote}." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# reputationemailblock prints the full AbuseIPDB detail for $1 (from the cache) as email body lines; $2=simulated marks a test
+
+reputationemailblock()
+{
+  local ip="$1" rec rip epoch score total users last cc cname usage isp domain tor wl hostnames cats note="informational only"
+  [ -n "$ip" ] && [ -n "$stateroot" ] && [ -f "$stateroot/abuseipdb_cache.db" ] || return
+  [ "$2" = "simulated" ] && note="SIMULATED TEST - live AbuseIPDB data for a real feed indicator, informational only"
+  rec="$(awk -F'|' -v ip="$ip" '$1==ip' "$stateroot/abuseipdb_cache.db" | tail -n1)"
+  [ -n "$rec" ] || return
+  IFS='|' read -r rip epoch score total users last cc cname usage isp domain tor wl hostnames cats <<EOF
+$rec
+EOF
+  printf "\n<b>AbuseIPDB reputation for %s</b> (%s):\n" "$ip" "$note"
+  printf "Abuse confidence score: <b>%s%%</b>\n" "$score"
+  printf "Reports: %s from %s distinct user(s) in the last %s days, last reported %s\n" "$total" "$users" "$abuseipdbmaxage" "${last:-never}"
+  printf "Top report categories: %s\n" "${cats:-none}"
+  printf "Country: %s%s\n" "${cname:-${cc:-unknown}}" "${cname:+ (${cc})}"
+  printf "Usage type: %s\nISP: %s\nDomain: %s\nHostnames: %s\n" "${usage:-n/a}" "${isp:-n/a}" "${domain:-n/a}" "${hostnames:-none}"
+  printf "Tor exit node: %s\nAbuseIPDB whitelisted: %s\n" "${tor:-n/a}" "${wl:-n/a}"
+  printf "Details: https://www.abuseipdb.com/check/%s\n" "$ip"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# reputationstatus echoes the dashboard's compact AbuseIPDB slot, fitted to $1 visible characters
+
+reputationstatus()
+{
+  local budget="${1:-40}" line ip score cc used plain scorecolor
+  if [ "$enableabuseipdb" != "1" ] || [ -z "$abuseipdbapikey" ]; then
+    echo -e "${CDkGray}AbuseIPDB off${CClear}"; return
+  fi
+  if abuseipdbblocked >/dev/null; then
+    echo -e "${CYellow}AbuseIPDB paused (rate limit/key)${CClear}"; return
+  fi
+  used="$(abuseipdbusedtoday)"
+  line=""
+  [ -n "$stateroot" ] && [ -f "$stateroot/reputation.log" ] && line="$(grep -E '^[^|]*\| [^|]* \| [0-9]+% \|' "$stateroot/reputation.log" | tail -n1)"
+  if [ -z "$line" ]; then
+    echo -e "${CWhite}AbuseIPDB: no lookups yet (${CGreen}${used}/${abuseipdbdailymax}${CWhite})${CClear}"; return
+  fi
+  ip="$(echo "$line" | cut -d'|' -f2 | tr -d ' ')"
+  score="$(echo "$line" | cut -d'|' -f3 | tr -dc '0-9')"
+  cc="$(echo "$line" | cut -d'|' -f6 | tr -d ' ')"
+  local testpfx=""
+  case "$line" in *"[SIMULATED TEST]"*) testpfx="TEST " ;; esac
+  plain="${testpfx}AbuseIPDB ${score}% ${ip} ${cc} (${used}/${abuseipdbdailymax})"
+  if [ "${#plain}" -gt "$budget" ] && [ -n "$cc" ]; then
+    cc=""; plain="${testpfx}AbuseIPDB ${score}% ${ip} (${used}/${abuseipdbdailymax})"
+  fi
+  if [ "${#plain}" -gt "$budget" ]; then
+    if [ $(( ${#ip} - (${#plain} - budget) - 1 )) -ge 7 ]; then ip="$(printf "%.$(( ${#ip} - (${#plain} - budget) - 1 ))s" "$ip")>"; else ip="-"; fi
+  fi
+  scorecolor="$CGreen"
+  [ "$score" -ge 25 ] && scorecolor="$CYellow"
+  [ "$score" -ge 75 ] && scorecolor="$CRed"
+  echo -e "${CYellow}${testpfx}${CWhite}AbuseIPDB ${scorecolor}${score}%${CClear} ${CGreen}${ip}${CClear} ${cc:+$cc }(${CGreen}${used}/${abuseipdbdailymax}${CClear})"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -3328,6 +4052,7 @@ raisealert()
 {
   local kind="$1" indicator="$2" source="$3" detail="$4" dedupkey="${5:-$2}"
   local key="${kind}|${dedupkey}" nowepoch cooldownsec=21600 lastepoch=0
+  reptag=""; repip=""
 
   resolvestateroot
   nowepoch=$(date +%s)
@@ -3350,6 +4075,8 @@ raisealert()
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail)." >> "$logfile"
 
+  [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
+
   local raisebanner=1
   if [ "$alertfeedonly" -eq 1 ] && [ "$kind" != "simulated" ] && ! isfeedmatchsource "$source"; then
     raisebanner=0
@@ -3358,6 +4085,7 @@ raisealert()
   if [ -n "$stateroot" ]; then
     local alertline
     alertline="$(date +'%b %d %Y %X') | $kind | $indicator | $source | $detail"
+    [ -n "$reptag" ] && alertline="$alertline | $reptag"
     echo "$alertline" >> "$stateroot/ioc_alerts.log"
     trimlogfile "$stateroot/ioc_alerts.log" "$logsize"
 
@@ -3370,7 +4098,7 @@ raisealert()
     fi
   fi
 
-  [ "$raisebanner" -eq 1 ] && queueemailalert "$kind" "$indicator" "$source" "$detail"
+  [ "$raisebanner" -eq 1 ] && queueemailalert "$kind" "$indicator" "$source" "$detail" "$repip"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5385,6 +6113,9 @@ vioclog()
   elif [ "$alertviewmode" = "hash" ]; then
     emptymsg="No files have been checked against the malware-hash feed yet."
     [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
+  elif [ "$alertviewmode" = "reputation" ]; then
+    emptymsg="No AbuseIPDB reputation lookups have been logged yet."
+    [ -n "$stateroot" ] && viewfile="$stateroot/reputation.log"
   else
     emptymsg="No IoC detections have been logged yet."
     [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
@@ -5415,6 +6146,9 @@ resolvecurrentviewfile()
   elif [ "$alertviewmode" = "hash" ]; then
     viewlabel="Hash-Check"
     [ -n "$stateroot" ] && viewfile="$stateroot/hash_check.log"
+  elif [ "$alertviewmode" = "reputation" ]; then
+    viewlabel="Reputation"
+    [ -n "$stateroot" ] && viewfile="$stateroot/reputation.log"
   else
     [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
   fi
@@ -5515,16 +6249,29 @@ testdetection()
     echo -e "${CRed}ERROR: No feed data is loaded yet - refresh feeds first, then try again.${CClear}"
   else
     local randline indicator source family
-    randline="$(awk 'BEGIN{srand()} {a[NR]=$0} END{if (NR>0) print a[int(rand()*NR)+1]}' "$candidatefile")"
+    if [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ "$candidatefile" = "$feedsroot/ips.txt" ]; then
+      randline="$(awk -F'|' 'BEGIN{srand()} $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {a[++n]=$0} END{if (n>0) print a[int(rand()*n)+1]}' "$candidatefile")"
+    fi
+    [ -z "$randline" ] && randline="$(awk 'BEGIN{srand()} {a[NR]=$0} END{if (NR>0) print a[int(rand()*NR)+1]}' "$candidatefile")"
     IFS='|' read -r indicator source family <<EOF
 $randline
 EOF
     echo -e "Simulating a detection of ${CGreen}${indicator}${CClear} (from the ${CGreen}${source}${CClear} feed)..."
     echo ""
     raisealert "simulated" "$indicator" "$source" "$family - SIMULATED TEST via (T) hotkey, not a real detection"
+    local testrepip="$repip" testrepreason="$repreason"
     flushemailbatch
     blanklineguard
-    echo -e "${CGreen}Simulated detection logged. Check the IoC log ((V) from the main screen) and the red banner${CClear}"
+    if [ "$enableabuseipdb" != "1" ] || [ -z "$abuseipdbapikey" ]; then
+      echo -e "${CDkGray}AbuseIPDB reputation check is off - turn it on (Configuration Menu 2, items 11/12) to include it in this test.${CClear}"
+    elif [ -n "$testrepip" ]; then
+      echo -e "${CYellow}AbuseIPDB reputation check (SIMULATED TEST - live data):${CClear}"
+      reputationemailblock "$testrepip" simulated | sed 's/<[^>]*>//g; /^$/d; /^AbuseIPDB reputation for/d; s/^/  /'
+    else
+      echo -e "${CYellow}AbuseIPDB reputation check (SIMULATED TEST): not checked - ${testrepreason:-no lookup was made}.${CClear}"
+    fi
+    echo ""
+    echo -e "${CGreen}Simulated detection logged. Check the IoC log ((V) from the main screen), the Reputation log ((U)) and the red banner${CClear}"
     echo -e "${CGreen}on the main screen to confirm the alert pipeline is working; press (A) there to acknowledge it.${CClear}"
   fi
 
@@ -5637,11 +6384,20 @@ vresetdefaults()
 applyimportedconfig()
 {
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
+  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keptkeys=""
 
   . "$importfile"
 
   extdrivelabel="$keepextdrivelabel"
   logfilepath="$keeplogfilepath"
+  [ -z "$threatfoxapikey" ] && [ -n "$keeptfkey" ] && { threatfoxapikey="$keeptfkey"; keptkeys="${keptkeys:+$keptkeys, }ThreatFox"; }
+  [ -z "$urlhausapikey" ] && [ -n "$keepuhkey" ] && { urlhausapikey="$keepuhkey"; keptkeys="${keptkeys:+$keptkeys, }URLhaus"; }
+  [ -z "$qfeedsapikey" ] && [ -n "$keepqfkey" ] && { qfeedsapikey="$keepqfkey"; keptkeys="${keptkeys:+$keptkeys, }Q-Feeds"; }
+  [ -z "$abuseipdbapikey" ] && [ -n "$keepaipdbkey" ] && { abuseipdbapikey="$keepaipdbkey"; keptkeys="${keptkeys:+$keptkeys, }AbuseIPDB"; }
+  [ -z "$urlhausapikey" ] && enableurlhaus=0
+  [ -z "$threatfoxapikey" ] && enablethreatfox=0
+  [ -z "$qfeedsapikey" ] && enableqfeeds=0
+  [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
   resolveiocmonroot
   dnslogpath=""
   dnsforcefilelog=0
@@ -5665,6 +6421,7 @@ applyimportedconfig()
 
   saveconfig
   [ "$translated" -eq 1 ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Imported fswatchdirs entries were adjusted to this router's own drive label." >> "$logfile"
+  [ -n "$keptkeys" ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: The imported settings had no $keptkeys API key(s) - this router's own key(s) were kept." >> "$logfile"
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Settings imported from $importfile." >> "$logfile"
 }
 
@@ -5707,13 +6464,13 @@ exportiocmonconfig()
   fi
 
   echo ""
-  echo -e "Include the ThreatFox/Q-Feeds API keys in this export?"
+  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
   { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(nvram get lan_hostname)"
     cat "$config"
   } > "$exportpath"
-  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/' "$exportpath"
+  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
@@ -5879,7 +6636,7 @@ installentwarepkg()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo ""
 
-  if [ ! -d /opt ]; then
+  if [ ! -x /opt/bin/opkg ]; then
     echo -e "${CRed}ERROR: Entware was not found on this router.${CClear}"
     echo -e "Please install Entware using the AMTM utility first, then return to this menu."
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Entware was not found installed on router. Please investigate." >> "$logfile"
@@ -5937,8 +6694,8 @@ ventwarecomponents()
     echo -e "${InvGreen} ${CClear}       automatically - scans still run correctly either way, this only affects how efficiently they run.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : jq                 : ${jqstatus}${CClear}"
-    echo -e "${InvGreen} ${CClear}       Lets ThreatFox's authenticated API mode enrich detections with malware family/confidence data. Without it, ThreatFox still works${CClear}"
-    echo -e "${InvGreen} ${CClear}       fully via its free CSV export - you only lose that extra detail.${CClear}"
+    echo -e "${InvGreen} ${CClear}       A JSON parser used for ThreatFox's API data. Without it, IOCMON reads the same fields with its own built-in parser - ThreatFox${CClear}"
+    echo -e "${InvGreen} ${CClear}       still works fully either way, jq is simply the more robust parser if abuse.ch ever changes the format.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Install all of the above${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
@@ -6048,6 +6805,7 @@ dnschecked=0; dnslastcheck=""
 authchecked=0; authlastcheck=""
 alertviewmode="ioc"
 dnsnummapfile="/tmp/iocmon_dns_nummap.$$"
+abuseipdbcyclefile="/tmp/iocmon_aipdb_cycle.$$"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 timerpaused=0
@@ -6055,7 +6813,7 @@ exitallmenus=0
 
 # Remove Maintenance Mode file lock left over from a prior run
 rm -f "$updatingfile" >/dev/null 2>&1
-rm -f "$restartpendingfile" >/dev/null 2>&1
+scriptreplacewarned=0
 
 if [ ! -d "$addonsdir" ]; then
   mkdir -m 755 -p "$addonsdir"
@@ -6295,6 +7053,7 @@ if [ -f "$pidfile" ]; then
   fi
 fi
 echo "$$" > "$pidfile"
+rm -f "$restartpendingfile" >/dev/null 2>&1
 trap 'rm -f "$pidfile"' EXIT INT TERM
 trap 'winchpending=1' WINCH
 
@@ -6311,6 +7070,7 @@ fi
 if [ -f "$config" ]; then
   . "$config"
   resolvelogfile
+  migratefeedkeys
 else
   initialsetup
 fi
@@ -6421,9 +7181,9 @@ renderdashboard()
   [ -n "$iocmonroot" ] && drivefreespace="$(df -h "$iocmonroot" 2>/dev/null | awk 'NR==2{print $4}')"
   [ -z "$drivefreespace" ] && drivefreespace="n/a"
 
-  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Feeds: ${CGreen}${feedsindicatorcount}${CClear} loaded, every ${CGreen}${feedupdatehrs}h${CClear}, oldest ${CGreen}${feedsoldest}${CClear}" 75; echo -e "${CWhite}Alerts Today: ${CGreen}${todaycount}${CClear}"
   [ "${#lastalert}" -gt 49 ] && lastalert="$(printf '%.48s' "$lastalert")>"
-  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Sources: ${CGreen}${feedsbreakdown:-none}${CClear}" 75; echo -e "${CWhite}Last Alert: ${CGreen}${lastalert}${CClear}"
+  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Feeds: ${CGreen}${feedsindicatorcount}${CClear} loaded, every ${CGreen}${feedupdatehrs}h${CClear}, oldest ${CGreen}${feedsoldest}${CClear}" 75; echo -e "${CWhite}Last Alert: ${CGreen}${lastalert}${CClear}"
+  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Sources: ${CGreen}${feedsbreakdown:-none}${CClear}" 75; echo -e "${CWhite}Alerts Today: ${CGreen}${todaycount}${CClear} | $(reputationstatus $((61 - 17 - ${#todaycount})))"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}conntrack: $conntrackstatus" 75; echo -e "${CWhite}dns: $dnsstatus"
   dnslogline=""
@@ -6452,7 +7212,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}H${CClear}] Hash Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}H${CClear}] Hash, [${CGreen}U${CClear}] Reputation, [${CGreen}R${CClear}] Clear Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
       tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
@@ -6461,8 +7221,27 @@ renderdashboard()
     else
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No dropbear login-failure attempts logged yet.${CClear}"
     fi
+  elif [ "$alertviewmode" = "reputation" ]; then
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Reputation Lookups${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear, [${CGreen}H${CClear}] Hash, [${CGreen}R${CClear}] Clear Log)"
+    if [ -n "$stateroot" ] && [ -s "$stateroot/reputation.log" ]; then
+      tail -n 10 "$stateroot/reputation.log" | while IFS= read -r repline; do
+        repscore="$(echo "$repline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
+        repcolor="$CDkGray"
+        case "$repscore" in
+          *%) repscore="${repscore%\%}"; repcolor="$CGreen"
+              [ "$repscore" -ge 25 ] 2>/dev/null && repcolor="$CYellow"
+              [ "$repscore" -ge 75 ] 2>/dev/null && repcolor="$CRed" ;;
+        esac
+        [ "${#repline}" -gt 134 ] && repline="$(printf '%.133s' "$repline")>"
+        echo -e "${InvGreen} ${CClear}   ${repcolor}${repline}${CClear}"
+      done
+    elif [ "$enableabuseipdb" -eq 1 ]; then
+      echo -e "${InvGreen} ${CClear}   ${CDkGray}No AbuseIPDB reputation lookups yet - one runs each time a conntrack, DNS, dropbear or httpd alert is raised.${CClear}"
+    else
+      echo -e "${InvGreen} ${CClear}   ${CDkGray}The AbuseIPDB reputation check is off - turn it on under Configuration Menu (2) Feed Sources, Reputation & API Keys.${CClear}"
+    fi
   elif [ "$alertviewmode" = "hash" ]; then
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Press [${CGreen}V${CClear}] Full Log, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear Log, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear, [${CGreen}U${CClear}] Reputation, [${CGreen}R${CClear}] Clear Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
       tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
@@ -6472,7 +7251,7 @@ renderdashboard()
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No files have been checked against the malware-hash feed yet.${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, [${CGreen}V${CClear}] Full Log, [${CGreen}D${CClear}] Dropbear Log, [${CGreen}H${CClear}] Hash Log, [${CGreen}N${CClear}] OTX Rpt, [${CGreen}R${CClear}] Clear this Log)"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, Logs: [${CGreen}V${CClear}] Full, [${CGreen}D${CClear}] Dropbear, [${CGreen}H${CClear}] Hash, [${CGreen}U${CClear}] Reputation, [${CGreen}N${CClear}] OTX Rpt, [${CGreen}R${CClear}] Clear Log)"
     if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
       : > "$dnsnummapfile"
       dnsnum=0
@@ -6515,11 +7294,8 @@ while true; do
     initialsetup
   fi
 
-  if [ -f "$restartpendingfile" ]; then
-    rm -f "$restartpendingfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: A newer IOCMON version was downloaded by -autoupdate - restarting into it now." >> "$logfile"
-    exec sh "$apppath" -noswitch
-  fi
+  checkscriptreplaced
+  rm -f "$abuseipdbcyclefile"
 
   checkdrivealive
   checkfeedupdate
