@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.3.8
+# Version: 1.4.2
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-24
+# Last Updated: 2026-Oct-30
 # ============================================================================================================================
 #
 # Description:
@@ -24,11 +24,14 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/domains.txt                 : canonical combined domain indicator list
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/qfeeds_ips.txt/_domains.txt : Q-Feeds bare indicator lists (matched by streaming)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/hashes.txt                  : canonical combined file-hash indicator list
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads (urlhaus.raw = abuse.ch CSV export, urlhaus_payloads.raw = payload JSON)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/*.raw                       : per-source raw downloads (urlhaus.raw = abuse.ch CSV export, urlhaus_payloads.raw = payload JSON, netapi_ips.raw/netapi_domains.raw = NetAPI lists)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/skynet_import.hash     : last-imported Skynet IP list hash, so an unchanged list skips the re-push
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
+#   /jffs/addons/iocmon.d/agh.auth                                      : AdGuard Home API login, curl config format, chmod 600
+#   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : raw dropbear auth-failure log, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
@@ -97,7 +100,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.3.8"
+version="1.4.2"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -124,6 +127,7 @@ readonly CEM_LIB_URL="https://raw.githubusercontent.com/Martinski4GitHub/CustomM
 readonly CUSTOM_EMAIL_LIBDir="/jffs/addons/shared-libs"  # where the shared AMTM email library lives
 readonly CUSTOM_EMAIL_LIBName="CustomEMailFunctions.lib.sh"  # shared AMTM email library filename
 readonly CUSTOM_EMAIL_LIBFile="${CUSTOM_EMAIL_LIBDir}/$CUSTOM_EMAIL_LIBName"  # full path to the shared email library
+readonly emailwrapwidth=60  # alert email line width; the library's <pre> wrapper never wraps lines itself
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Config schema defaults - these are overwritten by $config once it exists
@@ -136,6 +140,7 @@ enablethreatfox=0               # enable the ThreatFox feed source (needs an abu
 threatfoxapikey=""              # abuse.ch Auth-Key from auth.abuse.ch (one key works for ThreatFox and URLhaus)
 enablespamhaus=1                # enable the Spamhaus DROP/EDROP feed source
 enablefeodo=1                   # enable the Feodo Tracker feed source
+enablenetapi=1                  # enable the NetAPI.com compromised IP/domain feed source (no key needed)
 enableurlhaus=0                 # enable the URLhaus feed source (needs an abuse.ch Auth-Key)
 urlhausapikey=""                # abuse.ch Auth-Key from auth.abuse.ch (one key works for ThreatFox and URLhaus)
 enableqfeeds=0                  # enable the Q-Feeds OSINT IP/domain feed source (needs an API token)
@@ -157,6 +162,14 @@ dnsquerylogkeep=2               # how many rotated generations (dnsmasq_queries.
 enablednstunnel=0               # behavioral DNS-tunneling/exfiltration heuristic (query volume/name-length patterns, not feed-based) - off by default
 dnstunnelsubthreshold=20        # distinct subdomains under one base domain from one source IP, within a single check tick, to flag as possible tunneling
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
+dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome
+aghurl=""                       # AdGuard Home web/API base URL - blank = read from AdGuardHome.yaml (http.address)
+aghincludeblocked=0             # 1 = also check queries AdGuard Home already blocked (they never left the network)
+aghpagesize=500                 # query-log entries fetched per API call
+aghmaxpages=20                  # most API pages read per cycle before giving up and warning about a gap
+aghauthfile="/jffs/addons/iocmon.d/agh.auth"   # AdGuard Home login, curl config format, chmod 600
+aghreplyfile="/tmp/iocmon_agh_replies"         # "domain|ip" answers seen recently, RAM only, for dnsreplyip
+aghyamlpaths="/opt/etc/AdGuardHome/AdGuardHome.yaml /opt/etc/AdGuardHome.yaml /jffs/addons/AdGuardHome.d/AdGuardHome.yaml"
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
 enableskynetimport=0            # push current IPv4 feed indicators into Skynet Firewall's own ban list, tagged IOCMON - see syncskynetimport()
@@ -796,6 +809,7 @@ saveconfig()
     echo 'threatfoxapikey="'"$threatfoxapikey"'"'
     echo 'enablespamhaus='$enablespamhaus
     echo 'enablefeodo='$enablefeodo
+    echo 'enablenetapi='$enablenetapi
     echo 'enableurlhaus='$enableurlhaus
     echo 'urlhausapikey="'"$urlhausapikey"'"'
     echo 'enableqfeeds='$enableqfeeds
@@ -817,6 +831,11 @@ saveconfig()
     echo 'enablednstunnel='$enablednstunnel
     echo 'dnstunnelsubthreshold='$dnstunnelsubthreshold
     echo 'dnstunnelnamelen='$dnstunnelnamelen
+    echo 'dnssource="'"$dnssource"'"'
+    echo 'aghurl="'"$aghurl"'"'
+    echo 'aghincludeblocked='$aghincludeblocked
+    echo 'aghpagesize='$aghpagesize
+    echo 'aghmaxpages='$aghmaxpages
     echo 'enableconntrackwatch='$enableconntrackwatch
     echo 'ipexceptions="'"$ipexceptions"'"'
     echo 'enableskynetimport='$enableskynetimport
@@ -999,9 +1018,10 @@ selectextdrive()
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: External drive selected: label=$extdrivelabel path=$selecteddrivepath" >> "$logfile"
 
   echo ""
-  echo -e "${CGreen}IOCMON will use: $iocmonroot${CClear}"
   echo ""
-  read -rsp $'Press any key to continue...\n' -n1 key
+  echo -e "${CGreen}IOCMON will use: $iocmonroot${CClear}"
+  # echo ""
+  # read -rsp $'Press any key to continue...\n' -n1 key
   return 0
 }
 
@@ -1147,7 +1167,7 @@ vsetup()
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : Optional Entware Components${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}"; printf '(%2d)' "$advsettingsmenunum"; echo -e "${CClear} : Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : Uninstall IOCMON${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} |  ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
@@ -1789,28 +1809,39 @@ vadvanceddns()
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.2 Advanced Settings - DNS Watch & Tunneling Detection" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
-    echo -e "${InvGreen} ${CClear} for tunneling/exfiltration.${CClear}"
+    echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, or from AdGuard Home's query log through its API when AdGuard Home${CClear}"
+    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 10).${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
-    if [ "$enablednswatch" -eq 1 ] && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
+    if [ "$enablednswatch" -eq 1 ] && ! dnsusesagh && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
+    case "$dnssource" in
+      adguardhome) dnssrcdisp="${CGreen}AdGuard Home${CClear}" ;;
+      dnsmasq) dnssrcdisp="${CGreen}dnsmasq${CClear}" ;;
+      *) if dnsusesagh; then dnssrcdisp="${CGreen}auto${CClear} (AdGuard Home detected)"; else dnssrcdisp="${CGreen}auto${CClear} (dnsmasq)"; fi ;;
+    esac
+    aghon=0; [ "$enablednswatch" -eq 1 ] && dnsusesagh && aghon=1
+    if [ "$aghon" -eq 1 ]; then aghdisp="$(aghstatus)"; case "$aghdisp" in ok*) aghdisp="${CGreen}${aghdisp}${CClear}" ;; *) aghdisp="${CYellow}${aghdisp}${CClear}" ;; esac; else aghdisp="n/a"; fi
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
-    menurow "(2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
-    menurow "(3)" "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" "$(booleantoyesno "$enablednstunnel")" 68 "$enablednswatch"
-    menurow "(4)" "  Distinct subdomains/tick under one domain to flag as tunneling" "${CGreen}$dnstunnelsubthreshold${CClear}" 68 "$tunnelon"
-    menurow "(5)" "  Single query-name length (chars) to flag on its own" "${CGreen}$dnstunnelnamelen${CClear}" 68 "$tunnelon"
-    menurow "(6)" "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" "${CGreen}${dnslogpath:-auto}${CClear}" 68 "$enablednswatch"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
+    menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
+    menurow "( 3)" "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" "$(booleantoyesno "$enablednstunnel")" 68 "$enablednswatch"
+    menurow "( 4)" "  Distinct subdomains/tick under one domain to flag as tunneling" "${CGreen}$dnstunnelsubthreshold${CClear}" 68 "$tunnelon"
+    menurow "( 5)" "  Single query-name length (chars) to flag on its own" "${CGreen}$dnstunnelnamelen${CClear}" 68 "$tunnelon"
+    menurow "( 6)" "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" "${CGreen}${dnslogpath:-auto}${CClear}" 68 "$enablednswatch"
     filelogon=0; [ "$enablednswatch" -eq 1 ] && [ "$dnsforcefilelog" -eq 1 ] && filelogon=1
-    menurow "(7)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
-    menurow "(8)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
-    menurow "(9)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
+    menurow "( 7)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
+    menurow "( 8)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
+    menurow "( 9)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
+    menurow "(10)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
+    menurow "(11)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
+    menurow "(12)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-9, e=Exit): " sel
+    read -p "Please select? (1-12, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -1823,7 +1854,14 @@ vadvanceddns()
          else
            enablednswatch=1
            saveconfig
-           if dnsquerylogactiveinetc; then
+           if dnsusesagh; then
+             echo ""
+             echo -e "AdGuard Home answers DNS on this router, so DNS watch reads AdGuard Home's query log through its API."
+             echo -e "AdGuard Home: ${CGreen}$(aghstatus)${CClear}"
+             echo -e "Set or change the AdGuard Home login with item 11."
+             echo ""
+             read -rsp $'Press any key to continue...\n' -n1 key
+           elif dnsquerylogactiveinetc; then
              echo ""
              echo -e "${CGreen}log-queries is already active in /etc/dnsmasq.conf (likely set by another script) - nothing added to dnsmasq.conf.add, no restart needed.${CClear}"
              echo ""
@@ -1883,6 +1921,27 @@ vadvanceddns()
       9) [ "$filelogon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnsquerylogkeep}${CClear}"
          read -p "New number of rotated generations to keep (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnsquerylogkeep="$val" && saveconfig; }; } ;;
+      10) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnssource}${CClear}"; echo ""
+          echo -e "  auto        : AdGuard Home's query log when AdGuard Home answers on port 53, otherwise dnsmasq's (default)"
+          echo -e "  dnsmasq     : always dnsmasq's query log (log-queries)"
+          echo -e "  adguardhome : always AdGuard Home's query log, through its API"
+          echo ""
+          read -p "New DNS query source (auto/dnsmasq/adguardhome, blank to keep current): " val
+          case "$val" in auto|dnsmasq|adguardhome) dnssource="$val"; dnslogannounced=""; saveconfig ;; "") ;; *) echo -e "${CRed}Please enter auto, dnsmasq or adguardhome.${CClear}"; sleep 2 ;; esac; } ;;
+      11) [ "$aghon" -eq 1 ] && { echo ""
+          echo -e "IOCMON reads AdGuard Home's query log with the same login as AdGuard Home's web UI."
+          echo -e "It is stored in ${CGreen}${aghauthfile}${CClear} (readable by root only) and never passed on a command line."
+          echo -e "API address: ${CGreen}$(aghapiurl)${CClear} (from AdGuardHome.yaml; set aghurl in iocmon.cfg to override)"
+          echo ""
+          read -p "AdGuard Home username (blank to keep the current login): " aghu
+          if [ -n "$aghu" ]; then
+            read -rsp "AdGuard Home password: " aghp; echo ""
+            aghauthwrite "$aghu" "$aghp"; aghp=""
+            echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: AdGuard Home API login updated." >> "$logfile"
+          fi
+          echo ""; echo -e "Testing: $(aghstatus)"; echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key; } ;;
+      12) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1965,8 +2024,8 @@ vadvancedfilesystem()
     menurow "(13)" "Cron entries excepted from unexpected-new-entry alerts" "${CGreen}$([ -z "$cronexceptions" ] && echo 0 || printf '%s\n' "$cronexceptions" | wc -l | tr -d ' ')${CClear} configured" 68 "$crondiffon"
     menurow "(14)" "Always-alert watch over critical /etc files" "$(booleantoyesno "$enableetccritical")" 68 "$enablefsintegrity"
     menurow "(15)" "  Critical /etc files/folders to watch" "${CGreen}$(echo "$etccriticalpaths" | wc -w | tr -d ' ')${CClear} configured" 68 "$etccriticalon"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
@@ -2054,9 +2113,9 @@ vskynetintegration()
     echo -e "${InvGreen} ${CClear} \"IOCMON\" so they are always identifiable and can be found or removed independently of Skynet's own manual and automatic bans.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} This goes beyond Skynet's own Custom Filter URL feature: that only ever pulls one static, user-chosen list on Skynet's own schedule,${CClear}"
-    echo -e "${InvGreen} ${CClear} while this keeps IOCMON's own multi-source feed set (Feodo, Spamhaus, URLhaus, ThreatFox, and optionally Q-Feeds)${CClear}"
-    echo -e "${InvGreen} ${CClear} continuously in sync with Skynet's live ban list. The import runs automatically every time IOCMON refreshes its threat feeds (see${CClear}"
-    echo -e "${InvGreen} ${CClear} General Settings for that interval), not just once at setup.${CClear}"
+    echo -e "${InvGreen} ${CClear} while this keeps IOCMON's own multi-source feed set (Feodo, Spamhaus, NetAPI, URLhaus, ThreatFox, and optionally Q-Feeds) continuously${CClear}"
+    echo -e "${InvGreen} ${CClear} in sync with Skynet's live ban list. The import runs automatically every time IOCMON refreshes its threat feeds (see General Settings${CClear}"
+    echo -e "${InvGreen} ${CClear} for that interval), not just once at setup.${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} These are fresh, continuously-updated security indicators, not a hand-curated list, so false positives are possible. Once imported, and${CClear}"
     echo -e "${InvGreen} ${CClear} if Skynet is itself configured to block both directions, every one of these IPs will have its inbound AND outbound traffic denied,${CClear}"
@@ -2394,11 +2453,11 @@ abusechemaillinks()
   esac
   [ -n "$value" ] || return
   case "$source" in *urlhaus*)
-    if [ "$kind" = "fsintegrity" ]; then printf '<b>URLhaus:</b> <a href="https://urlhaus.abuse.ch/browse.php?search=%s">https://urlhaus.abuse.ch/browse.php?search=%s</a>\n' "$value" "$value"
-    else printf '<b>URLhaus:</b> <a href="https://urlhaus.abuse.ch/host/%s/">https://urlhaus.abuse.ch/host/%s/</a>\n' "$value" "$value"; fi ;;
+    if [ "$kind" = "fsintegrity" ]; then emaillinkrow "URLhaus" "https://urlhaus.abuse.ch/browse.php?search=$value"
+    else emaillinkrow "URLhaus" "https://urlhaus.abuse.ch/host/$value/"; fi ;;
   esac
   case "$source" in *threatfox*)
-    printf '<b>ThreatFox:</b> <a href="https://threatfox.abuse.ch/browse.php?search=ioc%%3A%s">https://threatfox.abuse.ch/browse.php?search=ioc%%3A%s</a>\n' "$value" "$value" ;;
+    emaillinkrow "ThreatFox" "https://threatfox.abuse.ch/browse.php?search=ioc%3A$value" ;;
   esac
 }
 
@@ -2412,11 +2471,12 @@ vfeedsources()
     clear
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2. Feed Sources, Reputation & API Keys" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set its API key. URLhaus and ThreatFox each${CClear}"
-    echo -e "${InvGreen} ${CClear} need a free abuse.ch Auth-Key (one key from auth.abuse.ch works for both) and Q-Feeds needs a token; each key field becomes active once${CClear}"
-    echo -e "${InvGreen} ${CClear} its feed is switched on. The optional AbuseIPDB reputation check (items 11-16) looks up the public IP behind each conntrack, DNS,${CClear}"
-    echo -e "${InvGreen} ${CClear} dropbear or httpd alert as it is raised, and adds its abuse score, report history, top report categories, country, ISP and usage type${CClear}"
-    echo -e "${InvGreen} ${CClear} to the dashboard, the Reputation log ([U]), the IoC log and alert emails.${CClear}"
+    echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set its API key. Feodo, Spamhaus and NetAPI${CClear}"
+    echo -e "${InvGreen} ${CClear} need no key, and NetAPI's compromised-domain list gives DNS watch its coverage out of the box. URLhaus and ThreatFox each need a free${CClear}"
+    echo -e "${InvGreen} ${CClear} abuse.ch Auth-Key (one key from auth.abuse.ch works for both) and Q-Feeds needs a token; each key field becomes active once its feed is${CClear}"
+    echo -e "${InvGreen} ${CClear} switched on. The optional AbuseIPDB reputation check (items 12-17) looks up the public IP behind each conntrack, DNS, dropbear or httpd${CClear}"
+    echo -e "${InvGreen} ${CClear} alert as it is raised, and adds its abuse score, report history, top report categories, country, ISP and usage type to the dashboard,${CClear}"
+    echo -e "${InvGreen} ${CClear} the Reputation log ([U]), the IoC log and alert emails.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     urlhauskeydisp="<none - required for URLhaus>"
@@ -2432,63 +2492,65 @@ vfeedsources()
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Feodo Tracker" 30; echo -e ": $(booleantoyesno "$enablefeodo")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : "; padright "Spamhaus DROP/EDROP" 30; echo -e ": $(booleantoyesno "$enablespamhaus")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : "; padright "URLhaus" 30; echo -e ": $(booleantoyesno "$enableurlhaus")$(feedkeycell "( 4)" "URLhaus API Key" "$urlhauskeydisp" "$enableurlhaus")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : "; padright "ThreatFox" 30; echo -e ": $(booleantoyesno "$enablethreatfox")$(feedkeycell "( 6)" "ThreatFox API Key" "$apikeydisp" "$enablethreatfox")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 7)${CClear} : "; padright "General Feed refresh (hours)" 30; echo -e ": ${CGreen}$feedupdatehrs${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : "; padright "Q-Feeds (OSINT IP/domain)" 30; echo -e ": $(booleantoyesno "$enableqfeeds")$(feedkeycell "( 9)" "Q-Feeds API Key" "$qfkeydisp" "$enableqfeeds")"
-    menurow "(10)" "Q-Feeds refresh (hours)" "${CGreen}$qfeedshrs${CClear}" 30 "$enableqfeeds"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : "; padright "NetAPI Compromised Sites" 30; echo -e ": $(booleantoyesno "$enablenetapi")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : "; padright "URLhaus" 30; echo -e ": $(booleantoyesno "$enableurlhaus")$(feedkeycell "( 5)" "URLhaus API Key" "$urlhauskeydisp" "$enableurlhaus")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 6)${CClear} : "; padright "ThreatFox" 30; echo -e ": $(booleantoyesno "$enablethreatfox")$(feedkeycell "( 7)" "ThreatFox API Key" "$apikeydisp" "$enablethreatfox")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : "; padright "General Feed refresh (hours)" 30; echo -e ": ${CGreen}$feedupdatehrs${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : "; padright "Q-Feeds (OSINT IP/domain)" 30; echo -e ": $(booleantoyesno "$enableqfeeds")$(feedkeycell "(10)" "Q-Feeds API Key" "$qfkeydisp" "$enableqfeeds")"
+    menurow "(11)" "Q-Feeds refresh (hours)" "${CGreen}$qfeedshrs${CClear}" 30 "$enableqfeeds"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${CWhite}Reputation Checks${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(11)${CClear} : "; padright "AbuseIPDB reputation check" 30; echo -e ": $(booleantoyesno "$enableabuseipdb")$(feedkeycell "(12)" "AbuseIPDB API Key" "$aipdbkeydisp" "$enableabuseipdb")"
-    menurow "(13)" "  Cache lifetime (hours)" "${CGreen}$abuseipdbcachehrs${CClear}" 30 "$enableabuseipdb"
-    menurow "(14)" "  Report age window (days)" "${CGreen}$abuseipdbmaxage${CClear}" 30 "$enableabuseipdb"
-    menurow "(15)" "  Daily lookup ceiling" "${CGreen}$abuseipdbdailymax${CClear}" 30 "$enableabuseipdb"
-    menurow "(16)" "  Max lookups per scan cycle" "${CGreen}$abuseipdbcyclemax${CClear}" 30 "$enableabuseipdb"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(12)${CClear} : "; padright "AbuseIPDB reputation check" 30; echo -e ": $(booleantoyesno "$enableabuseipdb")$(feedkeycell "(13)" "AbuseIPDB API Key" "$aipdbkeydisp" "$enableabuseipdb")"
+    menurow "(14)" "  Cache lifetime (hours)" "${CGreen}$abuseipdbcachehrs${CClear}" 30 "$enableabuseipdb"
+    menurow "(15)" "  Report age window (days)" "${CGreen}$abuseipdbmaxage${CClear}" 30 "$enableabuseipdb"
+    menurow "(16)" "  Daily lookup ceiling" "${CGreen}$abuseipdbdailymax${CClear}" 30 "$enableabuseipdb"
+    menurow "(17)" "  Max lookups per scan cycle" "${CGreen}$abuseipdbcyclemax${CClear}" 30 "$enableabuseipdb"
     menurow " |--" "  Lookup(s) used today" "${CGreen}$(abuseipdbusedtoday) of ${abuseipdbdailymax}${CClear}" 30 "$enableabuseipdb"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-16, e=Exit): " selfeed
+    read -p "Please select? (1-17, e=Exit): " selfeed
     case "$selfeed" in
       1) if [ "$enablefeodo" -eq 1 ]; then enablefeodo=0; else enablefeodo=1; fi; feedsaveconfig ;;
       2) if [ "$enablespamhaus" -eq 1 ]; then enablespamhaus=0; else enablespamhaus=1; fi; feedsaveconfig ;;
-      3) if [ "$enableurlhaus" -eq 1 ]; then enableurlhaus=0; else enableurlhaus=1; abusechkeyoffer urlhaus; fi; feedsaveconfig ;;
-      4) [ "$enableurlhaus" -eq 1 ] && { echo ""; read -p "Enter URLhaus (abuse.ch) Auth-Key (blank to clear): " urlhausapikey
+      3) if [ "$enablenetapi" -eq 1 ]; then enablenetapi=0; else enablenetapi=1; fi; feedsaveconfig ;;
+      4) if [ "$enableurlhaus" -eq 1 ]; then enableurlhaus=0; else enableurlhaus=1; abusechkeyoffer urlhaus; fi; feedsaveconfig ;;
+      5) [ "$enableurlhaus" -eq 1 ] && { echo ""; read -p "Enter URLhaus (abuse.ch) Auth-Key (blank to clear): " urlhausapikey
          if [ -z "$urlhausapikey" ]; then
            enableurlhaus=0
            echo ""
            echo -e "${CYellow}Key cleared - URLhaus has been switched off.${CClear}"; sleep 3
          fi
          feedsaveconfig; } ;;
-      5) if [ "$enablethreatfox" -eq 1 ]; then enablethreatfox=0; else enablethreatfox=1; abusechkeyoffer threatfox; fi; feedsaveconfig ;;
-      6) [ "$enablethreatfox" -eq 1 ] && { echo ""; read -p "Enter ThreatFox (abuse.ch) Auth-Key (blank to clear): " threatfoxapikey
+      6) if [ "$enablethreatfox" -eq 1 ]; then enablethreatfox=0; else enablethreatfox=1; abusechkeyoffer threatfox; fi; feedsaveconfig ;;
+      7) [ "$enablethreatfox" -eq 1 ] && { echo ""; read -p "Enter ThreatFox (abuse.ch) Auth-Key (blank to clear): " threatfoxapikey
          if [ -z "$threatfoxapikey" ]; then
            enablethreatfox=0
            echo ""
            echo -e "${CYellow}Key cleared - ThreatFox has been switched off.${CClear}"; sleep 3
          fi
          feedsaveconfig; } ;;
-      7) echo ""; echo -e "Current: ${CGreen}${feedupdatehrs}${CClear}"
+      8) echo ""; echo -e "Current: ${CGreen}${feedupdatehrs}${CClear}"
          read -p "New feed refresh interval in hours (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && feedupdatehrs="$val" && feedsaveconfig; } ;;
-      8) if [ "$enableqfeeds" -eq 1 ]; then enableqfeeds=0; qfeedsclearfiles; else enableqfeeds=1; fi
+      9) if [ "$enableqfeeds" -eq 1 ]; then enableqfeeds=0; qfeedsclearfiles; else enableqfeeds=1; fi
          feedsaveconfig ;;
-      9) [ "$enableqfeeds" -eq 1 ] && { echo ""; read -p "Enter Q-Feeds API token (blank to clear): " qfeedsapikey
+      10) [ "$enableqfeeds" -eq 1 ] && { echo ""; read -p "Enter Q-Feeds API token (blank to clear): " qfeedsapikey
          if [ -z "$qfeedsapikey" ]; then
            enableqfeeds=0; qfeedsclearfiles
            echo ""
            echo -e "${CYellow}Token cleared - Q-Feeds has been switched off.${CClear}"; sleep 3
          fi
          feedsaveconfig; } ;;
-      10) [ "$enableqfeeds" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
+      11) [ "$enableqfeeds" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${qfeedshrs}${CClear}"
           read -p "New Q-Feeds refresh interval in hours (>=1, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && qfeedshrs="$val" && feedsaveconfig; }; } ;;
-      11) if [ "$enableabuseipdb" -eq 1 ]; then enableabuseipdb=0; else enableabuseipdb=1; fi
+      12) if [ "$enableabuseipdb" -eq 1 ]; then enableabuseipdb=0; else enableabuseipdb=1; fi
           feedsaveconfig ;;
-      12) [ "$enableabuseipdb" -eq 1 ] && { echo ""; read -p "Enter AbuseIPDB API key (blank to clear): " abuseipdbapikey
+      13) [ "$enableabuseipdb" -eq 1 ] && { echo ""; read -p "Enter AbuseIPDB API key (blank to clear): " abuseipdbapikey
           if [ -z "$abuseipdbapikey" ]; then
             enableabuseipdb=0
             echo ""
@@ -2496,16 +2558,16 @@ vfeedsources()
           fi
           [ -n "$stateroot" ] && rm -f "$stateroot/abuseipdb_block"
           feedsaveconfig; } ;;
-      13) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcachehrs}${CClear}"
+      14) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcachehrs}${CClear}"
           read -p "Hours to reuse a cached AbuseIPDB result before looking that IP up again (>=1, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && abuseipdbcachehrs="$val" && feedsaveconfig; }; } ;;
-      14) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbmaxage}${CClear}"
+      15) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbmaxage}${CClear}"
           read -p "Days of AbuseIPDB reports each lookup covers (1-365, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && [ "$val" -le 365 ] && abuseipdbmaxage="$val" && feedsaveconfig; }; } ;;
-      15) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbdailymax}${CClear}"
+      16) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbdailymax}${CClear}"
           read -p "Most AbuseIPDB lookups per day (>=1, keep it below your plan's limit - free = 1000, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && abuseipdbdailymax="$val" && feedsaveconfig; }; } ;;
-      16) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcyclemax}${CClear}"
+      17) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcyclemax}${CClear}"
           read -p "Most AbuseIPDB lookups in a single scan cycle (>=1, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && abuseipdbcyclemax="$val" && feedsaveconfig; }; } ;;
       [Ee]) feedkeylessrevert; break ;;
@@ -2707,7 +2769,7 @@ fetchurlhaus()
         return 1
       fi ;;
     401|403)
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: URLhaus rejected the Auth-Key (HTTP $code) - check it under Configuration Menu 2, item 4." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: URLhaus rejected the Auth-Key (HTTP $code) - check it under Configuration Menu 2, item 5." >> "$logfile"
       rm -f "$tmpfile"
       return 1 ;;
     *)
@@ -2873,6 +2935,13 @@ normalizefeeds()
       awk '!/^;/ && NF {print $1"|spamhaus-edrop|netblock"}' "$feedsroot/spamhaus_edrop.raw" >> "$tmpips"
     fi
 
+    if [ "$enablenetapi" -eq 1 ] && [ -s "$feedsroot/netapi_ips.raw" ]; then
+      awk '{ sub(/\r$/, "") } /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $0"|netapi|compromised-ip"}' "$feedsroot/netapi_ips.raw" >> "$tmpips"
+    fi
+    if [ "$enablenetapi" -eq 1 ] && [ -s "$feedsroot/netapi_domains.raw" ]; then
+      awk '{ sub(/\r$/, "") } $1 == "0.0.0.0" && NF == 2 && $2 ~ /^[A-Za-z0-9_.-]+\.[A-Za-z0-9-]+$/ {print tolower($2)"|netapi|compromised-site"}' "$feedsroot/netapi_domains.raw" >> "$tmpdomains"
+    fi
+
     if [ "$enableurlhaus" -eq 1 ] && grep -q '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null; then
       inlinestatus "Normalizing URLhaus"
       urlhauskeptcount="$(awk -v ipsout="$tmpips" -v domainsout="$tmpdomains" -v today="$(date +'%Y %m %d')" '
@@ -2961,7 +3030,7 @@ normalizefeeds()
     mv "$tmpdomains" "$feedsroot/domains.txt"
   else
     rm -f "$tmpdomains"
-    [ -f "$feedsroot/domains.txt" ] || : > "$feedsroot/domains.txt"
+    : > "$feedsroot/domains.txt"
   fi
 
   if [ -s "$tmphashes" ]; then
@@ -3180,12 +3249,31 @@ updatefeeds()
       fi
     fi
 
+    if [ "$enablenetapi" -eq 1 ]; then
+      inlinestatus "NetAPI compromised IPs: fetching"
+      if fetchfeedsource "NetAPI compromised IP" "https://netapi.com/api2/?method=compromised&dataset_type=ip" "$feedsroot/netapi_ips.raw" "$feedsroot/meta/netapi_ips.meta"; then
+        okcount=$((okcount+1))
+        echo -e "\33[2K\r  ${CGreen}*${CClear} NetAPI compromised IPs: fetched ${CGreen}$(grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?' "$feedsroot/netapi_ips.raw" 2>/dev/null)${CClear} IPv4 address(es)/netblock(s)"
+      else
+        failcount=$((failcount+1))
+        echo -e "\33[2K\r  ${CRed}*${CClear} NetAPI compromised IPs: fetch failed (see log)"
+      fi
+      inlinestatus "NetAPI compromised sites: fetching"
+      if fetchfeedsource "NetAPI compromised domain" "https://netapi.com/api2/?method=compromised&dataset_type=url&format=hosts" "$feedsroot/netapi_domains.raw" "$feedsroot/meta/netapi_domains.meta"; then
+        okcount=$((okcount+1))
+        echo -e "\33[2K\r  ${CGreen}*${CClear} NetAPI compromised sites: fetched ${CGreen}$(grep -c '^0\.0\.0\.0 ' "$feedsroot/netapi_domains.raw" 2>/dev/null)${CClear} domain(s)"
+      else
+        failcount=$((failcount+1))
+        echo -e "\33[2K\r  ${CRed}*${CClear} NetAPI compromised sites: fetch failed (see log)"
+      fi
+    fi
+
     if [ "$enableurlhaus" -eq 1 ]; then
       inlinestatus "URLhaus: fetching"
       fetchurlhaus; urc=$?
       case "$urc" in
         0) okcount=$((okcount+1)); echo -e "\33[2K\r  ${CGreen}*${CClear} URLhaus: fetched ${CGreen}$(grep -c '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null)${CClear} malware URL record(s) and ${CGreen}$(grep -o '"sha256_hash"' "$feedsroot/urlhaus_payloads.raw" 2>/dev/null | wc -l | tr -d ' ')${CClear} payload record(s)" ;;
-        2) echo -e "\33[2K\r  ${CYellow}*${CClear} URLhaus: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 4)" ;;
+        2) echo -e "\33[2K\r  ${CYellow}*${CClear} URLhaus: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 5)" ;;
         *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} URLhaus: fetch failed (see log)" ;;
       esac
     fi
@@ -3195,7 +3283,7 @@ updatefeeds()
       fetchthreatfox; trc=$?
       case "$trc" in
         0) okcount=$((okcount+1)); echo -e "\33[2K\r  ${CGreen}*${CClear} ThreatFox: fetched ${CGreen}$(grep -o '"ioc_type"' "$feedsroot/threatfox.raw" 2>/dev/null | wc -l | tr -d ' ')${CClear} IOC records" ;;
-        2) echo -e "\33[2K\r  ${CYellow}*${CClear} ThreatFox: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 6)" ;;
+        2) echo -e "\33[2K\r  ${CYellow}*${CClear} ThreatFox: skipped (no abuse.ch Auth-Key set - Configuration Menu 2, item 7)" ;;
         *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} ThreatFox: fetch failed (see log)" ;;
       esac
     fi
@@ -3297,7 +3385,7 @@ forcefeeds()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# feedsourcecounts prints a compact "source=N source=N" breakdown across all three files.
+# feedsourcecounts prints a compact abbreviated breakdown, e.g. "tf=5871 sh=1756 fd=1 na=176k uh=2492 qf=231k" (10000+ as Nk).
 
 feedsourcecounts()
 {
@@ -3309,19 +3397,23 @@ feedsourcecounts()
       n = split($2, srcs, ",")
       for (i = 1; i <= n; i++) {
         s = srcs[i]
-        if (s == "spamhaus-drop" || s == "spamhaus-edrop") s = "spamhaus"
+        if (s == "spamhaus-drop" || s == "spamhaus-edrop") s = "sh"; else if (s == "threatfox") s = "tf"; else if (s == "feodo") s = "fd"
+        else if (s == "netapi") s = "na"; else if (s == "urlhaus") s = "uh"
         c[s]++
       }
     }
-    END { for (k in c) printf "%s=%d ", k, c[k] }
+    function out(k) { if (c[k] >= 10000) printf "%s=%dk ", k, int(c[k] / 1000); else printf "%s=%d ", k, c[k] }
+    END { no = split("tf sh fd na uh", ord, " "); for (i = 1; i <= no; i++) { if (ord[i] in c) out(ord[i]); shown[ord[i]] = 1 } for (k in c) if (!(k in shown)) out(k) }
   '
-  [ "$(qfeedscount)" -gt 0 ] && printf 'qfeeds=%d ' "$(qfeedscount)"
+  local qf
+  qf="$(qfeedscount)"
+  if [ "$qf" -ge 10000 ]; then printf 'qf=%dk ' "$((qf / 1000))"; elif [ "$qf" -gt 0 ]; then printf 'qf=%d ' "$qf"; fi
 }
 
 feedsoldestfetch()
 {
   local src oldestfile="" oldestmt="" metafile mt
-  for src in feodo spamhaus_drop spamhaus_edrop urlhaus threatfox; do
+  for src in feodo spamhaus_drop spamhaus_edrop netapi_ips netapi_domains urlhaus threatfox; do
     metafile="$feedsroot/meta/$src.meta"
     [ -f "$metafile" ] || continue
     mt="$(date -r "$metafile" +%s 2>/dev/null)"
@@ -3479,6 +3571,174 @@ loadcemlibrary()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# emailrow prints "label:" plus $2 HTML-escaped and word-wrapped to $emailwrapwidth (blank label = plain text, $3=b = bold)
+
+emailrow()
+{
+  printf '%s\n' "$2" | awk -v l="$1" -v w="$emailwrapwidth" -v b="$3" '
+    function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); return s }
+    function out(s) { print pfx (b == "b" ? "<b>" esc(s) "</b>" : esc(s)); pfx = sp }
+    { v = (NR == 1 ? $0 : v " " $0) }
+    END {
+      ind = 0; pfx = ""
+      if (l != "") { lab = l ":"; ind = (length(lab) < 13 ? 13 : length(lab) + 1); pfx = "<b>" esc(lab) "</b>" sprintf("%" (ind - length(lab)) "s", "") }
+      sp = sprintf("%" ind "s", "")
+      n = split(v, wd, " "); line = ""
+      for (i = 1; i <= n; i++) {
+        if (line == "") line = wd[i]
+        else if (ind + length(line) + 1 + length(wd[i]) <= w) line = line " " wd[i]
+        else { out(line); line = wd[i] }
+      }
+      out(line)
+    }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emaillinkrow prints "label:" plus a clickable link to $2, aligned with emailrow
+
+emaillinkrow()
+{
+  local pad=$((12 - ${#1}))
+  [ "$pad" -lt 1 ] && pad=1
+  printf "<b>%s:</b>%${pad}s<a href=\"%s\">%s</a>\n" "$1" "" "$2" "$2"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emaildivider prints one $emailwrapwidth-wide line of "=" for the alert email layout
+
+emaildivider()
+{
+  awk -v w="$emailwrapwidth" 'BEGIN { s = sprintf("%" w "s", ""); gsub(/ /, "=", s); print s }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emailsection prints a bold heading ($1) between two dividers
+
+emailsection()
+{
+  emaildivider
+  emailrow "" "$1" b
+  emaildivider
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emailfeedname turns a comma-joined source list (e.g. urlhaus,threatfox) into display names (URLhaus and ThreatFox)
+
+emailfeedname()
+{
+  echo "$1" | awk -F',' '{
+    for (i = 1; i <= NF; i++) {
+      s = $i
+      if (s == "feodo") s = "Feodo Tracker"; else if (s == "spamhaus-drop") s = "Spamhaus DROP"; else if (s == "spamhaus-edrop") s = "Spamhaus EDROP"
+      else if (s == "urlhaus") s = "URLhaus"; else if (s == "threatfox") s = "ThreatFox"; else if (s == "qfeeds") s = "Q-Feeds"; else if (s == "netapi") s = "NetAPI.com"
+      o = (i == 1 ? s : (i == NF ? o " and " s : o ", " s))
+    }
+    print o
+  }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emailfamilyrows splits a comma-joined feed family string into family/threat/confidence/tags email rows
+
+emailfamilyrows()
+{
+  local tab label value
+  tab="$(printf '\t')"
+  echo "$1" | awk -F',' '
+    function trim(s) { sub(/^ +/, "", s); sub(/ +$/, "", s); return s }
+    {
+      for (i = 1; i <= NF; i++) {
+        p = trim($i); if (p == "") continue
+        if (p ~ /; [0-9]+ URL\(s\)/) {
+          t = ""; k = index(p, "; tags: ")
+          if (k) { t = substr(p, k + 8); p = substr(p, 1, k - 1) }
+          print "family\t" p; if (t != "") print "tags\t" t
+        } else if (match(p, / \([^()]*confidence: [0-9]+[^()]*\)$/)) {
+          name = substr(p, 1, RSTART - 1); inner = substr(p, RSTART + 2, RLENGTH - 3)
+          print "family\t" (name == "" ? "unknown" : name)
+          n = split(inner, f, "; ")
+          for (j = 1; j <= n; j++) {
+            if (f[j] ~ /^confidence: /) print "confidence\t" substr(f[j], 13) "%"
+            else if (f[j] ~ /^tags: /) print "tags\t" substr(f[j], 7)
+            else if (f[j] != "") print "threat\t" f[j]
+          }
+        } else print "family\t" p
+      }
+    }' | while IFS="$tab" read -r label value; do emailrow "$label" "$value"; done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# emailalertbody prints one alert as an intro line, a section heading and labelled rows, shared by single and batch emails
+
+emailalertbody()
+{
+  local kind="$1" indicator="$2" source="$3" detail="$4" feeds plural="" hash fam
+  feeds="$(emailfeedname "$source")"
+  case "$source" in *,*) plural="s" ;; esac
+  case "$kind" in
+    conntrack)
+      emailrow "" "IOCMON detected an active connection ($indicator, local device -> remote host)"
+      emailsection "Matches the $feeds IoC feed$plural"
+      emailfamilyrows "$detail"
+      emailrow "advice" "This address may be a botnet command-and-control server or other malicious host. Please review connected devices and investigate for compromise." ;;
+    dns)
+      emailrow "" "IOCMON observed a DNS query ($indicator, local device -> queried domain)"
+      if [ "$source" = "dns-tunnel-heuristic" ]; then
+        emailsection "Matches a DNS-tunneling/exfiltration heuristic"
+        emailrow "reason" "$detail"
+        emailrow "note" "A pattern-based suspicion, not a confirmed threat-intelligence match: this domain is not in any known-malicious feed. A legitimate service with an unusually long or fast-changing hostname can trigger this."
+        emailrow "advice" "Please verify manually before treating this as a confirmed compromise. If it is expected, add the domain to the DNS exceptions list (Advanced Settings - DNS Watch & Tunneling Detection) to stop it recurring."
+      else
+        emailsection "Matches the $feeds IoC feed$plural"
+        emailfamilyrows "$detail"
+        emailrow "advice" "A device on your network may be compromised or contacting a malware-distribution site."
+      fi ;;
+    auth)
+      emailrow "" "IOCMON detected repeated failed login attempts"
+      emailsection "Possible brute-force login attempts"
+      emailrow "service" "$source"
+      emailrow "from" "$indicator"
+      emailrow "attempts" "$detail"
+      emailrow "advice" "Please verify this is not an authorized user and consider blocking this address." ;;
+    fsintegrity)
+      emailrow "" "IOCMON flagged a filesystem-integrity event"
+      if isfeedmatchsource "$source"; then
+        hash="${detail#hash match }"; hash="${hash%% *}"
+        fam="${detail#hash match * (}"; fam="${fam%)}"
+        emailsection "Matches the $feeds IoC feed$plural"
+        emailrow "file" "$indicator"
+        emailrow "hash" "$hash"
+        emailfamilyrows "$fam"
+      else
+        emailsection "Filesystem-integrity change"
+        emailrow "file" "$indicator"
+        emailrow "reason" "$source"
+        emailrow "detail" "$detail"
+      fi
+      emailrow "advice" "Please review this file/change as soon as possible." ;;
+    cron)
+      emailrow "" "IOCMON detected a new scheduled task that it did not create"
+      emailsection "Unexpected new cron entry"
+      emailrow "entry" "$indicator"
+      if [ "$source" = "cru" ]; then emailrow "advice" "This can indicate cron-based persistence from malware. Please review with 'cru l'."
+      else emailrow "advice" "This can indicate cron-based persistence from malware. Please review the Entware crontab."; fi ;;
+    simulated)
+      emailrow "" "This is a SIMULATED detection triggered via the (T)est hotkey to confirm IOCMON's full detection-to-alert pipeline is working."
+      emailsection "SIMULATED TEST - no real compromise has been detected"
+      emailrow "indicator" "$indicator"
+      emailrow "feed" "$feeds"
+      emailfamilyrows "${detail% - SIMULATED TEST*}" ;;
+    *)
+      emailrow "" "IOCMON detected a security event ($kind)"
+      emailsection "$source"
+      emailrow "indicator" "$indicator"
+      emailrow "detail" "$detail" ;;
+  esac
+  abusechemaillinks "$kind" "$indicator" "$source" "$detail"
+  emaildivider
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # sendmessage is the single shared entry point every IOCMON alert type routes through
 
 sendmessage()
@@ -3501,104 +3761,28 @@ sendmessage()
     local emailSubject="" emailBodyTitle=""
 
     case "$kind" in
-      test)
-        emailSubject="TEST: IOCMON email notification test"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "This is a test email requested via 'iocmon.sh -email' to confirm AMTM email notifications are configured correctly. If you received this, IOCMON's email pipeline is working.\n"
-        } > "$tmpEMailBodyFile"
-        ;;
-      simulated)
-        emailSubject="TEST: Simulated IOC detection ($indicator)"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "This is a <b>SIMULATED</b> detection triggered via the (T)est hotkey to confirm IOCMON's full detection-to-alert pipeline is working. <b>No real compromise has been detected.</b>\n"
-        printf "\n"
-        printf "<b>Indicator:</b> %s\n<b>Feed source:</b> %s\n<b>Detail:</b> %s\n" "$indicator" "$source" "$detail"
-        } > "$tmpEMailBodyFile"
-        ;;
-      conntrack)
-        emailSubject="ALERT: Connection to known-malicious IP ($indicator)"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "<b>IOCMON</b> detected an active connection (<b>%s</b>, local device -&gt; remote host), which matches the <b>%s</b> IoC feed (family: %s). This address may be a botnet command-and-control server or other malicious host.\n" "$indicator" "$source" "$detail"
-        printf "\n"
-        printf "Please review connected devices and investigate for compromise.\n"
-        } > "$tmpEMailBodyFile"
-        ;;
+      test) emailSubject="TEST: IOCMON email notification test" ;;
+      simulated) emailSubject="TEST: Simulated IOC detection ($indicator)" ;;
+      conntrack) emailSubject="ALERT: Connection to known-malicious IP ($indicator)" ;;
       dns)
-        if [ "$source" = "dns-tunnel-heuristic" ]; then
-          emailSubject="ALERT: Suspicious DNS query pattern detected ($indicator)"
-          emailBodyTitle="$emailSubject"
-          {
-          printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-          printf "\n"
-          printf "<b>IOCMON</b> observed a DNS query (<b>%s</b>, local device -&gt; queried domain) that matches a behavioral DNS-tunneling/exfiltration heuristic - %s.\n" "$indicator" "$detail"
-          printf "\n"
-          printf "This is a <b>pattern-based suspicion, not a confirmed threat-intelligence match</b> - it is not present in any known-malicious-domain feed. Please verify manually before treating this as a confirmed compromise; a legitimate service with an unusually long or high-subdomain-churn hostname can trigger this. If this is expected/benign, add the domain to the DNS exceptions list (Advanced Settings - DNS Watch &amp; Tunneling Detection) to stop it recurring.\n"
-          } > "$tmpEMailBodyFile"
-        else
-          emailSubject="ALERT: DNS query for known-malicious domain ($indicator)"
-          emailBodyTitle="$emailSubject"
-          {
-          printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-          printf "\n"
-          printf "<b>IOCMON</b> observed a DNS query (<b>%s</b>, local device -&gt; queried domain), which matches the <b>%s</b> IoC feed (family: %s). A device on your network may be compromised or contacting a malware-distribution site.\n" "$indicator" "$source" "$detail"
-          } > "$tmpEMailBodyFile"
-        fi
-        ;;
-      auth)
-        emailSubject="WARNING: Possible brute-force login attempts from $indicator"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "<b>IOCMON</b> detected repeated failed login attempts against the <b>%s</b> service from <b>%s</b> (%s). Please verify this is not an authorized user and consider blocking this address.\n" "$source" "$indicator" "$detail"
-        } > "$tmpEMailBodyFile"
-        ;;
-      fsintegrity)
-        emailSubject="ALERT: Filesystem-integrity event - $indicator"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "<b>IOCMON</b> flagged a filesystem-integrity event on <b>%s</b>.\n" "$indicator"
-        printf "<b>Reason:</b> %s (%s)\n" "$source" "$detail"
-        printf "\n"
-        printf "Please review this file/change as soon as possible.\n"
-        } > "$tmpEMailBodyFile"
-        ;;
-      cron)
-        emailSubject="ALERT: Unexpected new cron entry detected"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "<b>IOCMON</b> detected a new scheduled task (cru entry) that it did not create:\n"
-        printf "<b>%s</b>\n" "$indicator"
-        printf "\n"
-        printf "This can indicate cron-based persistence from malware. Please review with 'cru l'.\n"
-        } > "$tmpEMailBodyFile"
-        ;;
-      *)
-        emailSubject="ALERT: IOCMON detected a security event ($kind)"
-        emailBodyTitle="$emailSubject"
-        {
-        printf "<b>Date/Time:</b> $(date +'%b %d %Y %X')\n"
-        printf "\n"
-        printf "<b>Indicator:</b> %s\n<b>Source:</b> %s\n<b>Detail:</b> %s\n" "$indicator" "$source" "$detail"
-        } > "$tmpEMailBodyFile"
-        ;;
+        if [ "$source" = "dns-tunnel-heuristic" ]; then emailSubject="ALERT: Suspicious DNS query pattern detected ($indicator)"
+        else emailSubject="ALERT: DNS query for known-malicious domain ($indicator)"; fi ;;
+      auth) emailSubject="WARNING: Possible brute-force login attempts from $indicator" ;;
+      fsintegrity) emailSubject="ALERT: Filesystem-integrity event - $indicator" ;;
+      cron) emailSubject="ALERT: Unexpected new cron entry detected" ;;
+      *) emailSubject="ALERT: IOCMON detected a security event ($kind)" ;;
     esac
+    emailBodyTitle="$emailSubject"
 
-    abusechemaillinks "$kind" "$indicator" "$source" "$detail" >> "$tmpEMailBodyFile"
-    [ -n "$repip" ] && reputationemailblock "$repip" "$kind" >> "$tmpEMailBodyFile"
+    {
+      printf "<b>Date/Time:</b> %s\n\n" "$(date +'%b %d %Y %X')"
+      if [ "$kind" = "test" ]; then
+        emailrow "" "This is a test email requested via 'iocmon.sh -email' to confirm AMTM email notifications are configured correctly. If you received this, IOCMON's email pipeline is working."
+      else
+        emailalertbody "$kind" "$indicator" "$source" "$detail"
+      fi
+      [ -n "$repip" ] && reputationemailblock "$repip" "$kind"
+    } > "$tmpEMailBodyFile"
 
     _SendEMailNotification_ "IOCMON v$version" "$emailSubject" "$tmpEMailBodyFile" "$emailBodyTitle"
 
@@ -3630,20 +3814,17 @@ sendbatchmessage()
     emailBodyTitle="$emailSubject"
 
     {
-      printf "<b>Date/Time:</b> %s\n" "$(date +'%b %d %Y %X')"
-      printf "\n"
-      printf "<b>IOCMON</b> detected <b>%s</b> separate security events during a single scan cycle. Rather than send %s separate emails, they are grouped below:\n" "$count" "$count"
-      printf "\n"
+      printf "<b>Date/Time:</b> %s\n\n" "$(date +'%b %d %Y %X')"
+      emailrow "" "IOCMON detected $count separate security events during a single scan cycle. Rather than send $count separate emails, they are grouped below."
       local i=0 bkind bindicator bsource bdetail brepip
       while IFS="$tab" read -r bkind bindicator bsource bdetail brepip; do
         i=$((i+1))
-        printf "<b>%d. [%s]</b> %s\n" "$i" "$bkind" "$bindicator"
-        printf "&nbsp;&nbsp;&nbsp;&nbsp;Source: %s<br>&nbsp;&nbsp;&nbsp;&nbsp;Detail: %s\n" "$bsource" "$bdetail"
-        abusechemaillinks "$bkind" "$bindicator" "$bsource" "$bdetail" | sed 's/^/\&nbsp;\&nbsp;\&nbsp;\&nbsp;/'
+        printf "\n<b>Event %d of %d (%s)</b>\n" "$i" "$count" "$bkind"
+        emailalertbody "$bkind" "$bindicator" "$bsource" "$bdetail"
         [ -n "$brepip" ] && reputationemailblock "$brepip" "$bkind"
-        printf "\n"
       done < "$batchfile"
-      printf "Please review each item above.\n"
+      printf "\n"
+      emailrow "" "Please review each item above."
     } > "$tmpEMailBodyFile"
 
     _SendEMailNotification_ "IOCMON v$version" "$emailSubject" "$tmpEMailBodyFile" "$emailBodyTitle"
@@ -3737,6 +3918,7 @@ shortusagetype()
 dnsreplyip()
 {
   local dom="$1" logf="${dnslogresolved:-/tmp/syslog.log}"
+  if dnsusesagh; then aghreplyip "$dom"; return; fi
   [ -n "$dom" ] && [ -f "$logf" ] || return
   tail -n 20000 "$logf" | grep -F 'dnsmasq' | grep -E ' (reply|cached) ' | awk -v d="$dom" '
     function usable(v) {
@@ -3833,7 +4015,7 @@ abuseipdbquery()
       rm -f "$body" "$hdrs"; return 1 ;;
     401|403)
       printf '%s\t%s\n' "$((nowepoch + 3600))" "API key rejected (HTTP $code)" > "$stateroot/abuseipdb_block"
-      repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 12 under Feed Sources, Reputation & API Keys"
+      repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 13 under Feed Sources, Reputation & API Keys"
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
       rm -f "$body" "$hdrs"; return 1 ;;
     *)
@@ -3982,20 +4164,28 @@ reputationemailblock()
 {
   local ip="$1" rec rip epoch score total users last cc cname usage isp domain tor wl hostnames cats note="informational only"
   [ -n "$ip" ] && [ -n "$stateroot" ] && [ -f "$stateroot/abuseipdb_cache.db" ] || return
-  [ "$2" = "simulated" ] && note="SIMULATED TEST - live AbuseIPDB data for a real feed indicator, informational only"
+  [ "$2" = "simulated" ] && note="SIMULATED TEST (live data, real feed IP)"
   rec="$(awk -F'|' -v ip="$ip" '$1==ip' "$stateroot/abuseipdb_cache.db" | tail -n1)"
   [ -n "$rec" ] || return
   IFS='|' read -r rip epoch score total users last cc cname usage isp domain tor wl hostnames cats <<EOF
 $rec
 EOF
-  printf "\n<b>AbuseIPDB reputation for %s</b> (%s):\n" "$ip" "$note"
-  printf "Abuse confidence score: <b>%s%%</b>\n" "$score"
-  printf "Reports: %s from %s distinct user(s) in the last %s days, last reported %s\n" "$total" "$users" "$abuseipdbmaxage" "${last:-never}"
-  printf "Top report categories: %s\n" "${cats:-none}"
-  printf "Country: %s%s\n" "${cname:-${cc:-unknown}}" "${cname:+ (${cc})}"
-  printf "Usage type: %s\nISP: %s\nDomain: %s\nHostnames: %s\n" "${usage:-n/a}" "${isp:-n/a}" "${domain:-n/a}" "${hostnames:-none}"
-  printf "Tor exit node: %s\nAbuseIPDB whitelisted: %s\n" "${tor:-n/a}" "${wl:-n/a}"
-  printf "Details: https://www.abuseipdb.com/check/%s\n" "$ip"
+  printf "\n"
+  emailsection "AbuseIPDB reputation for $ip"
+  emailrow "note" "$note"
+  emailrow "score" "${score}% abuse confidence"
+  emailrow "reports" "$total from $users distinct user(s) in the last $abuseipdbmaxage days"
+  emailrow "last report" "${last:-never}"
+  emailrow "categories" "${cats:-none}"
+  emailrow "country" "${cname:-${cc:-unknown}}${cname:+ (${cc})}"
+  emailrow "usage type" "${usage:-n/a}"
+  emailrow "ISP" "${isp:-n/a}"
+  emailrow "domain" "${domain:-n/a}"
+  emailrow "hostnames" "${hostnames:-none}"
+  emailrow "Tor exit" "${tor:-n/a}"
+  emailrow "whitelisted" "${wl:-n/a}"
+  emaillinkrow "details" "https://www.abuseipdb.com/check/$ip"
+  emaildivider
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4180,9 +4370,10 @@ checkconntrack()
       if (ind in srcs) { addmatch(ind, srcname, famname); next }
       if (index(ind, "/") == 0) next
       split(ind, p, "/")
-      divisor = 2 ^ (32 - (p[2] + 0))
-      nb = int(toint(p[1]) / divisor)
-      for (d in dint) if (int(dint[d] / divisor) == nb) addmatch(d, srcname, famname)
+      m = p[2] + 0; divisor = 2 ^ (32 - m)
+      if (!(m in built)) { built[m] = 1; for (d in dint) { b = m SUBSEP int(dint[d] / divisor); bk[b] = (b in bk ? bk[b] " " d : d) } }
+      b = m SUBSEP int(toint(p[1]) / divisor)
+      if (b in bk) { nbl = split(bk[b], bl, " "); for (j = 1; j <= nbl; j++) addmatch(bl[j], srcname, famname) }
     }
     END {
       for (d in msrc) { n = split(srcs[d], sl, ","); for (i = 1; i <= n; i++) print sl[i]"|"d"|"msrc[d]"|"mfam[d] }
@@ -4191,6 +4382,240 @@ checkconntrack()
     raisealert "conntrack" "${srcip}->${matchedip}" "$source" "$family" "$matchedip"
   done
   rm -f "$pairfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghlog appends one IOCMON log line: $1 = level (INFO/WARNING), $2 = message
+
+aghlog()
+{
+  printf '%s %s IOCMON[%s] - %s: %s\n' "$(date +'%b %d %Y %X')" "$(nvram get lan_hostname)" "$$" "$1" "$2" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghjqbin echoes the jq to use: on PATH, else Entware's (a cron/boot PATH may lack /opt/bin)
+
+aghjqbin()
+{
+  which jq 2>/dev/null && return 0
+  [ -x /opt/bin/jq ] && { echo /opt/bin/jq; return 0; }
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghrunning succeeds if an AdGuard Home process is running
+
+aghrunning()
+{
+  pidof AdGuardHome >/dev/null 2>&1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsusesagh succeeds if checkdns should read AdGuard Home instead of dnsmasq (auto: only when AdGuard Home owns port 53)
+
+dnsusesagh()
+{
+  case "$dnssource" in
+    adguardhome) return 0 ;;
+    dnsmasq) return 1 ;;
+  esac
+  aghrunning || return 1
+  netstat -lnup 2>/dev/null | awk '$4 ~ /:53$/ { print $NF }' | grep -q 'AdGuardHome' && return 0
+  netstat -lnup 2>/dev/null | awk '$4 ~ /:53$/' | grep -q 'dnsmasq' && return 1
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghyaml echoes the AdGuardHome.yaml in use (from the running process's -c, else the usual paths)
+
+aghyaml()
+{
+  local pid f
+  pid="$(pidof AdGuardHome 2>/dev/null | awk '{ print $1 }')"
+  if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ]; then
+    f="$(tr '\000' '\n' < "/proc/$pid/cmdline" | awk 'p { print; exit } $0 == "-c" || $0 == "--config" { p = 1 }')"
+    [ -n "$f" ] && [ "${f#/}" = "$f" ] && f="$(readlink "/proc/$pid/cwd" 2>/dev/null)/$f"
+    [ -f "$f" ] && { echo "$f"; return; }
+  fi
+  for f in $aghyamlpaths; do [ -f "$f" ] && { echo "$f"; return; }; done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghapiurl echoes the API base URL: $aghurl, else the yaml's http.address (or the older bind_host/bind_port)
+
+aghapiurl()
+{
+  local y addr host port
+  [ -n "$aghurl" ] && { echo "${aghurl%/}"; return; }
+  y="$(aghyaml)"
+  if [ -n "$y" ]; then
+    addr="$(awk '/^http:/ { h = 1; next } h && /^[^ ]/ { h = 0 } h && $1 == "address:" { print $2; exit }' "$y")"
+    if [ -z "$addr" ]; then
+      host="$(awk '$1 == "bind_host:" { print $2; exit }' "$y")"; port="$(awk '$1 == "bind_port:" { print $2; exit }' "$y")"
+      [ -n "$port" ] && addr="${host:-0.0.0.0}:$port"
+    fi
+  fi
+  addr="${addr:-0.0.0.0:3000}"
+  host="${addr%:*}"; port="${addr##*:}"
+  case "$host" in ""|0.0.0.0|"[::]"|::) host="127.0.0.1" ;; esac
+  echo "http://$host:$port"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghcurl $1=path $2=body file [curl args...] calls the API with the $aghauthfile login and prints the HTTP status
+
+aghcurl()
+{
+  local p="$1" o="$2"; shift 2
+  curl -s -L -k --max-time 15 -K "$aghauthfile" -o "$o" -w '%{http_code}' "$(aghapiurl)$p" "$@" 2>/dev/null
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghauthwrite $1=user $2=password stores the login in curl config format, readable by root only
+
+aghauthwrite()
+{
+  local u p
+  u="$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; p="$(printf '%s' "$2" | sed 's/[\\"]/\\&/g')"
+  ( umask 077; printf 'user = "%s:%s"\n' "$u" "$p" > "$aghauthfile" )
+  chmod 600 "$aghauthfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghstatus echoes "ok" or a one-line reason: no jq, no login, API unreachable, bad login, query log off
+
+aghstatus()
+{
+  local code jq b="/tmp/iocmon_aghst.$$"
+  jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
+  [ -s "$aghauthfile" ] || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch)"; return 1; }
+  code="$(aghcurl /control/querylog/config "$b")"
+  [ "$code" = "404" ] && code="$(aghcurl /control/querylog_info "$b")"
+  case "$code" in
+    200) ;;
+    401|403) rm -f "$b"; echo "AdGuard Home rejected the login (HTTP $code)"; return 1 ;;
+    000|"") rm -f "$b"; echo "AdGuard Home API not reachable at $(aghapiurl)"; return 1 ;;
+    *) rm -f "$b"; echo "AdGuard Home API error (HTTP $code)"; return 1 ;;
+  esac
+  if ! "$jq" -e '.enabled == true' "$b" >/dev/null 2>&1; then
+    rm -f "$b"; echo "AdGuard Home's query log is turned off (Settings - DNS settings - Query logs)"; return 1
+  fi
+  if "$jq" -e '.anonymize_client_ip == true' "$b" >/dev/null 2>&1; then
+    rm -f "$b"; echo "ok, but client IPs are anonymized in AdGuard Home, so alerts can't name the device"; return 0
+  fi
+  rm -f "$b"; echo "ok"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghjq turns one query-log page into M| (page meta), Q| (domain|client|blocked) and R| (domain|ip) lines; no regex (no Oniguruma)
+aghjq='
+def key: . as $t
+  | (if ($t | endswith("Z")) then { b: $t[19:-1], z: 0 }
+     else { b: $t[19:-6],
+            z: ((($t[-5:-3] | tonumber) * 3600 + ($t[-2:] | tonumber) * 60) * (if $t[-6:-5] == "-" then -1 else 1 end)) } end) as $p
+  | ((($t[0:19] + "Z") | fromdateiso8601) - $p.z) as $s
+  | (if ($p.b | startswith(".")) then $p.b[1:] else "" end) as $f
+  | ("0000000000" + ($s | floor | tostring))[-10:] + (($f + "000000000")[:9]);
+def blocked: (.reason // "") | (startswith("Filtered") and . != "FilteredSafeSearch");
+(.data // []) as $d
+| ($d | map(try (.time | key) catch "0")) as $k
+| "M|\($d | length)|\($k | min // "")|\($k | max // "")|\($d[-1].time // "")",
+  ($d[] | select((try (.time | key) catch "0") > $cur)
+   | ((.question.name // "") | ascii_downcase | rtrimstr(".")) as $n
+   | select($n != "")
+   | "Q|\($n)|\(.client // "")|\(if blocked then 1 else 0 end)",
+     (.answer // [] | .[] | select(.type == "A" or .type == "AAAA") | "R|\($n)|\(.value)"))
+'
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghquerypairs $1=output file writes the domain|client pairs logged since the cursor; 1 = API error, 2 = first run
+
+aghquerypairs()
+{
+  local outfile="$1" tmp="/tmp/iocmon_agh.$$" cur="" curfile="" newest="" older="" pages=0 meta n oldk newk oldraw out code done=0 jq
+  aghqueries=0; aghskippedblocked=0
+  : > "$outfile"
+  if ! jq="$(aghjqbin)"; then
+    [ "$aghjqwarned" = "1" ] || aghlog "WARNING" "DNS watch needs jq to read AdGuard Home's query log - install it from the Entware components menu (opkg install jq)."
+    aghjqwarned=1; return 1
+  fi
+  aghjqwarned=0
+  [ -n "$stateroot" ] && curfile="$stateroot/agh_cursor"
+  if [ -n "$curfile" ] && [ -f "$curfile" ]; then cur="$(cat "$curfile" 2>/dev/null)"; else cur="${aghcursorcache:-}"; fi
+  [ "${#cur}" -eq 19 ] || cur=""
+  mkdir -p "$tmp"; : > "$tmp/all"; : > "$outfile"
+
+  while [ "$pages" -lt "$aghmaxpages" ]; do
+    if [ -n "$older" ]; then
+      code="$(aghcurl /control/querylog "$tmp/resp" -G --data-urlencode "limit=$aghpagesize" --data-urlencode "response_status=all" --data-urlencode "older_than=$older")"
+    else
+      code="$(aghcurl /control/querylog "$tmp/resp" -G --data-urlencode "limit=$aghpagesize" --data-urlencode "response_status=all")"
+    fi
+    if [ "$code" != "200" ]; then
+      [ "$aghapiwarned" != "$code" ] && aghlog "WARNING" "DNS watch could not read AdGuard Home's query log (HTTP ${code:-none} from $(aghapiurl)) - check Advanced Settings - DNS Watch."
+      aghapiwarned="$code"; rm -rf "$tmp"; return 1
+    fi
+    [ -n "$aghapiwarned" ] && aghlog "INFO" "DNS watch can read AdGuard Home's query log again."
+    aghapiwarned=""
+    "$jq" -r --arg cur "$cur" "$aghjq" "$tmp/resp" > "$tmp/page" 2>"$tmp/err"
+    meta="$(head -n 1 "$tmp/page")"
+    case "$meta" in
+      M\|*) ;;
+      *) aghlog "WARNING" "DNS watch could not parse AdGuard Home's query log reply ($(head -c 200 "$tmp/err" "$tmp/resp" 2>/dev/null | tr '\n' ' '))."
+         rm -rf "$tmp"; return 1 ;;
+    esac
+    n="$(echo "$meta" | cut -d'|' -f2)"; oldk="$(echo "$meta" | cut -d'|' -f3)"; newk="$(echo "$meta" | cut -d'|' -f4)"; oldraw="$(echo "$meta" | cut -d'|' -f5)"
+    if [ "$pages" -eq 0 ]; then
+      newest="$newk"
+      if [ "${n:-0}" -gt 0 ] && [ "${#newest}" -ne 19 ]; then
+        aghlog "WARNING" "DNS watch could not read the timestamps in AdGuard Home's query log (newest: $(echo "$meta" | cut -d'|' -f5))."
+        rm -rf "$tmp"; return 1
+      fi
+    fi
+    sed 1d "$tmp/page" >> "$tmp/all"
+    pages=$((pages + 1))
+    [ -z "$cur" ] && { done=1; break; }
+    [ "${n:-0}" -lt "$aghpagesize" ] && { done=1; break; }
+    awk -v a="k$oldk" -v b="k$cur" 'BEGIN { exit !(a <= b) }' && { done=1; break; }
+    [ -n "$oldraw" ] || { done=1; break; }
+    older="$oldraw"
+  done
+  [ "$done" -eq 0 ] && aghlog "WARNING" "DNS watch read $pages pages ($((pages * aghpagesize)) queries) of AdGuard Home's log this cycle and stopped; older queries since the last cycle were not checked. Raise aghmaxpages or lower timerloop."
+
+  if [ -n "$newest" ]; then
+    if [ -n "$curfile" ]; then echo "$newest" > "$curfile"; fi
+    aghcursorcache="$newest"
+  fi
+  if [ -z "$cur" ]; then
+    aghlog "INFO" "DNS watch is reading AdGuard Home's query log ($(aghapiurl)), starting from now."
+    rm -rf "$tmp"; return 2
+  fi
+
+  grep '^R|' "$tmp/all" | cut -d'|' -f2- >> "$aghreplyfile"
+  [ "$(wc -l < "$aghreplyfile" 2>/dev/null || echo 0)" -gt 20000 ] && { tail -n 10000 "$aghreplyfile" > "$aghreplyfile.t" && mv -f "$aghreplyfile.t" "$aghreplyfile"; }
+
+  aghqueries="$(grep -c '^Q|' "$tmp/all")"
+  aghskippedblocked="$(grep -c '^Q|.*|1$' "$tmp/all")"
+  if [ "$aghincludeblocked" = "1" ]; then grep '^Q|' "$tmp/all"; else grep '^Q|.*|0$' "$tmp/all"; fi | cut -d'|' -f2,3 | sort -u > "$outfile"
+  [ "$aghincludeblocked" = "1" ] && aghskippedblocked=0
+  rm -rf "$tmp"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghreplyip $1=domain echoes the last public IP AdGuard Home answered for $1 or a subdomain (never resolves itself)
+
+aghreplyip()
+{
+  [ -n "$1" ] && [ -f "$aghreplyfile" ] || return
+  awk -F'|' -v d="$1" '
+    function usable(v) {
+      if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return (v !~ /^(0|10|127)\./ && v !~ /^192\.168\./ && v !~ /^172\.(1[6-9]|2[0-9]|3[01])\./)
+      return (v ~ /^[23][0-9a-fA-F]*:[0-9a-fA-F:]+$/)
+    }
+    ($1 == d || substr($1, length($1) - length(d)) == "." d) && usable($2) { ip = $2 }
+    END { if (ip != "") print ip }' "$aghreplyfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4509,7 +4934,10 @@ checkdns()
 
   [ "$enablednswatch" -eq 1 ] || return
 
-  if ! dnsquerylogenabled; then
+  local aghmode=0
+  dnsusesagh && aghmode=1
+
+  if [ "$aghmode" -eq 0 ] && ! dnsquerylogenabled; then
     if [ "$dnsquerylogwarned" != "1" ]; then
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch is enabled but dnsmasq query logging is off - enable it from the Configuration Menu." >> "$logfile"
       dnsquerylogwarned=1
@@ -4524,79 +4952,101 @@ checkdns()
   [ "$enableqfeeds" -eq 1 ] || qfdomfile=""
   [ -s "$domainsfile" ] || [ -s "$qfdomfile" ] || return
 
-  local synclog
-  resolvestateroot
-  [ "$dnsforcefilelog" -eq 1 ] && [ -n "$stateroot" ] && rotatednsfilelog "$stateroot/dnsmasq_queries.log"
-
-  resolvednslogfile
-  synclog="$dnslogresolved"
-  [ -f "$synclog" ] || return
-
-  if [ "$synclog" != "$dnslogannounced" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
-    dnslogannounced="$synclog"
-  fi
-  dnslogshort="$synclog"
-  [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$synclog")>"
-
-  if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
-    dnslognonewarned=1
-  fi
-  [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
-
-  local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor=""
-  linecount="$(wc -l < "$synclog" | tr -d ' ')"
-
-  if [ -n "$stateroot" ]; then
-    mkdir -m 755 -p "$stateroot"
-    checkpointfile="$stateroot/dns_checkpoint"
-    anchorfile="$stateroot/dns_anchor"
-    [ -f "$checkpointfile" ] && lastcount="$(cat "$checkpointfile" 2>/dev/null)"
-    [ -z "$lastcount" ] && lastcount=0
-    [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
-  elif [ -n "$dnscheckpointcache" ]; then
-    lastcount="$dnscheckpointcache"
-    anchor="$dnsanchorcache"
-  fi
-
-  lastcount="$(syslogresumepoint "$synclog" "$lastcount" "$anchor" "$linecount")"
-  newlines=$((linecount - lastcount))
-
-  anchor="$(tail -n 1 "$synclog")"
-  [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
-  [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
-  dnscheckpointcache="$linecount"
-  dnsanchorcache="$anchor"
-
-  [ "$newlines" -le 0 ] && return
-
-  dnschecked="$newlines"
-  dnslastcheck=$(date +'%H:%M')
-
-  local dnsmasqlines
-  dnsmasqlines="$(tail -n "$newlines" "$synclog" | grep -Fc 'dnsmasq')"
-
   local querypairs
-  querypairs="$(tail -n "$newlines" "$synclog" | grep -F 'dnsmasq' | awk '
-    {
-      domain=""; src=""
-      for (i=1; i<=NF; i++) {
-        if ($i ~ /^query\[[A-Za-z]+\]$/) { domain=$(i+1) }
-        if ($i=="from" && (i+1)<=NF) { src=$(i+1) }
-      }
-      if (domain!="" && src!="") print domain"|"src
-    }
-  ' | sort -u)"
-
-  if [ -z "$querypairs" ]; then
-    if [ "$dnsmasqlines" -gt 0 ] && [ "$dnsquerymissingwarned" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch sees dnsmasq activity in the log but no query[...] lines. Two known causes: (1) log-queries is configured but dnsmasq hasn't picked it up yet - try 'service restart_dnsmasq'; (2) DHCP hands LAN clients a DNS server that isn't this router's own LAN IP, so queries never pass through this dnsmasq at all - check the DHCP Server DNS setting in the web UI if (1) doesn't help." >> "$logfile"
-      dnsquerymissingwarned=1
+  if [ "$aghmode" -eq 1 ]; then
+    # AdGuard Home owns port 53: read its query log through the API (see aghquerypairs)
+    resolvestateroot
+    [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
+    if [ "$dnslogannounced" != "adguardhome" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading AdGuard Home's query log via its API ($(aghapiurl))." >> "$logfile"
+      dnslogannounced="adguardhome"
     fi
-    return
+    dnslogshort="AdGuard Home API $(aghapiurl)"
+    local aghrc
+    aghquerypairs "$dnspairfile.agh"; aghrc=$?
+    # 2 = first run, cursor set to now: still a completed check
+    [ "$aghrc" -eq 2 ] && dnslastcheck=$(date +'%H:%M')
+    [ "$aghrc" -eq 0 ] || { rm -f "$dnspairfile.agh"; return; }
+    dnschecked="$aghqueries"
+    dnslastcheck=$(date +'%H:%M')
+    querypairs="$(cat "$dnspairfile.agh")"
+    rm -f "$dnspairfile.agh"
+    [ -z "$querypairs" ] && return
+  else
+    # dnsmasq: tail its log-queries lines
+    local synclog
+    resolvestateroot
+    [ "$dnsforcefilelog" -eq 1 ] && [ -n "$stateroot" ] && rotatednsfilelog "$stateroot/dnsmasq_queries.log"
+
+    resolvednslogfile
+    synclog="$dnslogresolved"
+    [ -f "$synclog" ] || return
+
+    if [ "$synclog" != "$dnslogannounced" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
+      dnslogannounced="$synclog"
+    fi
+    dnslogshort="$synclog"
+    [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$synclog")>"
+
+    if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
+      dnslognonewarned=1
+    fi
+    [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
+
+    local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor=""
+    linecount="$(wc -l < "$synclog" | tr -d ' ')"
+
+    if [ -n "$stateroot" ]; then
+      mkdir -m 755 -p "$stateroot"
+      checkpointfile="$stateroot/dns_checkpoint"
+      anchorfile="$stateroot/dns_anchor"
+      [ -f "$checkpointfile" ] && lastcount="$(cat "$checkpointfile" 2>/dev/null)"
+      [ -z "$lastcount" ] && lastcount=0
+      [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
+    elif [ -n "$dnscheckpointcache" ]; then
+      lastcount="$dnscheckpointcache"
+      anchor="$dnsanchorcache"
+    fi
+
+    lastcount="$(syslogresumepoint "$synclog" "$lastcount" "$anchor" "$linecount")"
+    newlines=$((linecount - lastcount))
+
+    anchor="$(tail -n 1 "$synclog")"
+    [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
+    [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
+    dnscheckpointcache="$linecount"
+    dnsanchorcache="$anchor"
+
+    [ "$newlines" -le 0 ] && return
+
+    dnschecked="$newlines"
+    dnslastcheck=$(date +'%H:%M')
+
+    local dnsmasqlines
+    dnsmasqlines="$(tail -n "$newlines" "$synclog" | grep -Fc 'dnsmasq')"
+
+    querypairs="$(tail -n "$newlines" "$synclog" | grep -F 'dnsmasq' | awk '
+      {
+        domain=""; src=""
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^query\[[A-Za-z]+\]$/) { domain=$(i+1) }
+          if ($i=="from" && (i+1)<=NF) { src=$(i+1) }
+        }
+        if (domain!="" && src!="") print domain"|"src
+      }
+    ' | sort -u)"
+
+    if [ -z "$querypairs" ]; then
+      if [ "$dnsmasqlines" -gt 0 ] && [ "$dnsquerymissingwarned" != "1" ]; then
+        echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch sees dnsmasq activity in the log but no query[...] lines. Two known causes: (1) log-queries is configured but dnsmasq hasn't picked it up yet - try 'service restart_dnsmasq'; (2) DHCP hands LAN clients a DNS server that isn't this router's own LAN IP, so queries never pass through this dnsmasq at all - check the DHCP Server DNS setting in the web UI if (1) doesn't help." >> "$logfile"
+        dnsquerymissingwarned=1
+      fi
+      return
+    fi
+    dnsquerymissingwarned=0
   fi
-  dnsquerymissingwarned=0
 
   dnsqueriedcount="$(echo "$querypairs" | wc -l | tr -d ' ')"
 
@@ -6094,6 +6544,7 @@ addtodnsexception()
     dnsexceptions="${dnsexceptions:+$dnsexceptions }$base"
     saveconfig
     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added $base to dnsexceptions via the (Z) hotkey (entry #$origkey: $domain)." >> "$logfile"
+    echo ""
     echo -e "${CGreen}Added ${base} to the DNS Exceptions list.${CClear}"
   fi
   sleep 2
@@ -6263,10 +6714,10 @@ EOF
     flushemailbatch
     blanklineguard
     if [ "$enableabuseipdb" != "1" ] || [ -z "$abuseipdbapikey" ]; then
-      echo -e "${CDkGray}AbuseIPDB reputation check is off - turn it on (Configuration Menu 2, items 11/12) to include it in this test.${CClear}"
+      echo -e "${CDkGray}AbuseIPDB reputation check is off - turn it on (Configuration Menu 2, items 12/13) to include it in this test.${CClear}"
     elif [ -n "$testrepip" ]; then
       echo -e "${CYellow}AbuseIPDB reputation check (SIMULATED TEST - live data):${CClear}"
-      reputationemailblock "$testrepip" simulated | sed 's/<[^>]*>//g; /^$/d; /^AbuseIPDB reputation for/d; s/^/  /'
+      reputationemailblock "$testrepip" simulated | sed 's/<[^>]*>//g; /^$/d; /^=*$/d; /^AbuseIPDB reputation for/d; /^note:/d; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g; s/^/  /'
     else
       echo -e "${CYellow}AbuseIPDB reputation check (SIMULATED TEST): not checked - ${testrepreason:-no lookup was made}.${CClear}"
     fi
@@ -6370,7 +6821,7 @@ vresetdefaults()
     fi
     [ "$enableskynetimport" -eq 1 ] && removeskynetimports
     [ "$logfile" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
-    rm -f "$config"
+    rm -f "$config" "$aghauthfile"
     echo ""
     echo -e "${CGreen}Configuration erased. Restarting IOCMON with default settings...${CClear}"
     sleep 2
@@ -6400,6 +6851,7 @@ applyimportedconfig()
   [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
   resolveiocmonroot
   dnslogpath=""
+  aghurl=""
   dnsforcefilelog=0
   enableskynetimport=0
 
@@ -6808,6 +7260,7 @@ dnsnummapfile="/tmp/iocmon_dns_nummap.$$"
 abuseipdbcyclefile="/tmp/iocmon_aipdb_cycle.$$"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
+aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblocked=0
 timerpaused=0
 exitallmenus=0
 
@@ -7135,12 +7588,14 @@ renderdashboard()
   if [ -n "$feedsroot" ] && [ -f "$feedsroot/ips.txt" ]; then
     feedsindicatorcount="$(( $(cat "$feedsroot/ips.txt" "$feedsroot/domains.txt" "$feedsroot/hashes.txt" 2>/dev/null | wc -l | tr -d ' ') + $(qfeedscount) ))"
     feedsbreakdown="$(feedsourcecounts | sed 's/ *$//')"
+    [ "${#feedsbreakdown}" -gt 65 ] && feedsbreakdown="$(echo "$feedsbreakdown" | cut -c1-62)..."
     feedsoldest="$(feedsoldestfetch)"
   fi
 
   dnsstatus="${CDkGray}off${CClear}"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
+    if dnsusesagh; then dnsstatus="${CGreen}on${CClear} (AdGuard Home, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"
+    elif dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
   fi
   conntrackstatus="${CDkGray}off${CClear}"
   [ "$enableconntrackwatch" -eq 1 ] && conntrackstatus="${CGreen}on${CClear} (${conntrackchecked} dst ips, checked ${conntracklastcheck:-n/a})"
@@ -7313,7 +7768,9 @@ while true; do
   checkdns
   if [ "$enablednswatch" -eq 1 ]; then
     blanklineguard
-    if dnsquerylogenabled; then
+    if dnsusesagh; then
+      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds"
+    elif dnsquerylogenabled; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) against known-malicious-domain feeds"
     else
       echo -e "  ${CYellow}*${CClear} DNS watch is on but dnsmasq query logging isn't - see Advanced Settings item 4"
