@@ -1,3 +1,22 @@
+v1.4.2    - (BETA)
+          - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
+            AdGuard Home (AGH)! Working together on a PoC, he was able to provide the final touches that
+            gives IOCMON all the necessary DNS lookup information through AGH's own API. This means, it does
+            not need to be local, but could be running on some PiHole or other server on your local network!
+            Thanks again for your efforts on this, @Mason!
+          - MINOR: Due to the fact that we lost some original open threat feed functionality when URLhaus
+            decided to go API-only, this exposed new users/installs to a Spamhaus conntrack IP feed only. I'm
+            pleased to announced that this void was filled thanks to slavaolesik, who hosts the NetAPI service
+            (https://netapi.com/) and provides open access to domain and IP threat feeds. The NetAPI feeds
+            have been incorporated into IOCMON, and are turned on by default (can optionally be disabled),
+            and will update along with the other threat feeds. NetAPI will provide a strong foundation not
+            only for new installs or those not wishing to sign up for an API key, but to add to our growing
+            list of relevant indicators.
+          - PATCH: To help with an issue where notification content was scrolling off the side of people's
+            email, some modifications were made to shorten content and provide a better, cleaner layout.
+            Thanks to @twiglets for the suggestion!
+          - PATCH: Various cleanup of other inconsistencies and minor items.
+
 v1.3.8    - (October 24, 2026)
           - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
             Reputation provider. Upon enabling (and signing up for another API key!), this service will scan
