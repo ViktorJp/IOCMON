@@ -1,4 +1,4 @@
-v1.4.2    - (BETA)
+v1.4.3    - (BETA)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
             AdGuard Home (AGH)! Working together on a PoC, he was able to provide the final touches that
             gives IOCMON all the necessary DNS lookup information through AGH's own API. This means, it does
@@ -16,6 +16,13 @@ v1.4.2    - (BETA)
             email, some modifications were made to shorten content and provide a better, cleaner layout.
             Thanks to @twiglets for the suggestion!
           - PATCH: Various cleanup of other inconsistencies and minor items.
+          - PATCH: Made some further enhancements to the AGH functionality under 10.2. It now allows you to
+            enter a custom AGH URL:PORT instead of having to manually do this by editing the .cfg file. Also,
+            there is more feedback after the API username/password and connectivity tests have run to show
+            if everything looks good, or if there are problems. Third, you no longer need to type "auto",
+            "dnsmasq" or "adguardhome", and now instead, pick from a numbered list. Thanks @ryosuke!
+          - PATCH: Fixed the uninstall function to ensure that screen is killed as the very last step, as
+            this was running before the script had a chance to remove its scripts/folders. Thanks @JTnola!
 
 v1.3.8    - (October 24, 2026)
           - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
