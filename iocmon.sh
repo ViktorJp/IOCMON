@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.4.2
+# Version: 1.4.3
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-30
+# Last Updated: 2026-Oct-31
 # ============================================================================================================================
 #
 # Description:
@@ -30,7 +30,6 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
-#   /jffs/addons/iocmon.d/agh.auth                                      : AdGuard Home API login, curl config format, chmod 600
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : raw dropbear auth-failure log, trimmed to $logsize
@@ -100,7 +99,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.4.2"
+version="1.4.3"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -167,7 +166,8 @@ aghurl=""                       # AdGuard Home web/API base URL - blank = read f
 aghincludeblocked=0             # 1 = also check queries AdGuard Home already blocked (they never left the network)
 aghpagesize=500                 # query-log entries fetched per API call
 aghmaxpages=20                  # most API pages read per cycle before giving up and warning about a gap
-aghauthfile="/jffs/addons/iocmon.d/agh.auth"   # AdGuard Home login, curl config format, chmod 600
+aghcred=""                      # AdGuard Home "user:password" login, base64-encoded with openssl (encoded, not encrypted)
+aghauthfile="/jffs/addons/iocmon.d/agh.auth"   # legacy login file, moved into aghcred at startup
 aghreplyfile="/tmp/iocmon_agh_replies"         # "domain|ip" answers seen recently, RAM only, for dnsreplyip
 aghyamlpaths="/opt/etc/AdGuardHome/AdGuardHome.yaml /opt/etc/AdGuardHome.yaml /jffs/addons/AdGuardHome.d/AdGuardHome.yaml"
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
@@ -833,6 +833,7 @@ saveconfig()
     echo 'dnstunnelnamelen='$dnstunnelnamelen
     echo 'dnssource="'"$dnssource"'"'
     echo 'aghurl="'"$aghurl"'"'
+    echo 'aghcred="'"$aghcred"'"'
     echo 'aghincludeblocked='$aghincludeblocked
     echo 'aghpagesize='$aghpagesize
     echo 'aghmaxpages='$aghmaxpages
@@ -879,6 +880,7 @@ saveconfig()
     echo 'track='$track
     echo 'otxreportsort="'"$otxreportsort"'"'
   } > "$config"
+  chmod 600 "$config"
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON config has been updated." >> "$logfile"
 
@@ -1821,7 +1823,11 @@ vadvanceddns()
       *) if dnsusesagh; then dnssrcdisp="${CGreen}auto${CClear} (AdGuard Home detected)"; else dnssrcdisp="${CGreen}auto${CClear} (dnsmasq)"; fi ;;
     esac
     aghon=0; [ "$enablednswatch" -eq 1 ] && dnsusesagh && aghon=1
-    if [ "$aghon" -eq 1 ]; then aghdisp="$(aghstatus)"; case "$aghdisp" in ok*) aghdisp="${CGreen}${aghdisp}${CClear}" ;; *) aghdisp="${CYellow}${aghdisp}${CClear}" ;; esac; else aghdisp="n/a"; fi
+    if [ "$aghon" -ne 1 ]; then aghdisp="n/a"
+    elif [ -z "$aghcred" ]; then aghdisp="${CYellow}<none - required for AdGuard Home>${CClear}"
+    elif aghstatus >/dev/null; then aghdisp="${CGreen}<set> | <connected>${CClear}"
+    else aghdisp="${CYellow}<set> | <not connected>${CClear}"; fi
+    if [ -n "$aghurl" ]; then aghurldisp="${CGreen}${aghurl}${CClear}"; else aghurldisp="${CGreen}auto${CClear} ($(aghapiurl))"; fi
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
     menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
@@ -1835,13 +1841,14 @@ vadvanceddns()
     menurow "( 9)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
     menurow "(10)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
     menurow "(11)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
-    menurow "(12)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
+    menurow "(12)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
+    menurow "(13)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-12, e=Exit): " sel
+    read -p "Please select? (1-13, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -1922,26 +1929,46 @@ vadvanceddns()
          read -p "New number of rotated generations to keep (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnsquerylogkeep="$val" && saveconfig; }; } ;;
       10) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnssource}${CClear}"; echo ""
-          echo -e "  auto        : AdGuard Home's query log when AdGuard Home answers on port 53, otherwise dnsmasq's (default)"
-          echo -e "  dnsmasq     : always dnsmasq's query log (log-queries)"
-          echo -e "  adguardhome : always AdGuard Home's query log, through its API"
+          echo -e "  1 : auto         - AdGuard Home's query log when AdGuard Home answers on port 53, otherwise dnsmasq's (default)"
+          echo -e "  2 : dnsmasq      - always dnsmasq's query log (log-queries)"
+          echo -e "  3 : AdGuard Home - always AdGuard Home's query log, through its API"
           echo ""
-          read -p "New DNS query source (auto/dnsmasq/adguardhome, blank to keep current): " val
-          case "$val" in auto|dnsmasq|adguardhome) dnssource="$val"; dnslogannounced=""; saveconfig ;; "") ;; *) echo -e "${CRed}Please enter auto, dnsmasq or adguardhome.${CClear}"; sleep 2 ;; esac; } ;;
+          read -p "New DNS query source (1-3, blank to keep current): " val
+          case "$val" in
+            1) dnssource="auto" ;;
+            2) dnssource="dnsmasq" ;;
+            3) dnssource="adguardhome" ;;
+            "") ;;
+            *) echo -e "${CRed}Please enter 1, 2 or 3.${CClear}"; sleep 2; val="" ;;
+          esac
+          [ -n "$val" ] && { dnslogannounced=""; saveconfig; }; } ;;
       11) [ "$aghon" -eq 1 ] && { echo ""
           echo -e "IOCMON reads AdGuard Home's query log with the same login as AdGuard Home's web UI."
-          echo -e "It is stored in ${CGreen}${aghauthfile}${CClear} (readable by root only) and never passed on a command line."
-          echo -e "API address: ${CGreen}$(aghapiurl)${CClear} (from AdGuardHome.yaml; set aghurl in iocmon.cfg to override)"
+          echo -e "It is stored base64-encoded in ${CGreen}${config}${CClear} (readable by root only) and never passed on a command line."
+          echo -e "API address: ${CGreen}$(aghapiurl)${CClear} (change it with item 12)"
           echo ""
           read -p "AdGuard Home username (blank to keep the current login): " aghu
           if [ -n "$aghu" ]; then
             read -rsp "AdGuard Home password: " aghp; echo ""
-            aghauthwrite "$aghu" "$aghp"; aghp=""
-            echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: AdGuard Home API login updated." >> "$logfile"
+            aghnew="$(aghencode "$aghu:$aghp")"; aghp=""
+            if [ -n "$aghnew" ]; then
+              aghcred="$aghnew"; aghnew=""; saveconfig
+              aghlog "INFO" "AdGuard Home API login updated."
+            else
+              echo -e "${CRed}The login could not be encoded with openssl, so it was not saved.${CClear}"
+            fi
           fi
           echo ""; echo -e "Testing: $(aghstatus)"; echo ""
           read -rsp $'Press any key to continue...\n' -n1 key; } ;;
-      12) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
+      12) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl:-auto}${CClear} (in use: $(aghapiurl))"; echo ""
+          read -p "AdGuard Home address, e.g. http://192.168.50.1:3000 (blank keeps current, 'auto' reads AdGuardHome.yaml): " val
+          if [ "$val" = "auto" ]; then
+            aghurl=""
+          elif [ -n "$val" ]; then
+            val="$(aghnormurl "$val")" && aghurl="$val" || { echo -e "${CRed}Please enter an address like http://192.168.50.1:3000 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""; }
+          fi
+          [ -n "$val" ] && { dnslogannounced=""; saveconfig; echo ""; echo -e "Testing: $(aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; } ;;
+      13) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -4462,24 +4489,58 @@ aghapiurl()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghcurl $1=path $2=body file [curl args...] calls the API with the $aghauthfile login and prints the HTTP status
+# aghcurl $1=path $2=body file [curl args...] calls the API with the aghcred login (on stdin) and prints the HTTP status
 
 aghcurl()
 {
   local p="$1" o="$2"; shift 2
-  curl -s -L -k --max-time 15 -K "$aghauthfile" -o "$o" -w '%{http_code}' "$(aghapiurl)$p" "$@" 2>/dev/null
+  printf 'user = "%s"\n' "$(aghdecode | sed 's/[\\"]/\\&/g')" | curl -s -L -k --max-time 15 -K - -o "$o" -w '%{http_code}' "$(aghapiurl)$p" "$@" 2>/dev/null
   return 0
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghauthwrite $1=user $2=password stores the login in curl config format, readable by root only
+# aghencode $1=text echoes it base64-encoded with openssl, on one line
 
-aghauthwrite()
+aghencode()
 {
-  local u p
-  u="$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; p="$(printf '%s' "$2" | sed 's/[\\"]/\\&/g')"
-  ( umask 077; printf 'user = "%s:%s"\n' "$u" "$p" > "$aghauthfile" )
-  chmod 600 "$aghauthfile"
+  printf '%s' "$1" | openssl base64 -A 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghdecode echoes the plain user:password held in aghcred
+
+aghdecode()
+{
+  [ -n "$aghcred" ] && printf '%s\n' "$aghcred" | openssl base64 -d -A 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghnormurl $1=typed address echoes it as a clean base URL (http:// added if missing), or returns 1 if unusable
+
+aghnormurl()
+{
+  local u="$1"
+  case "$u" in *[!]A-Za-z0-9.:/_[-]*) return 1 ;; esac
+  case "$u" in http://*|https://*) ;; *://*) return 1 ;; *) u="http://$u" ;; esac
+  case "${u#*://}" in ""|:*|/*) return 1 ;; esac
+  echo "${u%/}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghmigrateauth moves a login from the old agh.auth file into aghcred, then deletes the file
+
+aghmigrateauth()
+{
+  local login
+  [ -f "$aghauthfile" ] || return
+  if [ -z "$aghcred" ]; then
+    login="$(sed -n 's/^user = "\(.*\)"$/\1/p' "$aghauthfile" | sed 's/\\\(.\)/\1/g')"
+    [ -n "$login" ] && aghcred="$(aghencode "$login")"
+    [ -n "$aghcred" ] || { aghlog "WARNING" "The AdGuard Home login in $aghauthfile could not be moved into iocmon.cfg - the file was kept."; return; }
+    saveconfig
+  fi
+  rm -f "$aghauthfile"
+  aghlog "INFO" "AdGuard Home login moved from $aghauthfile into iocmon.cfg."
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4489,7 +4550,7 @@ aghstatus()
 {
   local code jq b="/tmp/iocmon_aghst.$$"
   jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
-  [ -s "$aghauthfile" ] || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch)"; return 1; }
+  [ -n "$aghcred" ] || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch)"; return 1; }
   code="$(aghcurl /control/querylog/config "$b")"
   [ "$code" = "404" ] && code="$(aghcurl /control/querylog_info "$b")"
   case "$code" in
@@ -6821,7 +6882,7 @@ vresetdefaults()
     fi
     [ "$enableskynetimport" -eq 1 ] && removeskynetimports
     [ "$logfile" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
-    rm -f "$config" "$aghauthfile"
+    rm -f "$config"
     echo ""
     echo -e "${CGreen}Configuration erased. Restarting IOCMON with default settings...${CClear}"
     sleep 2
@@ -6835,7 +6896,7 @@ vresetdefaults()
 applyimportedconfig()
 {
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
-  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keptkeys=""
+  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keptkeys=""
 
   . "$importfile"
 
@@ -6845,6 +6906,7 @@ applyimportedconfig()
   [ -z "$urlhausapikey" ] && [ -n "$keepuhkey" ] && { urlhausapikey="$keepuhkey"; keptkeys="${keptkeys:+$keptkeys, }URLhaus"; }
   [ -z "$qfeedsapikey" ] && [ -n "$keepqfkey" ] && { qfeedsapikey="$keepqfkey"; keptkeys="${keptkeys:+$keptkeys, }Q-Feeds"; }
   [ -z "$abuseipdbapikey" ] && [ -n "$keepaipdbkey" ] && { abuseipdbapikey="$keepaipdbkey"; keptkeys="${keptkeys:+$keptkeys, }AbuseIPDB"; }
+  [ -z "$aghcred" ] && [ -n "$keepaghcred" ] && { aghcred="$keepaghcred"; keptkeys="${keptkeys:+$keptkeys, }AdGuard Home"; }
   [ -z "$urlhausapikey" ] && enableurlhaus=0
   [ -z "$threatfoxapikey" ] && enablethreatfox=0
   [ -z "$qfeedsapikey" ] && enableqfeeds=0
@@ -6916,13 +6978,13 @@ exportiocmonconfig()
   fi
 
   echo ""
-  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys in this export?"
+  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys and the AdGuard Home login in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
   { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(nvram get lan_hostname)"
     cat "$config"
   } > "$exportpath"
-  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/' "$exportpath"
+  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
@@ -7203,11 +7265,6 @@ vuninstall()
       sed -i '/# iocmon-autostart/d' /jffs/scripts/post-mount
     fi
 
-    echo -e "${CGreen}Stopping any running IOCMON SCREEN session...${CClear}"
-    if [ -x /opt/sbin/screen ]; then
-      /opt/sbin/screen -S iocmon -X quit >/dev/null 2>&1
-    fi
-
     echo -e "${CGreen}Removing shell alias...${CClear}"
     if [ -f /jffs/configs/profile.add ]; then
       sed -i '/# added by iocmon/d' /jffs/configs/profile.add
@@ -7231,6 +7288,8 @@ vuninstall()
     echo -e "${CGreen}IOCMON has been uninstalled. Goodbye!${CClear}"
     echo ""
     sleep 2
+    # Must stay last: this ends the session the uninstall itself may be running in
+    [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X quit >/dev/null 2>&1
     exit 0
   else
     echo ""
@@ -7524,6 +7583,7 @@ if [ -f "$config" ]; then
   . "$config"
   resolvelogfile
   migratefeedkeys
+  aghmigrateauth
 else
   initialsetup
 fi
