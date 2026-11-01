@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.4.3
+# Version: 1.4.9
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Oct-31
+# Last Updated: 2026-Nov-01
 # ============================================================================================================================
 #
 # Description:
@@ -18,6 +18,8 @@
 #   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, trimmed) - default location
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/iocmon.log                  : optional drive-side activity log location (logfilepath), to spare JFFS writes
 #   /jffs/addons/iocmon.d/updating.txt                                  : maintenance-mode lock file
+#   /jffs/addons/iocmon.d/iocmon.asp                                    : router web interface page, copied to a /www/user slot when the toggle is on
+#   /www/ext/iocmon/                                                    : web interface data files (RAM, HTML-escaped, rebuilt each boot)
 #   /jffs/addons/iocmon.d/feeds-degraded/                               : small JFFS-safe feed cache used only in degraded mode
 #   /jffs/addons/iocmon.d/state-degraded/                               : small JFFS-safe alert-dedup state used only in degraded mode
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/ips.txt                     : canonical combined IP/netblock indicator list
@@ -32,7 +34,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : raw dropbear auth-failure log, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, trimmed to $logsize
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker              : reference file `find -newer` compares against
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db            : last-seen `cru l` output for the cron-diff heuristic
@@ -59,6 +61,8 @@
 #   iocmon.sh -email                                                    : send a test email to confirm AMTM notifications are configured
 #   iocmon.sh -updatefeeds                                              : cron-callable one-shot IoC feed refresh
 #   iocmon.sh -fsintegrity                                              : cron-callable one-shot filesystem-integrity + cron-baseline check
+#   iocmon.sh -webmount                                                 : services-start boot hook that rebuilds the web interface tab
+#   iocmon.sh -webaction <name>                                         : service-event hook that runs a web interface button's job
 #   iocmon.sh -h | -help                                                : this output
 #
 # Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
@@ -99,7 +103,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.4.3"
+version="1.4.9"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -111,6 +115,27 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
+webuiversion="1.2.1"  # web interface page version this script expects
+webuirecentdays=14  # days of each log published for the page's normal view
+webuirecentrows=2000  # most rows of each log published for the normal view
+webuifullrows=20000  # most rows loaded by Full History
+webuifullkeep=1800  # seconds a Full History copy stays in RAM
+webuicheckage=21600  # seconds before the page's automatic update check runs again
+webuipagefile="/jffs/addons/iocmon.d/iocmon.asp"  # persistent copy of the web interface page
+webuidir="/www/ext/iocmon"  # web interface data files, in RAM
+webuiuserdir="/www/user"  # firmware add-on page slots
+webuimenutree="/www/require/modules/menuTree.js"  # firmware menu file the edited copy is bound over
+webuimenutmp="/tmp/menuTree.js"  # menu copy shared by all add-ons
+webuimenubak="/tmp/menuTree.js.iocmon"  # our restore point while editing the shared menu
+webuilockfile="/tmp/addonwebui.lock"  # lock shared by add-ons editing the menu
+webuiredirect="/www/ext/shared-jy/redirect.htm"  # target of the shared Help & Support tab
+webuiservicesstart="/jffs/scripts/services-start"  # boot hook file
+webuiserviceevent="/jffs/scripts/service-event"  # hook file the page's buttons reach IOCMON through
+webuijoblock="/tmp/iocmon_webjob.lock"  # held while a web job runs, so only one runs at a time
+feedslockfile="/tmp/iocmon_feeds.lock"  # held during a feed refresh, in RAM so a reboot can't leave it stale
+webuitab="IOCMON"  # tab name in the Addons menu
+webuitag="# iocmon-webui"  # tag on our boot hook line
+webuimarker="<!-- IOCMON-WebUI"  # identifies our page in a slot and in a download
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
 
 # Repo used for self-update checks.
@@ -211,10 +236,11 @@ schedulehrs=4                   # hour of day for the daily self-update check
 schedulemin=0                   # minute of hour for the daily self-update check
 updateiocm=0                    # autoupdate IOCMON script itself
 track=0                         # update track: 0 = stable, 1 = beta
+enablewebui=0                   # add the IOCMON tab to the router web interface
 otxreportsort="frequency"       # OTX AlienVault Threat Report sort order: "frequency" (one row per IP, most-matched first) or "date" (every occurrence, newest first)
 
 # Well-known Merlin persistent filenames living directly in /jffs/scripts
-fsstartupscripts="services-start services-stop firewall-start wan-start wan-event nat-start post-mount unmount init-start dhcpc-event openvpn-event wg-event"
+fsstartupscripts="services-start services-stop service-event service-event-end firewall-start wan-start wan-event nat-start pre-mount post-mount unmount init-start dhcpc-event openvpn-event ddns-start update-notification qos-start wgserver-start wgserver-stop wgclient-start wgclient-stop wg-event"
 
 # Security-relevant NVRAM variables checknvram() diffs every main-loop tick
 nvramwatchvars="sshd_enable sshd_forwarding sshd_pass sshd_port sshd_port_x sshd_authkeys telnetd_enable wan_dns wan0_dns wan1_dns wan_proto wan0_proto wan1_proto jffs2_scripts dmz_ip vts_enable_x vts_rulelist vts_upnplist autofw_enable_x autofw_rulelist"
@@ -879,6 +905,7 @@ saveconfig()
     echo 'updateiocm='$updateiocm
     echo 'track='$track
     echo 'otxreportsort="'"$otxreportsort"'"'
+    echo 'enablewebui='$enablewebui
   } > "$config"
   chmod 600 "$config"
 
@@ -891,6 +918,7 @@ saveconfig()
 
   schedulecron
   autostart
+  syncwebui
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2282,8 +2310,8 @@ vadvancedgeneral()
     clear
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.6 Advanced Settings - General / Script Behavior" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size and location, autostart, and IOCMON's self-update schedule/track - not specific to any${CClear}"
-    echo -e "${InvGreen} ${CClear} one detection watch.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size and location, autostart, IOCMON's self-update schedule/track and the optional router${CClear}"
+    echo -e "${InvGreen} ${CClear} web interface tab - not specific to any one detection watch.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Main loop / detection refresh interval, in seconds" 68; echo -e ": ${CGreen}$timerloop${CClear}"
@@ -2296,12 +2324,13 @@ vadvancedgeneral()
     menurow "(7)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
     if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : "; padright "Router web interface tab (Addons > IOCMON)" 68; echo -e ": $(booleantoyesno "$enablewebui")"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-8, e=Exit): " sel
+    read -p "Please select? (1-9, e=Exit): " sel
     case "$sel" in
       1) echo -e "Current: ${CGreen}${timerloop}${CClear}"
          read -p "New main loop interval in seconds (>=5, blank to keep current): " val
@@ -2322,6 +2351,7 @@ vadvancedgeneral()
          fi; } ;;
       7) [ "$schedule" -eq 1 ] && togglesetting updateiocm ;;
       8) togglesetting track ;;
+      9) vwebuitoggle ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -3356,6 +3386,28 @@ updatefeeds()
     echo -e "  ${CYellow}*${CClear} ThreatFox: ${CYellow}${threatfoxskippedcount}${CClear} raw record(s) skipped (unsupported indicator type, e.g. ja3/tag-only entries)"
   fi
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IoC feed refresh cycle complete ($okcount ok, $failcount failed)." >> "$logfile"
+  feedokcount="$okcount"; feedfailcount="$failcount"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# feedslock/feedsunlock stop the main loop, cron, the (F) hotkey and the web button refreshing feeds at the same time
+
+feedslock()
+{
+  local lockpid
+  if [ -f "$feedslockfile" ]; then
+    lockpid="$(cat "$feedslockfile" 2>/dev/null)"
+    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && kill -0 "$lockpid" 2>/dev/null; then
+      return 1
+    fi
+  fi
+  echo "$$" > "$feedslockfile"
+  return 0
+}
+
+feedsunlock()
+{
+  rm -f "$feedslockfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -3380,8 +3432,13 @@ checkfeedupdate()
   duesec=$((feedupdatehrs * 3600))
 
   if [ $((nowepoch - lastepoch)) -ge "$duesec" ]; then
-    updatefeeds
-    echo "$nowepoch" > "$stampfile"
+    if feedslock; then
+      updatefeeds
+      echo "$nowepoch" > "$stampfile"
+      feedsunlock
+    else
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Feed refresh skipped - another refresh is already in progress." >> "$logfile"
+    fi
   fi
 }
 
@@ -3400,10 +3457,15 @@ forcefeeds()
     echo -e "${CRed}ERROR: No feed storage location is available right now (external drive missing). Refresh skipped.${CClear}"
   else
     mkdir -m 755 -p "$feedsroot/meta"
-    updatefeeds force
-    date +%s > "$feedsroot/meta/.last_update"
-    echo ""
-    echo -e "${CGreen}Feed refresh complete.${CClear}"
+    if feedslock; then
+      updatefeeds force
+      date +%s > "$feedsroot/meta/.last_update"
+      feedsunlock
+      echo ""
+      echo -e "${CGreen}Feed refresh complete.${CClear}"
+    else
+      echo -e "${CYellow}A feed refresh is already in progress - try again in a moment.${CClear}"
+    fi
   fi
 
   echo ""
@@ -3439,9 +3501,10 @@ feedsourcecounts()
 
 feedsoldestfetch()
 {
-  local src oldestfile="" oldestmt="" metafile mt
-  for src in feodo spamhaus_drop spamhaus_edrop netapi_ips netapi_domains urlhaus threatfox; do
-    metafile="$feedsroot/meta/$src.meta"
+  local src oldestfile="" oldestmt="" metafile mt qfstamp=""
+  [ "$enableqfeeds" = "1" ] && qfstamp="qfeeds.last"
+  for src in feodo.meta spamhaus_drop.meta spamhaus_edrop.meta netapi_ips.meta netapi_domains.meta urlhaus.meta threatfox.meta $qfstamp; do
+    metafile="$feedsroot/meta/$src"
     [ -f "$metafile" ] || continue
     mt="$(date -r "$metafile" +%s 2>/dev/null)"
     [ -z "$mt" ] && continue
@@ -3450,7 +3513,11 @@ feedsoldestfetch()
     fi
   done
   if [ -n "$oldestfile" ]; then
-    date -r "$oldestfile" +'%H:%M'
+    if [ "$(date -r "$oldestfile" +%Y%m%d)" = "$(date +%Y%m%d)" ]; then
+      date -r "$oldestfile" +'%H:%M'
+    else
+      date -r "$oldestfile" +'%b %d %H:%M'
+    fi
   else
     echo "n/a"
   fi
@@ -5169,6 +5236,23 @@ checkdns()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# syslogaddyear rewrites a syslog "Oct  6 20:21:25" prefix on stdin as IOCMON's "Oct 06 2026 20:21:25"; other lines pass through
+
+syslogaddyear()
+{
+  set -- $(date +'%Y %m %d')
+  awk -v y="$1" -v m="$2" -v d="$3" '
+    BEGIN { n = split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " "); for (i = 1; i <= n; i++) mon[names[i]] = i }
+    ($1 in mon) && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9][0-9]:/ {
+      yr = y + 0
+      if (mon[$1] > m + 0 || (mon[$1] == m + 0 && $2 + 0 > d + 0)) yr--
+      printf "%s %02d %d %s%s\n", $1, $2, yr, $3, substr($0, index($0, $3) + length($3))
+      next
+    }
+    { print }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # checkauth does a rate-based grep of new syslog lines for dropbear/httpd auth-failure patterns
 
 checkauth()
@@ -5215,6 +5299,10 @@ checkauth()
       trimlogfile "$dropbearlogfile" "$logsize"
       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Migrated dropbear_attempts.log from JFFS to the state folder on the feed storage location." >> "$logfile"
     fi
+    if grep -qE '^[A-Z][a-z][a-z] +[0-9]+ [0-9][0-9]:' "$dropbearlogfile" 2>/dev/null; then
+      syslogaddyear < "$dropbearlogfile" > "${dropbearlogfile}.tmp" && mv -f "${dropbearlogfile}.tmp" "$dropbearlogfile"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added the year to existing dropbear_attempts.log dates." >> "$logfile"
+    fi
   fi
 
   [ -f "$dropbearseenfile" ] || dbfirst=1
@@ -5237,7 +5325,7 @@ checkauth()
   fi
 
   if [ -n "$dropbearlines" ] && [ -n "$dropbearlogfile" ]; then
-    echo "$dropbearlines" >> "$dropbearlogfile"
+    echo "$dropbearlines" | syslogaddyear >> "$dropbearlogfile"
     trimlogfile "$dropbearlogfile" "$logsize"
   fi
   dropbearips="$(echo "$dropbearlines" | grep -oE 'from [0-9]{1,3}(\.[0-9]{1,3}){3}' | awk '{print $2}')"
@@ -5397,6 +5485,20 @@ hashmatchcheck()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# isstartupscript succeeds if file name $1 is one the firmware runs by itself from /jffs/scripts
+
+isstartupscript()
+{
+  case " $fsstartupscripts " in
+    *" $1 "*) return 0 ;;
+  esac
+  case "$1" in
+    *.postconf) return 0 ;;
+  esac
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # processfschange applies every no-feed heuristic 
 
 processfschange()
@@ -5417,17 +5519,13 @@ processfschange()
 
   base="${path##*/}"
   dir="${path%/*}"
-  case " $fsstartupscripts " in
-    *" $base "*)
-      if [ "$dir" = "/jffs/scripts" ]; then
-        if [ "$changetype" = "MOD" ] && [ "$fsmodalertmode" = "hash" ]; then
-          fscontenthashchanged "$path" && raisealert "fsintegrity" "$path" "startup-script-edit" "HASH - review file content changes"
-        else
-          raisealert "fsintegrity" "$path" "startup-script-edit" "$changetype - review regardless of hash match"
-        fi
-      fi
-      ;;
-  esac
+  if [ "$dir" = "/jffs/scripts" ] && isstartupscript "$base"; then
+    if [ "$changetype" = "MOD" ] && [ "$fsmodalertmode" = "hash" ]; then
+      fscontenthashchanged "$path" && raisealert "fsintegrity" "$path" "startup-script-edit" "HASH - review file content changes"
+    else
+      raisealert "fsintegrity" "$path" "startup-script-edit" "$changetype - review regardless of hash match"
+    fi
+  fi
 
   case "$base" in
     *.conf.add)
@@ -5469,11 +5567,7 @@ processfsdeletion()
       ;;
   esac
 
-  case " $fsstartupscripts " in
-    *" $base "*)
-      [ "$dir" = "/jffs/scripts" ] && raisealert "fsintegrity" "$path" "startup-script-deleted" "file deleted - review regardless of cause"
-      ;;
-  esac
+  [ "$dir" = "/jffs/scripts" ] && isstartupscript "$base" && raisealert "fsintegrity" "$path" "startup-script-deleted" "file deleted - review regardless of cause"
 
   case "$base" in
     *.conf.add)
@@ -6559,12 +6653,20 @@ votxreport()
 
 acknowledgealert()
 {
+  clearalertpending
+  renderdashboard
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# clearalertpending removes the alert marker and logs it: $1 = optional text naming where it was acknowledged from
+
+clearalertpending()
+{
   resolvestateroot
   if [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     rm -f "$stateroot/alert_pending"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Security alert banner acknowledged." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Security alert banner acknowledged$1." >> "$logfile"
   fi
-  renderdashboard
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -6738,6 +6840,31 @@ vfslastfile()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# simpickindicator sets simindicator/simsource/simfamily to one random real feed line; returns 1 when no feed data is loaded
+
+simpickindicator()
+{
+  local candidatefile="" randline=""
+  resolvefeedsroot
+  if [ -n "$feedsroot" ] && [ -s "$feedsroot/ips.txt" ]; then
+    candidatefile="$feedsroot/ips.txt"
+  elif [ -n "$feedsroot" ] && [ -s "$feedsroot/domains.txt" ]; then
+    candidatefile="$feedsroot/domains.txt"
+  elif [ -n "$feedsroot" ] && [ -s "$feedsroot/hashes.txt" ]; then
+    candidatefile="$feedsroot/hashes.txt"
+  fi
+  [ -n "$candidatefile" ] || return 1
+  if [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ "$candidatefile" = "$feedsroot/ips.txt" ]; then
+    randline="$(awk -F'|' 'BEGIN{srand()} $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {a[++n]=$0} END{if (n>0) print a[int(rand()*n)+1]}' "$candidatefile")"
+  fi
+  [ -z "$randline" ] && randline="$(awk 'BEGIN{srand()} {a[NR]=$0} END{if (NR>0) print a[int(rand()*NR)+1]}' "$candidatefile")"
+  IFS='|' read -r simindicator simsource simfamily <<EOF
+$randline
+EOF
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # testdetection picks one real indicator at random out of the currently loaded feeds
 
 testdetection()
@@ -6746,31 +6873,12 @@ testdetection()
   echo -e "${CGreen}[Running Simulated Detection Test]${CClear}"
   echo ""
 
-  resolvefeedsroot
-
-  local candidatefile=""
-  if [ -n "$feedsroot" ] && [ -s "$feedsroot/ips.txt" ]; then
-    candidatefile="$feedsroot/ips.txt"
-  elif [ -n "$feedsroot" ] && [ -s "$feedsroot/domains.txt" ]; then
-    candidatefile="$feedsroot/domains.txt"
-  elif [ -n "$feedsroot" ] && [ -s "$feedsroot/hashes.txt" ]; then
-    candidatefile="$feedsroot/hashes.txt"
-  fi
-
-  if [ -z "$candidatefile" ]; then
+  if ! simpickindicator; then
     echo -e "${CRed}ERROR: No feed data is loaded yet - refresh feeds first, then try again.${CClear}"
   else
-    local randline indicator source family
-    if [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ "$candidatefile" = "$feedsroot/ips.txt" ]; then
-      randline="$(awk -F'|' 'BEGIN{srand()} $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {a[++n]=$0} END{if (n>0) print a[int(rand()*n)+1]}' "$candidatefile")"
-    fi
-    [ -z "$randline" ] && randline="$(awk 'BEGIN{srand()} {a[NR]=$0} END{if (NR>0) print a[int(rand()*NR)+1]}' "$candidatefile")"
-    IFS='|' read -r indicator source family <<EOF
-$randline
-EOF
-    echo -e "Simulating a detection of ${CGreen}${indicator}${CClear} (from the ${CGreen}${source}${CClear} feed)..."
+    echo -e "Simulating a detection of ${CGreen}${simindicator}${CClear} (from the ${CGreen}${simsource}${CClear} feed)..."
     echo ""
-    raisealert "simulated" "$indicator" "$source" "$family - SIMULATED TEST via (T) hotkey, not a real detection"
+    raisealert "simulated" "$simindicator" "$simsource" "$simfamily - SIMULATED TEST via (T) hotkey, not a real detection"
     local testrepip="$repip" testrepreason="$repreason"
     flushemailbatch
     blanklineguard
@@ -6861,6 +6969,723 @@ autostart()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# webuilog writes one line to the activity log: $1 = level, $2 = message
+
+webuilog()
+{
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - $1: $2" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuilockmenu and webuiunlockmenu take the lock Merlin add-ons share while editing the menu
+
+webuilockmenu()
+{
+  exec 9>"$webuilockfile"
+  which flock >/dev/null 2>&1 && flock -x 9
+}
+
+webuiunlockmenu()
+{
+  which flock >/dev/null 2>&1 && flock -u 9
+  exec 9>&-
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuiremount binds the edited menu copy over the firmware's file
+
+webuiremount()
+{
+  umount "$webuimenutree" 2>/dev/null
+  mount -o bind "$webuimenutmp" "$webuimenutree"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuifindslot echoes the userN.asp holding our page, or nothing
+
+webuifindslot()
+{
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    grep -qF "$webuimarker" "$webuiuserdir/user$i.asp" 2>/dev/null && { echo "user$i.asp"; return; }
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuiaddsection creates the shared Addons menu just before exclude:, unless it already exists
+
+webuiaddsection()
+{
+  local ln block="/tmp/iocmon-webui-block.$$"
+  grep -qF 'shared-jy/redirect.htm' "$webuimenutmp" && return 0
+  if grep -q '^menuName: "Addons",$' "$webuimenutmp"; then
+    webuilog "ERROR" "Web interface: an Addons menu exists without the shared Help & Support line - menu left unchanged."
+    return 1
+  fi
+  ln="$(grep -n '^exclude:' "$webuimenutmp" | head -n 1 | cut -d: -f1)"
+  if [ -z "$ln" ] || [ "$ln" -lt 2 ]; then
+    webuilog "ERROR" "Web interface: no exclude: line in $webuimenutmp - menu left unchanged."
+    return 1
+  fi
+  ln=$((ln - 1))
+  cat > "$block" <<'BLOCKEND'
+/**BEGIN:_AddOns_**/
+,
+{
+menuName: "Addons",
+index: "menu_Addons",
+tab: [
+{url: "javascript:var helpwindow=window.open('/ext/shared-jy/redirect.htm')", tabName: "Help & Support"},
+{url: "NULL", tabName: "__INHERIT__"}
+]
+}
+/**ENDIN:_AddOns_**/
+BLOCKEND
+  { head -n $((ln - 1)) "$webuimenutmp"; cat "$block"; tail -n +"$ln" "$webuimenutmp"; } > "$webuimenutmp.new"
+  rm -f "$block"
+  cat "$webuimenutmp.new" > "$webuimenutmp"
+  rm -f "$webuimenutmp.new"
+  if [ ! -f "$webuiredirect" ]; then
+    mkdir -p "${webuiredirect%/*}"
+    cat > "$webuiredirect" <<'REDIRECTEND'
+<!-- IOCMON-WEBUI-REDIRECT -->
+<html><head><meta http-equiv="refresh" content="0; url=https://www.snbforums.com/forums/asuswrt-merlin-addons.60/"/></head><body></body></html>
+REDIRECTEND
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuiaddtab puts page $1 in the Addons menu, restoring the menu copy if anything looks wrong
+
+webuiaddtab()
+{
+  local page="$1" ln
+  [ -f "$webuimenutmp" ] || cp -f "$webuimenutree" "$webuimenutmp"
+  cp -f "$webuimenutmp" "$webuimenubak"
+  if ! webuiaddsection; then
+    cat "$webuimenubak" > "$webuimenutmp"
+    rm -f "$webuimenubak"
+    return 1
+  fi
+  sed -i "/tabName: \"$webuitab\"/d" "$webuimenutmp"
+  ln="$(grep -nF 'shared-jy/redirect.htm' "$webuimenutmp" | head -n 1 | cut -d: -f1)"
+  [ -n "$ln" ] && sed -i "${ln}i {url: \"$page\", tabName: \"$webuitab\"}," "$webuimenutmp"
+  if [ "$(grep -c "tabName: \"$webuitab\"" "$webuimenutmp")" != "1" ] || ! grep -q '^exclude:' "$webuimenutmp"; then
+    webuilog "ERROR" "Web interface: the menu edit did not come out as expected - previous menu restored."
+    cat "$webuimenubak" > "$webuimenutmp"
+    webuiremount
+    rm -f "$webuimenubak"
+    return 1
+  fi
+  webuiremount
+  rm -f "$webuimenubak"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuimount copies the stored page into a slot and adds the tab; it runs when enabled and at every boot
+
+webuimount()
+{
+  local page
+  if ! nvram get rc_support 2>/dev/null | grep -q am_addons; then
+    webuilog "ERROR" "Web interface: this firmware has no add-on page support."
+    return 1
+  fi
+  if [ ! -f /usr/sbin/helper.sh ] || [ ! -f "$webuipagefile" ]; then
+    webuilog "ERROR" "Web interface: /usr/sbin/helper.sh or $webuipagefile is missing."
+    return 1
+  fi
+  webuilockmenu
+  page="$(webuifindslot)"
+  if [ -z "$page" ]; then
+    page="$(. /usr/sbin/helper.sh; am_get_webui_page "$webuipagefile"; echo "$am_webui_page")"
+    if [ -z "$page" ] || [ "$page" = "none" ]; then
+      webuiunlockmenu
+      webuilog "ERROR" "Web interface: all add-on page slots are in use."
+      return 1
+    fi
+  fi
+  cp -f "$webuipagefile" "$webuiuserdir/$page"
+  echo "$webuitab" > "$webuiuserdir/${page%.asp}.title"
+  if ! webuiaddtab "$page"; then
+    rm -f "$webuiuserdir/$page" "$webuiuserdir/${page%.asp}.title"
+    webuiunlockmenu
+    return 1
+  fi
+  webuiunlockmenu
+  mkdir -p "$webuidir"
+  webuilog "INFO" "Web interface page mounted as $page."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuiremove takes away the tab, page, data files and boot hook, leaving other add-ons' entries alone
+
+webuiremove()
+{
+  local page
+  webuilockmenu
+  page="$(webuifindslot)"
+  [ -n "$page" ] && rm -f "$webuiuserdir/$page" "$webuiuserdir/${page%.asp}.title"
+  if [ -f "$webuimenutmp" ]; then
+    sed -i "/tabName: \"$webuitab\"/d" "$webuimenutmp"
+    if grep -q 'BEGIN:_AddOns_' "$webuimenutmp" && [ "$(awk '/BEGIN:_AddOns_/ { s = 1; next } /ENDIN:_AddOns_/ { s = 0 } s && /url:/ && !/shared-jy|"NULL"/ { n++ } END { print n + 0 }' "$webuimenutmp")" = "0" ]; then
+      sed -i '/BEGIN:_AddOns_/,/ENDIN:_AddOns_/d' "$webuimenutmp"
+      grep -qF 'IOCMON-WEBUI-REDIRECT' "$webuiredirect" 2>/dev/null && rm -f "$webuiredirect"
+      rmdir "${webuiredirect%/*}" 2>/dev/null
+    fi
+    webuiremount
+  fi
+  webuiunlockmenu
+  [ -f "$webuiservicesstart" ] && sed -i "/$webuitag/d" "$webuiservicesstart"
+  [ -f "$webuiserviceevent" ] && sed -i "/$webuitag/d" "$webuiserviceevent"
+  rm -rf "$webuidir"
+  webuilog "INFO" "Web interface removed."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuihooks adds whichever of the boot and button hook lines is missing, leaving other add-ons' lines alone
+
+webuihooks()
+{
+  if ! grep -qF "$webuitag" "$webuiservicesstart" 2>/dev/null; then
+    [ -f "$webuiservicesstart" ] || { echo '#!/bin/sh' > "$webuiservicesstart"; chmod 755 "$webuiservicesstart"; }
+    echo "sh $apppath -webmount & $webuitag" >> "$webuiservicesstart"
+  fi
+  if ! grep -qF "$webuitag" "$webuiserviceevent" 2>/dev/null; then
+    [ -f "$webuiserviceevent" ] || { echo '#!/bin/sh' > "$webuiserviceevent"; chmod 755 "$webuiserviceevent"; }
+    echo "case \"\$1:\$2\" in start:iocmon*) sh $apppath -webaction \"\$2\" & ;; esac $webuitag" >> "$webuiserviceevent"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# syncwebui makes the hooks and tab match enablewebui; saveconfig calls it, so they can't drift
+
+syncwebui()
+{
+  if [ "${enablewebui:-0}" = "1" ]; then
+    webuihooks
+    [ -n "$(webuifindslot)" ] || webuimount
+  elif grep -qF "$webuitag" "$webuiservicesstart" "$webuiserviceevent" 2>/dev/null || [ -d "$webuidir" ]; then
+    webuiremove
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuifetchpage downloads the page for the current track, keeping any existing copy if the download is bad
+
+webuifetchpage()
+{
+  local url="$iocmonrepostable/iocmon.asp" tmpfile="$webuipagefile.new"
+  [ "$track" = "1" ] && url="$iocmonrepobeta/iocmon.asp"
+  curl --silent --retry 3 --connect-timeout 10 --max-time 60 --retry-delay 1 --retry-all-errors --fail "$url" -o "$tmpfile"
+  if [ "$?" -eq 0 ] && grep -qF "$webuimarker" "$tmpfile" 2>/dev/null; then
+    mv -f "$tmpfile" "$webuipagefile"
+    return 0
+  fi
+  rm -f "$tmpfile"
+  webuilog "ERROR" "Web interface: could not download a valid page from $url."
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuipagever prints the version in the stored page's marker line
+
+webuipagever()
+{
+  sed -n "s/^$webuimarker v\([^ ]*\) -->.*/\1/p" "$webuipagefile" 2>/dev/null | head -n 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuisyncpage downloads the current track's page when the stored one isn't the version this script expects
+
+webuisyncpage()
+{
+  [ "$(webuipagever)" = "$webuiversion" ] && return 0
+  webuifetchpage || return 1
+  webuilog "INFO" "Web interface page downloaded: v$(webuipagever)."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuirefreshpage brings the stored page up to date, then puts it in the slot if the slot holds anything different
+
+webuirefreshpage()
+{
+  local page
+  [ "${enablewebui:-0}" = "1" ] || return 0
+  webuisyncpage
+  page="$(webuifindslot)"
+  [ -n "$page" ] && cmp -s "$webuipagefile" "$webuiuserdir/$page" && return 0
+  webuimount
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vwebuitoggle is 10.6 item 9: it explains the change, then installs or removes the web interface tab
+
+vwebuitoggle()
+{
+  echo ""
+  if [ "$enablewebui" -eq 1 ]; then
+    echo -e "Remove the IOCMON tab from the router's web interface?"
+    if promptyn "[y/n]: "; then
+      echo ""
+      enablewebui=0
+      saveconfig
+      echo ""
+      echo -e "${CGreen}Removed. Reload the router's web page.${CClear}"
+      sleep 2
+    fi
+    return
+  fi
+  echo -e "This adds an IOCMON tab under the Addons menu of the router's web interface, showing the same status, feeds and logs as this terminal"
+  echo -e "script, with buttons to update feeds, scan the filesystem, simulate a detection, check for updates, start the monitor and acknowledge"
+  echo -e "alerts. It needs a web interface login to view, and publishes no API keys, passwords or settings."
+  echo ""
+  echo -e "Enable the web interface tab?"
+  promptyn "[y/n]: " || return
+  echo ""
+  if ! nvram get rc_support 2>/dev/null | grep -q am_addons; then
+  	echo ""
+    echo -e "${CRed}This firmware has no add-on page support - 386.1 or later is required.${CClear}"
+    sleep 3
+    return
+  fi
+  webuisyncpage
+  if [ ! -f "$webuipagefile" ]; then
+  	echo ""
+    echo -e "${CRed}The web interface page could not be downloaded - see the activity log. Nothing was changed.${CClear}"
+    sleep 3
+    return
+  fi
+  enablewebui=1
+  saveconfig
+  if [ -z "$(webuifindslot)" ]; then
+    enablewebui=0
+    saveconfig
+    echo ""
+    echo -e "${CRed}The tab could not be added - see the activity log. The web interface has been left off.${CClear}"
+    sleep 3
+    return
+  fi
+  echo ""
+  echo -e "${CGreen}Enabled. Reload the router's web page and open Addons > $webuitab. Its data appears after the next monitor cycle.${CClear}"
+  sleep 3
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webescape HTML-escapes published text, so a data file opened directly in a browser can't run anything from a log
+
+webescape()
+{
+  sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webcleanlog strips colour codes from stdin and escapes it for publishing
+
+webcleanlog()
+{
+  local esc
+  esc="$(printf '\033')"
+  sed -e "s/${esc}\[[0-9;]*m//g" -e 's/\\e\[[0-9;]*m//g' | webescape
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webrecent drops stdin lines dated before the recent window; lines without a date pass through, and $1 = all turns it off
+
+webrecent()
+{
+  [ "$1" = "all" ] && { cat; return; }
+  awk -v y="$(date +%Y)" -v m="$(date +%m)" -v d="$(date +%d)" -v keep="$webuirecentdays" '
+    function dn(yy, mm, dd, era, yoe, doy) {
+      if (mm <= 2) yy -= 1
+      era = int(yy / 400)
+      yoe = yy - era * 400
+      doy = int((153 * (mm + (mm > 2 ? -3 : 9)) + 2) / 5) + dd - 1
+      return era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy - 719468
+    }
+    BEGIN {
+      n = split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " ")
+      for (i = 1; i <= n; i++) mon[names[i]] = i
+      cutoff = dn(y + 0, m + 0, d + 0) - keep
+    }
+    ($1 in mon) && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9][0-9][0-9][0-9]$/ && dn($3 + 0, mon[$1], $2 + 0) < cutoff { next }
+    { print }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webpublishlog copies the tail of log $2 to data file $1, only when the log changed: $3 = lines kept, $4 = all to skip the date window
+
+webpublishlog()
+{
+  local dst="$webuidir/$1.htm" sigfile="$webuidir/.$1.sig" sig
+  if [ -z "$2" ] || [ ! -f "$2" ]; then
+    rm -f "$dst" "$sigfile"
+    return
+  fi
+  sig="$(ls -ln "$2" 2>/dev/null)"
+  [ -f "$dst" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ] && return
+  { echo "iocmon=1"; tail -n "$3" "$2" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
+  mv -f "$webuidir/.$1.tmp.$$" "$dst"
+  echo "$sig" > "$sigfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webfetched prints a feed file's last fetch time from its timestamp, or nothing: $1 = file in the feeds meta folder
+
+webfetched()
+{
+  [ -f "$feedsroot/meta/$1" ] && date -r "$feedsroot/meta/$1" +'%b %d %H:%M' 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webpublish writes the web interface's data files from the values collectstatus just gathered, once per main-loop cycle
+
+webpublish()
+{
+  [ "${enablewebui:-0}" = "1" ] || return
+  [ -d "$webuidir" ] || return
+  local updatever="" pendingcount="" pendingsummary="" fserrcount=0 fserrfirst="" dnsstate="off"
+  [ "$track" = "0" ] && [ "$UpdateNotify" != "0" ] && updatever="$DLversion"
+  [ "$track" = "1" ] && [ "$BUpdateNotify" != "0" ] && updatever="$Bversion"
+  if [ -n "$updatever" ] && [ "$(vercompare "$updatever" "$version")" != "gt" ]; then updatever=""; fi
+  if [ -n "$stateroot" ]; then
+    if [ -f "$stateroot/alert_pending" ]; then
+      pendingcount="$(sed -n '1p' "$stateroot/alert_pending" 2>/dev/null)"
+      pendingsummary="$(sed -n '2p' "$stateroot/alert_pending" 2>/dev/null)"
+    fi
+    if [ -s "$stateroot/fs_scan_errors.txt" ]; then
+      fserrcount="$(wc -l < "$stateroot/fs_scan_errors.txt" | tr -d ' ')"
+      fserrfirst="$(head -n1 "$stateroot/fs_scan_errors.txt")"
+    fi
+  fi
+  if [ "$enablednswatch" -eq 1 ]; then
+    dnsstate="waiting"
+    if dnsusesagh; then dnsstate="adguardhome"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
+  fi
+  {
+    echo "iocmon=1"
+    echo "version=$version"
+    echo "webui=$webuiversion"
+    echo "ts=$(date +%s)"
+    echo "time=$(date +'%b %d %Y %X')"
+    echo "loop=$timerloop"
+    echo "hostname=$(nvram get lan_hostname)"
+    echo "model=$routermodel"
+    echo "uptime=$routeruptime"
+    echo "track=$track"
+    echo "updatever=$updatever"
+    echo "pendingcount=$pendingcount"
+    echo "pendingsummary=$pendingsummary"
+    echo "lastalert=$lastalert"
+    echo "todaycount=$todaycount"
+    echo "reputation=$(stripansi "$(reputationstatus 200)")"
+    echo "feedstotal=$feedsindicatorcount"
+    echo "feedhrs=$feedupdatehrs"
+    echo "feedsoldest=$feedsoldest"
+    echo "feedsources=$feedsbreakdown"
+    echo "fetched_fd=$(webfetched feodo.meta)"
+    echo "fetched_sh=$(webfetched spamhaus_drop.meta)"
+    echo "fetched_na=$(webfetched netapi_ips.meta)"
+    echo "fetched_uh=$(webfetched urlhaus.meta)"
+    echo "fetched_tf=$(webfetched threatfox.meta)"
+    echo "fetched_qf=$(webfetched qfeeds.last)"
+    echo "conntrackon=$enableconntrackwatch"
+    echo "conntrackchecked=$conntrackchecked"
+    echo "conntracklast=$conntracklastcheck"
+    echo "dnsstate=$dnsstate"
+    echo "dnschecked=$dnsqueriedcount"
+    echo "dnslast=$dnslastcheck"
+    echo "dnslog=$dnslogshort"
+    echo "authon=$enableauthwatch"
+    echo "authchecked=$authchecked"
+    echo "authlast=$authlastcheck"
+    echo "nvramon=$enablenvramwatch"
+    echo "nvramvars=$(echo "$nvramwatchvars" | wc -w | tr -d ' ')"
+    echo "nvramlast=$nvramlastcheck"
+    echo "fson=$enablefsintegrity"
+    echo "fsbaseline=$fsbaselinecount"
+    echo "fshrs=$fsintegrityhrs"
+    echo "fserrcount=$fserrcount"
+    echo "fserrfirst=$fserrfirst"
+    echo "email=$enablealertemail"
+    echo "ratelimit=$ratelimit"
+    echo "cron=$cronscheduled"
+    echo "storage=$(stripansi "$drivestatus")"
+    echo "drivefree=$drivefreespace"
+  } | webescape > "$webuidir/.status.tmp"
+  mv -f "$webuidir/.status.tmp" "$webuidir/status.htm"
+  webpublishlogs
+  webfullexpire
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webpublishlogs refreshes every published log and list; a web job also calls it, so results show without waiting for a cycle
+
+webpublishlogs()
+{
+  webpublishlog ioc "${stateroot:+$stateroot/ioc_alerts.log}" "$webuirecentrows"
+  webpublishlog dropbear "${stateroot:+$stateroot/dropbear_attempts.log}" "$webuirecentrows"
+  webpublishlog hash "${stateroot:+$stateroot/hash_check.log}" "$webuirecentrows"
+  webpublishlog reputation "${stateroot:+$stateroot/reputation.log}" "$webuirecentrows"
+  webpublishlog fssummary "${stateroot:+$stateroot/fs_scan_summary.txt}" 60 all
+  webpublishlog fsnew "${stateroot:+$stateroot/fs_last_new.txt}" 200 all
+  webpublishlog fsmod "${stateroot:+$stateroot/fs_last_modified.txt}" 200 all
+  webpublishlog fsdel "${stateroot:+$stateroot/fs_last_deleted.txt}" 200 all
+  webpublishlog fsperm "${stateroot:+$stateroot/fs_last_permchanged.txt}" 200 all
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobwrite publishes the current web job for the page: $1 = state, $2 = message
+
+webjobwrite()
+{
+  {
+    echo "iocmon=1"
+    echo "id=$webjobid"
+    echo "action=$webjobaction"
+    echo "state=$1"
+    echo "started=$webjobstart"
+    echo "time=$(date +'%b %d %Y %X')"
+    echo "msg=$2"
+  } | webescape > "$webuidir/.job.tmp"
+  mv -f "$webuidir/.job.tmp" "$webuidir/job.htm"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjoblock takes the one-job lock atomically, replacing a lock whose owner has died
+
+webjoblock()
+{
+  local lockpid
+  mkdir "$webuijoblock" 2>/dev/null && { echo "$$" > "$webuijoblock/pid"; return 0; }
+  lockpid="$(cat "$webuijoblock/pid" 2>/dev/null)"
+  [ -n "$lockpid" ] && kill -0 "$lockpid" 2>/dev/null && return 1
+  rm -rf "$webuijoblock"
+  mkdir "$webuijoblock" 2>/dev/null && { echo "$$" > "$webuijoblock/pid"; return 0; }
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobfeeds is the Update Feeds button: a forced refresh under the feed lock
+
+webjobfeeds()
+{
+  resolvefeedsroot
+  if [ -z "$feedsroot" ]; then webjobmsg="No feed storage is available - the external drive may be missing."; return 1; fi
+  mkdir -m 755 -p "$feedsroot/meta"
+  if ! feedslock; then webjobmsg="A feed refresh is already in progress."; return 1; fi
+  updatefeeds force
+  date +%s > "$feedsroot/meta/.last_update"
+  feedsunlock
+  webjobmsg="$feedokcount source(s) ok, $feedfailcount failed."
+  [ "$feedfailcount" -eq 0 ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobscan is the Scan Filesystem button: the same scan as the (I) hotkey
+
+webjobscan()
+{
+  resolvestateroot
+  if [ -z "$stateroot" ]; then webjobmsg="No state storage is available - the external drive may be missing."; return 1; fi
+  mkdir -m 755 -p "$stateroot"
+  if ! runfsintegrityscan; then webjobmsg="A filesystem scan is already in progress."; return 1; fi
+  flushemailbatch
+  date +%s > "$stateroot/fs_last_check"
+  webjobmsg="$fsscannedcount file(s) scanned: $fsnewcount new, $fsmodcount modified, $fsdelcount deleted, $fspermcount permission-only."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobsimulate is the Simulate Detection button: the same test alert as the (T) hotkey
+
+webjobsimulate()
+{
+  if ! simpickindicator; then webjobmsg="No feed data is loaded yet - update feeds first."; return 1; fi
+  raisealert "simulated" "$simindicator" "$simsource" "$simfamily - SIMULATED TEST via the web interface, not a real detection"
+  flushemailbatch
+  rm -f "$abuseipdbcyclefile"
+  webjobmsg="Simulated a detection of $simindicator from the $simsource feed."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webupdatepublish checks the current track and writes update.htm; webupdatelatest holds the result
+
+webupdatepublish()
+{
+  local available=0
+  updatecheck
+  betacheck
+  webupdatelatest="$DLversion"
+  [ "$track" = "1" ] && webupdatelatest="$Bversion"
+  [ -n "$webupdatelatest" ] || return 1
+  [ "$(vercompare "$webupdatelatest" "$version")" = "gt" ] && available=1
+  { echo "iocmon=1"; echo "latest=$webupdatelatest"; echo "available=$available"; echo "checked=$(date +%s)"; } | webescape > "$webuidir/.update.tmp.$$"
+  mv -f "$webuidir/.update.tmp.$$" "$webuidir/update.htm"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webautocheck runs when the page opens: it checks quietly, and only if the last result is old enough, using the router's clock
+
+webautocheck()
+{
+  local checked age
+  [ -f "$updatingfile" ] && return
+  checked="$(sed -n 's/^checked=//p' "$webuidir/update.htm" 2>/dev/null)"
+  if [ -n "$checked" ]; then
+    age=$(($(date +%s) - checked))
+    [ "$age" -ge 0 ] && [ "$age" -lt "$webuicheckage" ] && return
+  fi
+  webupdatepublish
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobcheck is the Check for Update button
+
+webjobcheck()
+{
+  if ! webupdatepublish; then webjobmsg="The update server could not be reached."; return 1; fi
+  case "$(vercompare "$webupdatelatest" "$version")" in
+    gt) webjobmsg="Update available: v$version to v$webupdatelatest." ;;
+    lt) webjobmsg="IOCMON v$version is newer than the published v$webupdatelatest." ;;
+    *) webjobmsg="IOCMON v$version is up to date." ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobupdate is the Install Update button: current track only, never to an older version, and a bad download is rolled back
+
+webjobupdate()
+{
+  local remoteversion remotelabel remoteurl backup="/tmp/iocmon.sh.webupdate"
+  updatecheck
+  betacheck
+  if [ "$track" = "1" ] && [ -z "$Bversion" ]; then webjobmsg="The Beta update server could not be reached."; return 1; fi
+  resolveupdatesource
+  if [ -z "$remoteversion" ]; then webjobmsg="The update server could not be reached."; return 1; fi
+  if [ "$(vercompare "$remoteversion" "$version")" != "gt" ]; then webjobmsg="IOCMON v$version is already current."; return 0; fi
+  echo > "$updatingfile"
+  cp -f "$apppath" "$backup"
+  if ! downloadiocmonupdate "$remoteurl" "$remotelabel"; then
+    rm -f "$updatingfile" "$backup"
+    webjobmsg="The download failed. IOCMON v$version was left in place."
+    return 1
+  fi
+  if ! scriptfilevalid "$apppath"; then
+    cp -f "$backup" "$apppath"
+    chmod 755 "$apppath"
+    rm -f "$updatingfile" "$backup"
+    webuilog "ERROR" "The web interface update to v$remoteversion failed validation - restored v$version."
+    webjobmsg="The download failed validation. IOCMON v$version was restored."
+    return 1
+  fi
+  touch "$restartpendingfile"
+  rm -f "$updatingfile" "$backup"
+  sh "$apppath" -webmount
+  webjobmsg="Installed v$(ondiskversion). A running monitor restarts into it at its next cycle, then this page reloads."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobfull is the Full History button: it publishes one whole log for a short time, because data files sit in RAM
+
+webjobfull()
+{
+  local src="" dst="$webuidir/full-$webfulllog.htm"
+  resolvestateroot
+  if [ -z "$stateroot" ]; then webjobmsg="No state storage is available - the external drive may be missing."; return 1; fi
+  case "$webfulllog" in
+    ioc) src="ioc_alerts.log" ;;
+    dropbear) src="dropbear_attempts.log" ;;
+    hash) src="hash_check.log" ;;
+    reputation) src="reputation.log" ;;
+  esac
+  rm -f "$webuidir"/full-*.htm
+  if [ ! -s "$stateroot/$src" ]; then webjobmsg="Nothing has been logged yet."; return 1; fi
+  { echo "iocmon=1"; tail -n "$webuifullrows" "$stateroot/$src" | webcleanlog; } > "$webuidir/.full.tmp"
+  mv -f "$webuidir/.full.tmp" "$dst"
+  date +%s > "$webuidir/.full.ts"
+  webjobmsg="$(($(wc -l < "$dst") - 1)) row(s) loaded."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webfullexpire removes a Full History copy once it is old enough, so it doesn't sit in RAM
+
+webfullexpire()
+{
+  local made
+  made="$(cat "$webuidir/.full.ts" 2>/dev/null)"
+  [ -n "$made" ] || return
+  if [ "$(($(date +%s) - made))" -ge "$webuifullkeep" ]; then rm -f "$webuidir"/full-*.htm "$webuidir/.full.ts"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webjobstart is the Start Monitor button: the main loop's singleton lock stays the only guard against a second copy
+
+webjobstart()
+{
+  local pidfile="$addonsdir/iocmon.pid" monpid waited=0
+  monpid="$(cat "$pidfile" 2>/dev/null)"
+  if [ -n "$monpid" ] && kill -0 "$monpid" 2>/dev/null; then webjobmsg="The monitor is already running. It may be paused or open in a menu."; return 0; fi
+  if [ ! -x /opt/sbin/screen ]; then webjobmsg="The Entware screen package is required to start the monitor from here."; return 1; fi
+  TERM="${TERM:-xterm}"; export TERM
+  sh "$apppath" -screen -now
+  while [ "$waited" -lt 15 ]; do
+    monpid="$(cat "$pidfile" 2>/dev/null)"
+    if [ -n "$monpid" ] && kill -0 "$monpid" 2>/dev/null; then webjobmsg="Monitor started. Data updates after its first cycle."; return 0; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  webjobmsg="The monitor did not start. Check for a stale SCREEN session with screen -ls."
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webaction runs one fixed web button from service-event: $1 = its event name, which is never used as anything but a match
+
+webaction()
+{
+  local rc
+  [ "${enablewebui:-0}" = "1" ] && [ -d "$webuidir" ] || return
+  case "$1" in
+    iocmonack)
+      clearalertpending " from the web interface"
+      sed -i -e 's/^pendingcount=.*/pendingcount=/' -e 's/^pendingsummary=.*/pendingsummary=/' "$webuidir/status.htm" 2>/dev/null
+      return ;;
+    iocmonautocheck) webautocheck; return ;;
+    iocmonfeeds) webjobaction="feeds" ;;
+    iocmonscan) webjobaction="scan" ;;
+    iocmonsimulate) webjobaction="simulate" ;;
+    iocmoncheck) webjobaction="check" ;;
+    iocmonstart) webjobaction="start" ;;
+    iocmonupdate) webjobaction="update" ;;
+    iocmonfullioc) webjobaction="full"; webfulllog="ioc" ;;
+    iocmonfulldropbear) webjobaction="full"; webfulllog="dropbear" ;;
+    iocmonfullhash) webjobaction="full"; webfulllog="hash" ;;
+    iocmonfullreputation) webjobaction="full"; webfulllog="reputation" ;;
+    *) webuilog "WARNING" "Ignored an unknown web interface action."; return ;;
+  esac
+  if ! webjoblock; then
+    webuilog "INFO" "Web interface $webjobaction request refused - another job is running."
+    return
+  fi
+  webjobid="$(date +%s)-$$"
+  webjobstart="$(date +%s)"
+  webuilog "INFO" "Web interface job started: $webjobaction."
+  webjobwrite "running" ""
+  if [ -f "$updatingfile" ]; then
+    webjobmsg="An IOCMON update is in progress. Try again in a moment."
+    rc=1
+  else
+    "webjob$webjobaction"
+    rc=$?
+  fi
+  resolvestateroot
+  webpublishlogs
+  if [ "$rc" -eq 0 ]; then webjobwrite "done" "$webjobmsg"; else webjobwrite "failed" "$webjobmsg"; fi
+  webuilog "INFO" "Web interface job finished: $webjobaction: $webjobmsg"
+  rm -rf "$webuijoblock"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # vresetdefaults erases iocmon.cfg and restarts the script fresh, so every setting reverts to its script default.
 
 vresetdefaults()
@@ -6881,6 +7706,7 @@ vresetdefaults()
       [ "$dnsforcefilelog" -eq 1 ] && disablednsfilelogging
     fi
     [ "$enableskynetimport" -eq 1 ] && removeskynetimports
+    [ "$enablewebui" -eq 1 ] && webuiremove
     [ "$logfile" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
     rm -f "$config"
     echo ""
@@ -6916,6 +7742,7 @@ applyimportedconfig()
   aghurl=""
   dnsforcefilelog=0
   enableskynetimport=0
+  enablewebui=0
 
   for entry in $fswatchdirs; do
     case "$entry" in
@@ -7252,6 +8079,7 @@ vuninstall()
       [ "$dnsforcefilelog" -eq 1 ] && disablednsfilelogging
     fi
     [ "$enableskynetimport" -eq 1 ] && removeskynetimports
+    [ "$enablewebui" -eq 1 ] && webuiremove
     echo -e "${CGreen}Removing scheduled cron jobs...${CClear}"
     cru d IOCMONUpdate >/dev/null 2>&1
     cru d IOCMONFeeds >/dev/null 2>&1
@@ -7323,8 +8151,6 @@ aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblock
 timerpaused=0
 exitallmenus=0
 
-# Remove Maintenance Mode file lock left over from a prior run
-rm -f "$updatingfile" >/dev/null 2>&1
 scriptreplacewarned=0
 
 if [ ! -d "$addonsdir" ]; then
@@ -7356,7 +8182,7 @@ if [ "$2" == "-now" ]; then
 fi
 
 # Check and see if an invalid commandline option is being used
-if [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "-setup" ] || [ "$1" == "-noswitch" ] || [ "$1" == "-autoupdate" ] || [ "$1" == "-email" ] || [ "$1" == "-screen" ] || [ "$1" == "-updatefeeds" ] || [ "$1" == "-fsintegrity" ]; then
+if [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "-setup" ] || [ "$1" == "-noswitch" ] || [ "$1" == "-autoupdate" ] || [ "$1" == "-email" ] || [ "$1" == "-screen" ] || [ "$1" == "-updatefeeds" ] || [ "$1" == "-fsintegrity" ] || [ "$1" == "-webmount" ] || [ "$1" == "-webaction" ]; then
     clear
 else
     clear
@@ -7453,6 +8279,29 @@ if [ "$1" == "-updatefeeds" ]; then
     . "$config"
     resolvelogfile
     checkfeedupdate
+    exit 0
+fi
+
+# Check to see if the boot hook is rebuilding the web interface tab, which lives in RAM
+if [ "$1" == "-webmount" ]; then
+    [ -f "$config" ] || exit 0
+    . "$config"
+    resolvelogfile
+    if [ "${enablewebui:-0}" = "1" ]; then
+      webuihooks
+      webuimount
+      webuirefreshpage
+    fi
+    exit 0
+fi
+
+# Check to see if a web interface button has fired through the service-event hook
+if [ "$1" == "-webaction" ]; then
+    [ -f "$config" ] || exit 0
+    exec >/dev/null 2>&1
+    . "$config"
+    resolvelogfile
+    webaction "$2"
     exit 0
 fi
 
@@ -7566,6 +8415,7 @@ if [ -f "$pidfile" ]; then
 fi
 echo "$$" > "$pidfile"
 rm -f "$restartpendingfile" >/dev/null 2>&1
+rm -f "$updatingfile" >/dev/null 2>&1
 trap 'rm -f "$pidfile"' EXIT INT TERM
 trap 'winchpending=1' WINCH
 
@@ -7588,6 +8438,8 @@ else
   initialsetup
 fi
 
+webuirefreshpage
+
 # Check for updates
 updatecheck
 betacheck
@@ -7604,6 +8456,37 @@ renderalertbanner()
   echo -en "${InvRed}${CWhite} "; padright "!!! SECURITY ALERT: ${pendingcount:-1} unacknowledged IOC detection(s) !!!" 137; echo -e "${CClear}"
   echo -e " ${CWhite}Latest: ${pendingsummary:-see the IoC log}${CClear}"
   echo -en "${InvRed}${CWhite} "; padright "Press (A) to Acknowledge" 137; echo -e "${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# collectstatus gathers the plain values the dashboard and the web interface both show; it needs resolvestateroot first
+
+collectstatus()
+{
+  feedsindicatorcount=0
+  feedsbreakdown=""
+  feedsoldest="n/a"
+  if [ -n "$feedsroot" ] && [ -f "$feedsroot/ips.txt" ]; then
+    feedsindicatorcount="$(( $(cat "$feedsroot/ips.txt" "$feedsroot/domains.txt" "$feedsroot/hashes.txt" 2>/dev/null | wc -l | tr -d ' ') + $(qfeedscount) ))"
+    feedsbreakdown="$(feedsourcecounts | sed 's/ *$//')"
+    feedsoldest="$(feedsoldestfetch)"
+  fi
+
+  fsbaselinecount=0
+  [ -n "$stateroot" ] && [ -f "$stateroot/fs_baseline.db" ] && fsbaselinecount="$(wc -l < "$stateroot/fs_baseline.db" | tr -d ' ')"
+
+  lastalert="$(lastalertsummary)"
+  todaycount="$(alertstoday)"
+
+  cronscheduled=0
+  which cru >/dev/null 2>&1 && cru l 2>/dev/null | grep -q "IOCMONFeeds" && cronscheduled=1
+
+  routermodel="$(nvram get odmpid)"
+  [ -z "$routermodel" ] && routermodel="$(nvram get productid)"
+  routeruptime="$(uptime 2>/dev/null | sed -E 's/^[^,]*up[[:space:]]*//; s/,[[:space:]]*[0-9]+ users?.*//')"
+  drivefreespace="n/a"
+  [ -n "$iocmonroot" ] && drivefreespace="$(df -h "$iocmonroot" 2>/dev/null | awk 'NR==2{print $4}')"
+  [ -z "$drivefreespace" ] && drivefreespace="n/a"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -7642,15 +8525,7 @@ renderdashboard()
 
   echo -e "${InvGreen} ${CClear}"
 
-  feedsindicatorcount=0
-  feedsbreakdown=""
-  feedsoldest="n/a"
-  if [ -n "$feedsroot" ] && [ -f "$feedsroot/ips.txt" ]; then
-    feedsindicatorcount="$(( $(cat "$feedsroot/ips.txt" "$feedsroot/domains.txt" "$feedsroot/hashes.txt" 2>/dev/null | wc -l | tr -d ' ') + $(qfeedscount) ))"
-    feedsbreakdown="$(feedsourcecounts | sed 's/ *$//')"
-    [ "${#feedsbreakdown}" -gt 65 ] && feedsbreakdown="$(echo "$feedsbreakdown" | cut -c1-62)..."
-    feedsoldest="$(feedsoldestfetch)"
-  fi
+  collectstatus
 
   dnsstatus="${CDkGray}off${CClear}"
   if [ "$enablednswatch" -eq 1 ]; then
@@ -7664,8 +8539,6 @@ renderdashboard()
   nvramstatus="${CDkGray}off${CClear}"
   [ "$enablenvramwatch" -eq 1 ] && nvramstatus="${CGreen}on${CClear} ($(echo "$nvramwatchvars" | wc -w | tr -d ' ') vars watched, checked ${nvramlastcheck:-n/a})"
 
-  fsbaselinecount=0
-  [ -n "$stateroot" ] && [ -f "$stateroot/fs_baseline.db" ] && fsbaselinecount="$(wc -l < "$stateroot/fs_baseline.db" | tr -d ' ')"
   fsstatus="${CDkGray}off${CClear}"
   if [ "$enablefsintegrity" -eq 1 ]; then
     if [ -n "$stateroot" ] && [ -f "$stateroot/fs_baseline.db" ]; then
@@ -7674,9 +8547,6 @@ renderdashboard()
       fsstatus="${CYellow}on, no baseline yet${CClear}"
     fi
   fi
-
-  lastalert="$(lastalertsummary)"
-  todaycount="$(alertstoday)"
 
   if [ "$enablealertemail" = "1" ]; then
     amtmdisp="${CGreen}On${CClear}"
@@ -7687,18 +8557,13 @@ renderdashboard()
   [ "$ratelimit" != "0" ] && rldisp="${CGreen}${ratelimit}/h${CClear}"
 
   cronstatus="${CDkGray}not scheduled${CClear}"
-  which cru >/dev/null 2>&1 && cru l 2>/dev/null | grep -q "IOCMONFeeds" && cronstatus="${CGreen}scheduled${CClear}"
+  [ "$cronscheduled" -eq 1 ] && cronstatus="${CGreen}scheduled${CClear}"
 
-  routermodel="$(nvram get odmpid)"
-  [ -z "$routermodel" ] && routermodel="$(nvram get productid)"
-  routeruptime="$(uptime 2>/dev/null | sed -E 's/^[^,]*up[[:space:]]*//; s/,[[:space:]]*[0-9]+ users?.*//')"
-  drivefreespace="n/a"
-  [ -n "$iocmonroot" ] && drivefreespace="$(df -h "$iocmonroot" 2>/dev/null | awk 'NR==2{print $4}')"
-  [ -z "$drivefreespace" ] && drivefreespace="n/a"
-
-  [ "${#lastalert}" -gt 49 ] && lastalert="$(printf '%.48s' "$lastalert")>"
-  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Feeds: ${CGreen}${feedsindicatorcount}${CClear} loaded, every ${CGreen}${feedupdatehrs}h${CClear}, oldest ${CGreen}${feedsoldest}${CClear}" 75; echo -e "${CWhite}Last Alert: ${CGreen}${lastalert}${CClear}"
-  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Sources: ${CGreen}${feedsbreakdown:-none}${CClear}" 75; echo -e "${CWhite}Alerts Today: ${CGreen}${todaycount}${CClear} | $(reputationstatus $((61 - 17 - ${#todaycount})))"
+  local lastalertshown="$lastalert" feedsbreakdownshown="$feedsbreakdown"
+  [ "${#lastalertshown}" -gt 49 ] && lastalertshown="$(printf '%.48s' "$lastalertshown")>"
+  [ "${#feedsbreakdownshown}" -gt 65 ] && feedsbreakdownshown="$(echo "$feedsbreakdownshown" | cut -c1-62)..."
+  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Feeds: ${CGreen}${feedsindicatorcount}${CClear} loaded, every ${CGreen}${feedupdatehrs}h${CClear}, oldest ${CGreen}${feedsoldest}${CClear}" 75; echo -e "${CWhite}Last Alert: ${CGreen}${lastalertshown}${CClear}"
+  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Sources: ${CGreen}${feedsbreakdownshown:-none}${CClear}" 75; echo -e "${CWhite}Alerts Today: ${CGreen}${todaycount}${CClear} | $(reputationstatus $((61 - 17 - ${#todaycount})))"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}conntrack: $conntrackstatus" 75; echo -e "${CWhite}dns: $dnsstatus"
   dnslogline=""
@@ -7877,6 +8742,7 @@ while true; do
   done
 
   renderdashboard
+  webpublish
 
   timer=0
   winchpending=0
