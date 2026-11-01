@@ -1,4 +1,4 @@
-v1.4.3    - (BETA)
+v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
             AdGuard Home (AGH)! Working together on a PoC, he was able to provide the final touches that
             gives IOCMON all the necessary DNS lookup information through AGH's own API. This means, it does
@@ -23,6 +23,8 @@ v1.4.3    - (BETA)
             "dnsmasq" or "adguardhome", and now instead, pick from a numbered list. Thanks @ryosuke!
           - PATCH: Fixed the uninstall function to ensure that screen is killed as the very last step, as
             this was running before the script had a chance to remove its scripts/folders. Thanks @JTnola!
+          - PATCH: Started initial work on building a web interface and getting the internal workings of
+            the script ready.
 
 v1.3.8    - (October 24, 2026)
           - MINOR: Added another option to the feeds menu (2) and enabled functionality from the AbuseIPDB
