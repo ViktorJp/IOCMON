@@ -1,3 +1,9 @@
+v1.4.x   - (TBA)
+          - PATCH: Fixed an issue with AGH where when the script loads for the first time and auto detects
+            AGH, it woudl hang during the DNS watch cycle due to the fact that the username/password were
+            still blank. This will now show a warning that AGH will need to be set up completely first before
+            DNS Watch functionality works. Huge thanks to @Makaveli for bringing this up!
+
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
             AdGuard Home (AGH)! Working together on a PoC, he was able to provide the final touches that
