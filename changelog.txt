@@ -1,4 +1,11 @@
-v1.4.x   - (TBA)
+v1.5.0   - (TBA)
+          - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
+            menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
+            your screen. The IOCMON web UI requires a fully functional script to be running in the background
+            in order to feed and exchange data. The web UI serves as more as an informational component of
+            IOCMON, and mimics most of what you see in the actual script. The web UI is able to extend things
+            a bit more now that we actually can provide clickable links. Would love your feedback on this
+            first release, and see what I can do to make it even more extensible!
           - PATCH: Fixed an issue with AGH where when the script loads for the first time and auto detects
             AGH, it woudl hang during the DNS watch cycle due to the fact that the username/password were
             still blank. This will now show a warning that AGH will need to be set up completely first before
