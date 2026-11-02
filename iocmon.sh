@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.4.9
-# Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-01
+# Version: 1.5.0
+# Part of the BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON family
+# Last Updated: 2026-Nov-02
 # ============================================================================================================================
 #
 # Description:
@@ -103,7 +103,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.4.9"
+version="1.5.0"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -115,7 +115,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.2.1"  # web interface page version this script expects
+webuiversion="1.2.2"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -1852,7 +1852,7 @@ vadvanceddns()
     esac
     aghon=0; [ "$enablednswatch" -eq 1 ] && dnsusesagh && aghon=1
     if [ "$aghon" -ne 1 ]; then aghdisp="n/a"
-    elif [ -z "$aghcred" ]; then aghdisp="${CYellow}<none - required for AdGuard Home>${CClear}"
+    elif ! aghhaslogin; then aghdisp="${CYellow}<none - required for AdGuard Home>${CClear}"
     elif aghstatus >/dev/null; then aghdisp="${CGreen}<set> | <connected>${CClear}"
     else aghdisp="${CYellow}<set> | <not connected>${CClear}"; fi
     if [ -n "$aghurl" ]; then aghurldisp="${CGreen}${aghurl}${CClear}"; else aghurldisp="${CGreen}auto${CClear} ($(aghapiurl))"; fi
@@ -4561,6 +4561,7 @@ aghapiurl()
 aghcurl()
 {
   local p="$1" o="$2"; shift 2
+  aghhaslogin || { echo "000"; return 0; }
   printf 'user = "%s"\n' "$(aghdecode | sed 's/[\\"]/\\&/g')" | curl -s -L -k --max-time 15 -K - -o "$o" -w '%{http_code}' "$(aghapiurl)$p" "$@" 2>/dev/null
   return 0
 }
@@ -4579,6 +4580,15 @@ aghencode()
 aghdecode()
 {
   [ -n "$aghcred" ] && printf '%s\n' "$aghcred" | openssl base64 -d -A 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghhaslogin succeeds if aghcred decodes to user:password; curl waits at the terminal for a password without one
+
+aghhaslogin()
+{
+  case "$(aghdecode)" in ?*:*) return 0 ;; esac
+  return 1
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4617,7 +4627,7 @@ aghstatus()
 {
   local code jq b="/tmp/iocmon_aghst.$$"
   jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
-  [ -n "$aghcred" ] || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch)"; return 1; }
+  aghhaslogin || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch, item 11)"; return 1; }
   code="$(aghcurl /control/querylog/config "$b")"
   [ "$code" = "404" ] && code="$(aghcurl /control/querylog_info "$b")"
   case "$code" in
@@ -5064,6 +5074,17 @@ checkdns()
 
   local aghmode=0
   dnsusesagh && aghmode=1
+
+  if [ "$aghmode" -eq 1 ] && ! aghhaslogin; then
+    [ "$aghloginwarned" = "1" ] || aghlog "WARNING" "DNS watch is skipped: AdGuard Home is the DNS source but no login is set. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11."
+    aghloginwarned=1
+    dnslogshort="Add the login under Configuration Menu ${advsettingsmenunum}.2, item 11"
+    return
+  fi
+  if [ "$aghloginwarned" = "1" ]; then
+    aghlog "INFO" "AdGuard Home login found - DNS watch has resumed."
+    aghloginwarned=0
+  fi
 
   if [ "$aghmode" -eq 0 ] && ! dnsquerylogenabled; then
     if [ "$dnsquerylogwarned" != "1" ]; then
@@ -7360,7 +7381,7 @@ webpublish()
   fi
   if [ "$enablednswatch" -eq 1 ]; then
     dnsstate="waiting"
-    if dnsusesagh; then dnsstate="adguardhome"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
+    if dnsusesagh; then dnsstate="adguardhome"; aghhaslogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
   fi
   {
     echo "iocmon=1"
@@ -8528,8 +8549,10 @@ renderdashboard()
   collectstatus
 
   dnsstatus="${CDkGray}off${CClear}"
+  dnslogcolor="$CDkGray"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsusesagh; then dnsstatus="${CGreen}on${CClear} (AdGuard Home, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"
+    if dnsusesagh && ! aghhaslogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
+    elif dnsusesagh; then dnsstatus="${CGreen}on${CClear} (AdGuard Home, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"
     elif dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
   fi
   conntrackstatus="${CDkGray}off${CClear}"
@@ -8567,7 +8590,7 @@ renderdashboard()
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}conntrack: $conntrackstatus" 75; echo -e "${CWhite}dns: $dnsstatus"
   dnslogline=""
-  [ "$enablednswatch" -eq 1 ] && [ -n "$dnslogshort" ] && dnslogline="${CDkGray}${dnslogshort}${CClear}"
+  [ "$enablednswatch" -eq 1 ] && [ -n "$dnslogshort" ] && dnslogline="${dnslogcolor}${dnslogshort}${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}auth: $authstatus" 75; echo -e "$dnslogline"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}nvram: $nvramstatus" 75; echo -e "${CWhite}fs-integrity: $fsstatus"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
@@ -8693,7 +8716,9 @@ while true; do
   checkdns
   if [ "$enablednswatch" -eq 1 ]; then
     blanklineguard
-    if dnsusesagh; then
+    if dnsusesagh && ! aghhaslogin; then
+      echo -e "  ${CYellow}* WARNING: DNS watch skipped - the AdGuard Home login is missing. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11.${CClear}"
+    elif dnsusesagh; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds"
     elif dnsquerylogenabled; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) against known-malicious-domain feeds"
