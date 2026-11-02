@@ -9,6 +9,8 @@ Modified: Nov-02-2026
 
 <img width="1251" height="670" alt="image" src="https://github.com/user-attachments/assets/20d3a012-792e-4bdd-8540-fadb282bb09d" />
 
+<img width="990" height="756" alt="image" src="https://github.com/user-attachments/assets/4e7ee9cb-b0f6-4434-ad9a-77e242013a15" />
+
 -----
 # IOCMON — User Manual
 
