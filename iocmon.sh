@@ -1,8 +1,8 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.5.0
-# Part of the BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON family
+# Version: 1.5.2
+# Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Nov-02
 # ============================================================================================================================
 #
@@ -103,7 +103,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.5.0"
+version="1.5.2"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -115,7 +115,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.2.2"  # web interface page version this script expects
+webuiversion="1.3.0"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -188,6 +188,8 @@ dnstunnelsubthreshold=20        # distinct subdomains under one base domain from
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
 dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome
 aghurl=""                       # AdGuard Home web/API base URL - blank = read from AdGuardHome.yaml (http.address)
+aghurl2=""                      # backup AdGuard Home base URL, read only when the first one fails - blank = no backup
+aghcred2=""                     # backup AdGuard Home "user:password" login, encoded the same way as aghcred
 aghincludeblocked=0             # 1 = also check queries AdGuard Home already blocked (they never left the network)
 aghpagesize=500                 # query-log entries fetched per API call
 aghmaxpages=20                  # most API pages read per cycle before giving up and warning about a gap
@@ -860,6 +862,8 @@ saveconfig()
     echo 'dnssource="'"$dnssource"'"'
     echo 'aghurl="'"$aghurl"'"'
     echo 'aghcred="'"$aghcred"'"'
+    echo 'aghurl2="'"$aghurl2"'"'
+    echo 'aghcred2="'"$aghcred2"'"'
     echo 'aghincludeblocked='$aghincludeblocked
     echo 'aghpagesize='$aghpagesize
     echo 'aghmaxpages='$aghmaxpages
@@ -1840,7 +1844,7 @@ vadvanceddns()
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
     echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, or from AdGuard Home's query log through its API when AdGuard Home${CClear}"
-    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 10).${CClear}"
+    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 10). A second AdGuard Home can be a backup (items 13 and 14), read only when the first fails.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
@@ -1856,6 +1860,12 @@ vadvanceddns()
     elif aghstatus >/dev/null; then aghdisp="${CGreen}<set> | <connected>${CClear}"
     else aghdisp="${CYellow}<set> | <not connected>${CClear}"; fi
     if [ -n "$aghurl" ]; then aghurldisp="${CGreen}${aghurl}${CClear}"; else aghurldisp="${CGreen}auto${CClear} ($(aghapiurl))"; fi
+    if [ "$aghon" -ne 1 ]; then aghdisp2="n/a"
+    elif [ -z "$aghcred2" ]; then aghdisp2="<none>"
+    elif [ -z "$aghurl2" ]; then aghdisp2="${CYellow}<set> | <no address>${CClear}"
+    elif (aghslot=2; aghstatus >/dev/null); then aghdisp2="${CGreen}<set> | <connected>${CClear}"
+    else aghdisp2="${CYellow}<set> | <not connected>${CClear}"; fi
+    aghurl2disp="<none>"; [ -n "$aghurl2" ] && aghurl2disp="${CGreen}${aghurl2}${CClear}"
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
     menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
@@ -1870,13 +1880,15 @@ vadvanceddns()
     menurow "(10)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
     menurow "(11)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
     menurow "(12)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
-    menurow "(13)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
+    menurow "(13)" "  Backup AdGuard Home API login (optional)" "$aghdisp2" 68 "$aghon"
+    menurow "(14)" "  Backup AdGuard Home API address (optional)" "$aghurl2disp" 68 "$aghon"
+    menurow "(15)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-13, e=Exit): " sel
+    read -p "Please select? (1-15, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -1996,7 +2008,38 @@ vadvanceddns()
             val="$(aghnormurl "$val")" && aghurl="$val" || { echo -e "${CRed}Please enter an address like http://192.168.50.1:3000 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""; }
           fi
           [ -n "$val" ] && { dnslogannounced=""; saveconfig; echo ""; echo -e "Testing: $(aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; } ;;
-      13) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
+      13) [ "$aghon" -eq 1 ] && { echo ""
+          echo -e "IOCMON reads a backup AdGuard Home only when the primary (items 11 and 12) fails, and returns to the primary as soon as it answers."
+          echo -e "The backup needs its own login and address (item 14). The login is stored the same way as item 11."
+          echo ""
+          read -p "Backup AdGuard Home username (blank keeps the current login, 'none' removes it): " aghu
+          if [ "$aghu" = "none" ]; then
+            aghcred2=""; saveconfig
+            aghlog "INFO" "Backup AdGuard Home API login removed."
+          elif [ -n "$aghu" ]; then
+            read -rsp "Backup AdGuard Home password: " aghp; echo ""
+            aghnew="$(aghencode "$aghu:$aghp")"; aghp=""
+            if [ -n "$aghnew" ]; then
+              aghcred2="$aghnew"; aghnew=""; saveconfig
+              aghlog "INFO" "Backup AdGuard Home API login updated."
+            else
+              echo -e "${CRed}The login could not be encoded with openssl, so it was not saved.${CClear}"
+            fi
+          fi
+          [ -n "$aghcred2" ] && { echo ""; echo -e "Testing: $(aghslot=2; aghstatus)"; }
+          echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key; } ;;
+      14) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl2:-none}${CClear}"; echo ""
+          read -p "Backup AdGuard Home address, e.g. http://192.168.50.3:80 (blank keeps current, 'none' removes it): " val
+          if [ "$val" = "none" ]; then
+            aghurl2=""
+          elif [ "$val" = "auto" ]; then
+            echo -e "${CRed}A backup needs its own address: 'auto' only works for an AdGuard Home on this router.${CClear}"; sleep 3; val=""
+          elif [ -n "$val" ]; then
+            val="$(aghnormurl "$val")" && aghurl2="$val" || { echo -e "${CRed}Please enter an address like http://192.168.50.3:80 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""; }
+          fi
+          [ -n "$val" ] && { saveconfig; [ -n "$aghurl2" ] && { echo ""; echo -e "Testing: $(aghslot=2; aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; }; } ;;
+      15) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -4535,11 +4578,12 @@ aghyaml()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghapiurl echoes the API base URL: $aghurl, else the yaml's http.address (or the older bind_host/bind_port)
+# aghapiurl echoes the API base URL: the backup's when aghslot=2, else $aghurl, else the yaml's http.address (or bind_host/bind_port)
 
 aghapiurl()
 {
   local y addr host port
+  [ "$aghslot" = "2" ] && { echo "${aghurl2%/}"; return; }
   [ -n "$aghurl" ] && { echo "${aghurl%/}"; return; }
   y="$(aghyaml)"
   if [ -n "$y" ]; then
@@ -4556,12 +4600,13 @@ aghapiurl()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghcurl $1=path $2=body file [curl args...] calls the API with the aghcred login (on stdin) and prints the HTTP status
+# aghcurl $1=path $2=body file [curl args...] calls the API with the current instance's login (on stdin) and prints the HTTP status
 
 aghcurl()
 {
   local p="$1" o="$2"; shift 2
   aghhaslogin || { echo "000"; return 0; }
+  [ -n "$aghurl2" ] && set -- "$@" --connect-timeout 5
   printf 'user = "%s"\n' "$(aghdecode | sed 's/[\\"]/\\&/g')" | curl -s -L -k --max-time 15 -K - -o "$o" -w '%{http_code}' "$(aghapiurl)$p" "$@" 2>/dev/null
   return 0
 }
@@ -4575,20 +4620,39 @@ aghencode()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghdecode echoes the plain user:password held in aghcred
+# aghdecode echoes the plain user:password of the current instance (aghcred, or aghcred2 when aghslot=2)
 
 aghdecode()
 {
-  [ -n "$aghcred" ] && printf '%s\n' "$aghcred" | openssl base64 -d -A 2>/dev/null
+  local c="$aghcred"
+  [ "$aghslot" = "2" ] && c="$aghcred2"
+  [ -n "$c" ] && printf '%s\n' "$c" | openssl base64 -d -A 2>/dev/null
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghhaslogin succeeds if aghcred decodes to user:password; curl waits at the terminal for a password without one
+# aghhaslogin succeeds if the current login decodes to user:password; curl waits at the terminal for a password without one
 
 aghhaslogin()
 {
   case "$(aghdecode)" in ?*:*) return 0 ;; esac
   return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghhasbackup succeeds if a backup instance has both an address and a usable login
+
+aghhasbackup()
+{
+  [ -n "$aghurl2" ] || return 1
+  (aghslot=2; aghhaslogin)
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghanylogin succeeds if at least one AdGuard Home instance can be tried
+
+aghanylogin()
+{
+  aghhaslogin || aghhasbackup
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4625,9 +4689,11 @@ aghmigrateauth()
 
 aghstatus()
 {
-  local code jq b="/tmp/iocmon_aghst.$$"
+  local code jq b="/tmp/iocmon_aghst.$$" item=11
+  [ "$aghslot" = "2" ] && item=13
   jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
-  aghhaslogin || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch, item 11)"; return 1; }
+  aghhaslogin || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch, item $item)"; return 1; }
+  [ "$aghslot" = "2" ] && [ -z "$aghurl2" ] && { echo "no backup AdGuard Home address set (Advanced Settings - DNS Watch, item 14)"; return 1; }
   code="$(aghcurl /control/querylog/config "$b")"
   [ "$code" = "404" ] && code="$(aghcurl /control/querylog_info "$b")"
   case "$code" in
@@ -4671,7 +4737,8 @@ def blocked: (.reason // "") | (startswith("Filtered") and . != "FilteredSafeSea
 
 aghquerypairs()
 {
-  local outfile="$1" tmp="/tmp/iocmon_agh.$$" cur="" curfile="" newest="" older="" pages=0 meta n oldk newk oldraw out code done=0 jq
+  local outfile="$1" tmp="/tmp/iocmon_agh.$$" cur="" curfile="" newest="" older="" pages=0 meta n oldk newk oldraw out code done=0 jq warned="$aghapiwarned"
+  [ "$aghslot" = "2" ] && warned="$aghapiwarned2"
   aghqueries=0; aghskippedblocked=0
   : > "$outfile"
   if ! jq="$(aghjqbin)"; then
@@ -4681,6 +4748,7 @@ aghquerypairs()
   aghjqwarned=0
   [ -n "$stateroot" ] && curfile="$stateroot/agh_cursor"
   if [ -n "$curfile" ] && [ -f "$curfile" ]; then cur="$(cat "$curfile" 2>/dev/null)"; else cur="${aghcursorcache:-}"; fi
+  [ "$aghslot" = "2" ] && [ -n "$aghcursorcache2" ] && cur="$aghcursorcache2"
   [ "${#cur}" -eq 19 ] || cur=""
   mkdir -p "$tmp"; : > "$tmp/all"; : > "$outfile"
 
@@ -4691,11 +4759,13 @@ aghquerypairs()
       code="$(aghcurl /control/querylog "$tmp/resp" -G --data-urlencode "limit=$aghpagesize" --data-urlencode "response_status=all")"
     fi
     if [ "$code" != "200" ]; then
-      [ "$aghapiwarned" != "$code" ] && aghlog "WARNING" "DNS watch could not read AdGuard Home's query log (HTTP ${code:-none} from $(aghapiurl)) - check Advanced Settings - DNS Watch."
-      aghapiwarned="$code"; rm -rf "$tmp"; return 1
+      [ "$warned" != "$code" ] && aghlog "WARNING" "DNS watch could not read AdGuard Home's query log (HTTP ${code:-none} from $(aghapiurl)) - check Advanced Settings - DNS Watch."
+      if [ "$aghslot" = "2" ]; then aghapiwarned2="$code"; else aghapiwarned="$code"; fi
+      rm -rf "$tmp"; return 1
     fi
-    [ -n "$aghapiwarned" ] && aghlog "INFO" "DNS watch can read AdGuard Home's query log again."
-    aghapiwarned=""
+    [ -n "$warned" ] && aghlog "INFO" "DNS watch can read AdGuard Home's query log again ($(aghapiurl))."
+    warned=""
+    if [ "$aghslot" = "2" ]; then aghapiwarned2=""; else aghapiwarned=""; fi
     "$jq" -r --arg cur "$cur" "$aghjq" "$tmp/resp" > "$tmp/page" 2>"$tmp/err"
     meta="$(head -n 1 "$tmp/page")"
     case "$meta" in
@@ -4721,7 +4791,9 @@ aghquerypairs()
   done
   [ "$done" -eq 0 ] && aghlog "WARNING" "DNS watch read $pages pages ($((pages * aghpagesize)) queries) of AdGuard Home's log this cycle and stopped; older queries since the last cycle were not checked. Raise aghmaxpages or lower timerloop."
 
-  if [ -n "$newest" ]; then
+  if [ -n "$newest" ] && [ "$aghslot" = "2" ]; then
+    aghcursorcache2="$newest"
+  elif [ -n "$newest" ]; then
     if [ -n "$curfile" ]; then echo "$newest" > "$curfile"; fi
     aghcursorcache="$newest"
   fi
@@ -4739,6 +4811,32 @@ aghquerypairs()
   [ "$aghincludeblocked" = "1" ] && aghskippedblocked=0
   rm -rf "$tmp"
   return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# aghreadlog $1=output file reads the primary, then the backup if that fails, and sets aghfailover: 0 primary, 1 backup, 2 neither
+
+aghreadlog()
+{
+  local rc=1 state=0
+  aghslot=1
+  aghhaslogin && { aghquerypairs "$1"; rc=$?; }
+  if [ "$rc" -eq 1 ] && aghhasbackup; then
+    aghslot=2
+    aghquerypairs "$1"; rc=$?
+    aghslot=1
+    state=2; [ "$rc" -eq 1 ] || state=1
+  fi
+  if [ "$state" != "$aghfailover" ]; then
+    case "$state" in
+      0) aghlog "INFO" "DNS watch is back on the primary AdGuard Home ($(aghapiurl))." ;;
+      1) aghlog "WARNING" "DNS watch switched to the backup AdGuard Home (${aghurl2%/}): the primary ($(aghapiurl)) could not be read." ;;
+      2) aghlog "WARNING" "DNS watch could not read the primary ($(aghapiurl)) or the backup AdGuard Home (${aghurl2%/})." ;;
+    esac
+    aghfailover="$state"
+  fi
+  [ "$state" -eq 0 ] && aghcursorcache2=""
+  return "$rc"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5075,7 +5173,8 @@ checkdns()
   local aghmode=0
   dnsusesagh && aghmode=1
 
-  if [ "$aghmode" -eq 1 ] && ! aghhaslogin; then
+  if [ "$aghmode" -eq 1 ] && ! aghanylogin; then
+    aghfailover=0
     [ "$aghloginwarned" = "1" ] || aghlog "WARNING" "DNS watch is skipped: AdGuard Home is the DNS source but no login is set. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11."
     aghloginwarned=1
     dnslogshort="Add the login under Configuration Menu ${advsettingsmenunum}.2, item 11"
@@ -5112,7 +5211,12 @@ checkdns()
     fi
     dnslogshort="AdGuard Home API $(aghapiurl)"
     local aghrc
-    aghquerypairs "$dnspairfile.agh"; aghrc=$?
+    aghreadlog "$dnspairfile.agh"; aghrc=$?
+    case "$aghfailover" in
+      1) dnslogshort="Backup AdGuard Home ${aghurl2%/}"
+         [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$dnslogshort")>" ;;
+      2) dnslogshort="Primary and backup AdGuard Home not answering" ;;
+    esac
     # 2 = first run, cursor set to now: still a completed check
     [ "$aghrc" -eq 2 ] && dnslastcheck=$(date +'%H:%M')
     [ "$aghrc" -eq 0 ] || { rm -f "$dnspairfile.agh"; return; }
@@ -7381,7 +7485,7 @@ webpublish()
   fi
   if [ "$enablednswatch" -eq 1 ]; then
     dnsstate="waiting"
-    if dnsusesagh; then dnsstate="adguardhome"; aghhaslogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
+    if dnsusesagh; then dnsstate="adguardhome"; aghanylogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
   fi
   {
     echo "iocmon=1"
@@ -7417,6 +7521,7 @@ webpublish()
     echo "dnschecked=$dnsqueriedcount"
     echo "dnslast=$dnslastcheck"
     echo "dnslog=$dnslogshort"
+    echo "dnsfailover=$aghfailover"
     echo "authon=$enableauthwatch"
     echo "authchecked=$authchecked"
     echo "authlast=$authlastcheck"
@@ -7743,7 +7848,7 @@ vresetdefaults()
 applyimportedconfig()
 {
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
-  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keptkeys=""
+  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keptkeys=""
 
   . "$importfile"
 
@@ -7754,6 +7859,7 @@ applyimportedconfig()
   [ -z "$qfeedsapikey" ] && [ -n "$keepqfkey" ] && { qfeedsapikey="$keepqfkey"; keptkeys="${keptkeys:+$keptkeys, }Q-Feeds"; }
   [ -z "$abuseipdbapikey" ] && [ -n "$keepaipdbkey" ] && { abuseipdbapikey="$keepaipdbkey"; keptkeys="${keptkeys:+$keptkeys, }AbuseIPDB"; }
   [ -z "$aghcred" ] && [ -n "$keepaghcred" ] && { aghcred="$keepaghcred"; keptkeys="${keptkeys:+$keptkeys, }AdGuard Home"; }
+  [ -z "$aghcred2" ] && [ -n "$keepaghcred2" ] && { aghcred2="$keepaghcred2"; keptkeys="${keptkeys:+$keptkeys, }backup AdGuard Home"; }
   [ -z "$urlhausapikey" ] && enableurlhaus=0
   [ -z "$threatfoxapikey" ] && enablethreatfox=0
   [ -z "$qfeedsapikey" ] && enableqfeeds=0
@@ -7761,6 +7867,7 @@ applyimportedconfig()
   resolveiocmonroot
   dnslogpath=""
   aghurl=""
+  aghurl2=""
   dnsforcefilelog=0
   enableskynetimport=0
   enablewebui=0
@@ -7826,13 +7933,13 @@ exportiocmonconfig()
   fi
 
   echo ""
-  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys and the AdGuard Home login in this export?"
+  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys and the AdGuard Home logins in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
   { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(nvram get lan_hostname)"
     cat "$config"
   } > "$exportpath"
-  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/' "$exportpath"
+  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
@@ -8169,6 +8276,7 @@ abuseipdbcyclefile="/tmp/iocmon_aipdb_cycle.$$"
 dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblocked=0
+aghslot=1; aghfailover=0; aghapiwarned2=""; aghcursorcache2=""
 timerpaused=0
 exitallmenus=0
 
@@ -8551,7 +8659,9 @@ renderdashboard()
   dnsstatus="${CDkGray}off${CClear}"
   dnslogcolor="$CDkGray"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsusesagh && ! aghhaslogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
+    if dnsusesagh && ! aghanylogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
+    elif [ "$aghfailover" = "1" ] && dnsusesagh; then dnsstatus="${CYellow}on, AdGuard Home backup${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow"
+    elif [ "$aghfailover" = "2" ] && dnsusesagh; then dnsstatus="${CYellow}AdGuard Home not answering${CClear} (last checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow"
     elif dnsusesagh; then dnsstatus="${CGreen}on${CClear} (AdGuard Home, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"
     elif dnsquerylogenabled; then dnsstatus="${CGreen}on${CClear} (${dnsqueriedcount:-0} queries checked, checked ${dnslastcheck:-n/a})"; else dnsstatus="${CYellow}on, awaiting query-log setup${CClear}"; fi
   fi
@@ -8716,7 +8826,11 @@ while true; do
   checkdns
   if [ "$enablednswatch" -eq 1 ]; then
     blanklineguard
-    if dnsusesagh && ! aghhaslogin; then
+    if [ "$aghfailover" = "2" ] && dnsusesagh; then
+      echo -e "  ${CYellow}* WARNING: DNS watch could not read the primary or the backup AdGuard Home - see the IOCMON log.${CClear}"
+    elif [ "$aghfailover" = "1" ] && dnsusesagh; then
+      echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from the ${CYellow}backup${CClear} AdGuard Home (${aghurl2%/}) against known-malicious-domain feeds"
+    elif dnsusesagh && ! aghanylogin; then
       echo -e "  ${CYellow}* WARNING: DNS watch skipped - the AdGuard Home login is missing. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11.${CClear}"
     elif dnsusesagh; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds"
