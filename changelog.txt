@@ -1,15 +1,22 @@
-v1.5.0   - (TBA)
+v1.5.2   - (TBA)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
             in order to feed and exchange data. The web UI serves as more as an informational component of
             IOCMON, and mimics most of what you see in the actual script. The web UI is able to extend things
             a bit more now that we actually can provide clickable links. Would love your feedback on this
-            first release, and see what I can do to make it even more extensible!
+            first release, and see what I can do to make it even more extensible! Thanks @AvalonOC!
           - PATCH: Fixed an issue with AGH where when the script loads for the first time and auto detects
             AGH, it woudl hang during the DNS watch cycle due to the fact that the username/password were
             still blank. This will now show a warning that AGH will need to be set up completely first before
             DNS Watch functionality works. Huge thanks to @Makaveli for bringing this up!
+          - PATCH: The IOCMON Web UI should now be properly displaying the router UI's top and side bars.
+            Thanks @AvalonOC for reporting (and everyone else that chimed in about this!) :)
+          - PATCH: Per the suggestion of @AvalonOC, included additional options around the 10.2.10 AGH menu
+            item that allows you to specify a redundant AGH server, and fails over if the primary goes out.
+          - PATCH: Another great suggestion from @AvalonOC, the ability to export the logs into a .csv file
+            that can be downloaded through your browser was implemented. It will download what you are
+            currently displaying, and can switch between the abbreviated log view, or the full log view.
 
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
