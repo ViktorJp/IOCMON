@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.2.2 -->
+<!-- IOCMON-WebUI v1.3.0 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -11,6 +11,8 @@
 <title>IOCMON</title>
 <link rel="stylesheet" type="text/css" href="index_style.css"/>
 <link rel="stylesheet" type="text/css" href="form_style.css"/>
+<script language="JavaScript" type="text/javascript" src="/js/jquery.js"></script>
+<script language="JavaScript" type="text/javascript" src="/js/httpApi.js"></script>
 <script language="JavaScript" type="text/javascript" src="/state.js"></script>
 <script language="JavaScript" type="text/javascript" src="/general.js"></script>
 <script language="JavaScript" type="text/javascript" src="/popup.js"></script>
@@ -118,7 +120,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.2.2", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.3.0", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 25;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var full = {}, pendingfull = null, routerdate = "", recentdays = 14, recentrows = 2000, fullrows = 20000;
@@ -192,12 +194,14 @@ function showstatus(d) {
   put("t_last", d.lastalert || "none yet");
   put("t_rep", d.reputation || "AbuseIPDB off");
 
+  var failover = d.dnsstate === "adguardhome" ? d.dnsfailover : "0";
   setrow("w_conn", onoff(d.conntrackon === "1", plural(d.conntrackchecked || "0", "dst ip") + ", checked " + (d.conntracklast || "n/a")));
   if (d.dnsstate === "off") setrow("w_dns", { t: "off", c: "v off" });
   else if (d.dnsstate === "waiting") setrow("w_dns", { t: "awaiting query-log setup", c: "v warn" });
   else if (d.dnsstate === "nologin") setrow("w_dns", { t: "skipped, AdGuard Home login missing", c: "v warn" });
-  else setrow("w_dns", { t: (d.dnsstate === "adguardhome" ? "AdGuard Home, " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: "v on" });
-  put("w_dnslog", d.dnslog || "-", d.dnsstate === "nologin" ? "v warn" : d.dnslog && d.dnsstate !== "off" ? "v on" : "v off");
+  else if (failover === "2") setrow("w_dns", { t: "AdGuard Home not answering, last checked " + (d.dnslast || "n/a"), c: "v warn" });
+  else setrow("w_dns", { t: (failover === "1" ? "AdGuard Home backup, " : d.dnsstate === "adguardhome" ? "AdGuard Home, " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: failover === "1" ? "v warn" : "v on" });
+  put("w_dnslog", d.dnslog || "-", d.dnsstate === "nologin" || failover === "1" || failover === "2" ? "v warn" : d.dnslog && d.dnsstate !== "off" ? "v on" : "v off");
   setrow("w_auth", onoff(d.authon === "1", "+" + (d.authchecked || "0") + " new, checked " + (d.authlast || "n/a")));
   setrow("w_nvram", onoff(d.nvramon === "1", d.nvramvars + " vars, checked " + (d.nvramlast || "n/a")));
   if (d.fson !== "1") setrow("w_fs", { t: "off", c: "v off" });
@@ -353,9 +357,9 @@ function parseioc(line) {
   var p = parts(line), rep = "", n;
   if (p.length < 5) return { raw: line };
   n = p.length;
-  if (/^AbuseIPDB /.test(p[n - 1])) { rep = p[n - 1]; n--; }
+  if (/^(TEST )?AbuseIPDB /.test(p[n - 1])) { rep = p[n - 1]; n--; }
   if (n < 5) return { raw: line };
-  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, indicator: p.slice(2, n - 2).join(" | ") };
+  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1] };
 }
 function parserep(line) {
   var p = parts(line), m;
@@ -378,8 +382,8 @@ function parsehash(line) {
 var parsers = { ioc: parseioc, dropbear: parsedrop, hash: parsehash, reputation: parserep };
 
 function storelog(name, text) {
-  var a = text ? datalines(text) : [], out = [], i;
-  for (i = a.length - 1; i >= 0; i--) out.push(parsers[name](a[i]));
+  var a = text ? datalines(text) : [], out = [], i, r;
+  for (i = a.length - 1; i >= 0; i--) { r = parsers[name](a[i]); r.line = a[i]; out.push(r); }
   logs[name] = out;
   if (name === curlog) { fillkinds(); drawlog(); }
   if (name === "ioc") drawchart();
@@ -510,9 +514,8 @@ function addlinks(box, indicator) {
     addlink(box, "URLhaus", "https://urlhaus.abuse.ch/browse.php?search=" + v);
   }
 }
-function drawlog() {
-  var q = byid("l_find").value.toLowerCase(), kind = byid("l_kind").value, order = byid("l_sort").value, box = byid("l_rows");
-  var a = logs[curlog], hits = [], i, r, row, top, pages, end, lk, txt;
+function loghits() {
+  var q = byid("l_find").value.toLowerCase(), kind = byid("l_kind").value, a = logs[curlog], hits = [], i, r, txt;
   for (i = 0; i < a.length; i++) {
     r = a[i];
     txt = (r.raw || [r.when, r.tag, r.main, r.sub, r.rep].join(" ")).toLowerCase();
@@ -520,7 +523,79 @@ function drawlog() {
     if (q && txt.indexOf(q) < 0) continue;
     hits.push(r);
   }
-  if (order === "old") hits.reverse();
+  if (byid("l_sort").value === "old") hits.reverse();
+  return hits;
+}
+function csvtime(s) {
+  var m = /^([A-Z][a-z]{2}) +(\d{1,2}) (\d{4}) (\d{2}:\d{2}:\d{2})/.exec(s || ""), mon = m ? monthnames.indexOf(m[1]) : -1;
+  return mon < 0 ? s : m[3] + "-" + ("0" + (mon + 1)).slice(-2) + "-" + ("0" + m[2]).slice(-2) + " " + m[4];
+}
+function csvcell(v) {
+  v = v === undefined || v === null ? "" : String(v);
+  if (/^\s*[=+\-@]/.test(v) || /^[\t\r]/.test(v)) v = "'" + v;
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function csvblank(v) { return /^(n\/a|\?\?|never|no flags|no categories)$/.test(v) ? "" : v; }
+var csvlogs = {
+  ioc: {
+    head: ["timestamp_local", "type", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail"],
+    row: function (r) {
+      var c = /^([0-9A-Fa-f:.]+)->(.+)$/.exec(r.indicator), m = /^(?:TEST )?AbuseIPDB (\S+) (\d+)% (\d+)r\/(\d+)u ?(.*)$/.exec(r.rep);
+      return [csvtime(r.when), r.tag, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""]);
+    }
+  },
+  dropbear: {
+    head: ["timestamp_local", "username", "source_ip", "source_port", "process_id", "message"],
+    row: function (r) {
+      var u = /attempt for '(.*)' from /.exec(r.main), a = /from (\d{1,3}(?:\.\d{1,3}){3}):(\d+)\s*$/.exec(r.main), p = /dropbear\[(\d+)\]/.exec(r.main);
+      return [csvtime(r.when), u ? u[1] : "", a ? a[1] : "", a ? a[2] : "", p ? p[1] : "", r.main];
+    }
+  },
+  hash: {
+    head: ["timestamp_local", "path", "md5", "sha1", "sha256", "result", "matched_hash", "source", "family"],
+    row: function (r) {
+      var p = parts(r.line), n = p.length, h = /md5=(\S*) sha1=(\S*) sha256=(\S*)/.exec(p[n - 2]), m = /^MATCH: hash=(\S*) source=(.*) family=(.*)$/.exec(p[n - 1]);
+      return [csvtime(r.when), p.slice(1, n - 2).join(" | "), h ? csvblank(h[1]) : "", h ? csvblank(h[2]) : "", h ? csvblank(h[3]) : "", m ? "match" : "no match", m ? m[1] : "", m ? m[2] : "", m ? m[3] : ""];
+    }
+  },
+  reputation: {
+    head: ["timestamp_local", "ip", "status", "score", "reports", "users", "last_report", "country", "usage_type", "isp", "flags", "categories", "trigger", "not_checked_reason"],
+    row: function (r) {
+      var p = parts(r.line), c;
+      if (r.score === undefined) return [csvtime(r.when), trim(p[1]), "not checked", "", "", "", "", "", "", "", "", "", p.slice(3).join(" | "), p[2].replace(/^not checked: /, "")];
+      c = /^(\d+) reports\/(\d+) users$/.exec(p[3] || "");
+      return [csvtime(r.when), trim(p[1]), "checked", r.score, c ? c[1] : "", c ? c[2] : "", csvblank((p[4] || "").replace(/^last /, "")), csvblank(p[5]), p[6], csvblank(p[7]), csvblank(p[8]), csvblank(p[9]), p.slice(10).join(" | "), ""];
+    }
+  }
+};
+function csvtext(name, hits) {
+  var spec = csvlogs[name], lines = [spec.head.concat("unparsed_line").join(",")], blanks = spec.head.map(function () { return ""; }), i, r;
+  for (i = 0; i < hits.length; i++) {
+    r = hits[i];
+    lines.push((r.raw ? blanks.concat(r.raw) : spec.row(r).concat("")).map(csvcell).join(","));
+  }
+  return "\ufeff" + lines.join("\r\n") + "\r\n";
+}
+function csvname(name) {
+  var d = new Date(), z = function (n) { return ("0" + n).slice(-2); };
+  return "iocmon-" + name + "-" + (full[name] ? "full" : "recent") + "-" + d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + "-" + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds()) + ".csv";
+}
+function downloadcsv() {
+  var hits = loghits(), a, url;
+  if (!hits.length) return;
+  url = URL.createObjectURL(new Blob([csvtext(curlog, hits)], { type: "text/csv;charset=utf-8" }));
+  a = document.createElement("a");
+  a.href = url;
+  a.download = csvname(curlog);
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+}
+function drawlog() {
+  var box = byid("l_rows"), a = logs[curlog], hits = loghits(), i, r, row, top, pages, end, lk;
+  byid("l_csv").className = hits.length ? "btn" : "btn dis";
   pages = Math.max(1, Math.ceil(hits.length / pagesize));
   if (curpage >= pages) curpage = pages - 1;
   end = Math.min(hits.length, (curpage + 1) * pagesize);
@@ -584,7 +659,7 @@ function loadlist(name) {
   });
 }
 function initial() {
-  try { show_menu(); } catch (e) {}
+  try { show_menu(); } catch (e) { if (window.console) console.error("IOCMON: show_menu failed", e); }
   document.form.current_page.value = window.location.pathname.substring(1);
   put("f_ver", pagever);
   lastchange = Date.now();
@@ -700,6 +775,7 @@ function initial() {
     <select id="l_kind" onchange="curpage=0;drawlog();"></select>
     <select id="l_sort" onchange="curpage=0;drawlog();"><option value="new">Newest first</option><option value="old">Oldest first</option></select>
     <a class="btn" id="l_full" onclick="togglefull();">Full History</a>
+    <a class="btn dis" id="l_csv" title="Downloads every row matching this search and kind in the order shown, not just this page. Use Full History first for older rows." onclick="downloadcsv();">Download CSV</a>
   </div>
   <div id="l_rows"></div>
   <div class="pager"><a id="l_prev" onclick="turn(-1);">&lt; Prev</a><span><span id="l_page"></span> | <span id="l_count"></span></span><a id="l_next" onclick="if(this.className!=='dis')turn(1);">Next &gt;</a></div>
