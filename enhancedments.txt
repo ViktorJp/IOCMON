@@ -1,6 +1,8 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
+- Build beginner mode that includes common domain exceptions and has DNS heuristics turned off. Maybe a a toggle under the main adv settings?
+- Include this, and the option to turn on the web UI in the initial setup.
 
 Done:
 - Build a web interface (@AvalonOC)
