@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.5.2
+# Version: 1.5.3
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Nov-02
 # ============================================================================================================================
@@ -103,7 +103,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.5.2"
+version="1.5.3"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -245,7 +245,7 @@ otxreportsort="frequency"       # OTX AlienVault Threat Report sort order: "freq
 fsstartupscripts="services-start services-stop service-event service-event-end firewall-start wan-start wan-event nat-start pre-mount post-mount unmount init-start dhcpc-event openvpn-event ddns-start update-notification qos-start wgserver-start wgserver-stop wgclient-start wgclient-stop wg-event"
 
 # Security-relevant NVRAM variables checknvram() diffs every main-loop tick
-nvramwatchvars="sshd_enable sshd_forwarding sshd_pass sshd_port sshd_port_x sshd_authkeys telnetd_enable wan_dns wan0_dns wan1_dns wan_proto wan0_proto wan1_proto jffs2_scripts dmz_ip vts_enable_x vts_rulelist vts_upnplist autofw_enable_x autofw_rulelist"
+nvramwatchvars="sshd_enable sshd_forwarding sshd_pass sshd_port sshd_port_x sshd_authkeys telnetd_enable wan_dns wan_dnsenable_x wan_dns1_x wan_dns2_x wan0_dns wan0_dnsenable_x wan0_dns1_x wan0_dns2_x wan1_dns wan1_dnsenable_x wan1_dns1_x wan1_dns2_x dhcp_dns1_x dhcp_dns2_x ipv6_dnsenable ipv6_dns1 ipv6_dns2 ipv6_dns3 ipv6_dns1_x dnspriv_enable dnspriv_rulelist wan_proto wan0_proto wan1_proto jffs2_scripts dmz_ip vts_enable_x vts_rulelist vts_upnplist autofw_enable_x autofw_rulelist"
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Color variables - reused verbatim from BACKUPMON/STUNMON/TAILMON/VPNMON-R3, etc.
@@ -5506,20 +5506,23 @@ checknvram()
   mkdir -m 755 -p "$stateroot"
 
   local baseline="$stateroot/nvram_baseline.db" newbaseline="$stateroot/nvram_baseline.db.new"
-  local firstrun=0 var newval oldval
+  local firstrun=0 var newval oldval recorded change
   nvramlastcheck=$(date +'%H:%M')
   [ -s "$baseline" ] || firstrun=1
+  recorded="$(awk -F'=' '$1=="__recorded"{sub(/^[^=]*=/,""); print; exit}' "$baseline" 2>/dev/null)"
 
-  : > "$newbaseline"
+  echo "__recorded=$(date +'%b %d %Y %X')" > "$newbaseline"
   for var in $nvramwatchvars; do
     newval="$(nvram get "$var" 2>/dev/null | tr '\n' ' ')"
     newval="${newval% }"
     echo "${var}=${newval}" >> "$newbaseline"
 
-    if [ "$firstrun" -eq 0 ]; then
+    if [ "$firstrun" -eq 0 ] && grep -q "^${var}=" "$baseline" 2>/dev/null; then
       oldval="$(awk -F'=' -v v="$var" '$1==v{sub(/^[^=]*=/,""); print; exit}' "$baseline" 2>/dev/null)"
       if [ "$newval" != "$oldval" ]; then
-        raisealert "nvram" "$var" "nvram-change" "changed from '${oldval:-<empty>}' to '${newval:-<empty>}'"
+        change="changed from '${oldval:-<empty>}' to '${newval:-<empty>}'${recorded:+ (last recorded $recorded)}"
+        aghlog "INFO" "NVRAM $var $change."
+        raisealert "nvram" "$var" "nvram-change" "$change"
       fi
     fi
   done
