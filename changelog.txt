@@ -1,4 +1,4 @@
-v1.5.2   - (TBA)
+v1.5.3   - (TBA)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
@@ -17,6 +17,10 @@ v1.5.2   - (TBA)
           - PATCH: Another great suggestion from @AvalonOC, the ability to export the logs into a .csv file
             that can be downloaded through your browser was implemented. It will download what you are
             currently displaying, and can switch between the abbreviated log view, or the full log view.
+          - PATCH: Enhanced the NVRAM tracking and detection logic to ensure it produces a before and after
+            value so that you can better track what happened during the last cycle. While doing so, I've
+            added another 14 or so critical DNS/DHCP-related NVRAM variables to watch out for bringing the
+            total to 38. Thanks to @skeal for bringing up this issue!
 
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
