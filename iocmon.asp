@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.3.0 -->
+<!-- IOCMON-WebUI v1.4.0 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -111,6 +111,12 @@
 #ioc .entry .when { color: var(--dim); font-size: 11px; white-space: nowrap; }
 #ioc .entry .tag { background: var(--panel2); color: var(--cyan); font-size: 10px; letter-spacing: 1px; padding: 0 5px; text-transform: uppercase; }
 #ioc .entry .main { overflow-wrap: anywhere; }
+#ioc .entry.critical { border-left: 3px solid var(--red); padding-left: 8px; }
+#ioc .entry.critical .main { color: var(--red); }
+#ioc .entry.warning { border-left: 3px solid var(--amber); padding-left: 8px; }
+#ioc .entry.warning .main { color: var(--amber); }
+#ioc .entry.info { border-left: 3px solid var(--line); padding-left: 8px; }
+#ioc .entry.info .main { color: var(--dim); }
 #ioc .entry .sub { color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
 #ioc .links a { color: var(--cyan) !important; margin-right: 10px; font-size: 11px; }
 #ioc .pager { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; color: var(--dim); }
@@ -120,7 +126,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.3.0", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.4.0", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 25;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var full = {}, pendingfull = null, routerdate = "", recentdays = 14, recentrows = 2000, fullrows = 20000;
@@ -191,6 +197,7 @@ function showstatus(d) {
   put("t_feeds", Number(d.feedstotal || 0).toLocaleString());
   put("t_feedsub", "every " + d.feedhrs + "h, oldest " + d.feedsoldest);
   put("t_today", d.todaycount || "0");
+  put("t_level", d.alertlevel === "critical" ? "Banner and email: Critical only" : d.alertlevel === "all" ? "Banner and email: all alerts" : "");
   put("t_last", d.lastalert || "none yet");
   put("t_rep", d.reputation || "AbuseIPDB off");
 
@@ -354,12 +361,13 @@ function poll() {
 function parts(line) { return line.split(" | "); }
 function trim(s) { return s.replace(/^\s+|\s+$/g, ""); }
 function parseioc(line) {
-  var p = parts(line), rep = "", n;
+  var p = parts(line), rep = "", sev = "", n;
+  if (/^sev:(critical|warning|info)$/.test(p[p.length - 1])) sev = p.pop().slice(4);
   if (p.length < 5) return { raw: line };
   n = p.length;
   if (/^(TEST )?AbuseIPDB /.test(p[n - 1])) { rep = p[n - 1]; n--; }
   if (n < 5) return { raw: line };
-  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1] };
+  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1], sev: sev };
 }
 function parserep(line) {
   var p = parts(line), m;
@@ -515,11 +523,13 @@ function addlinks(box, indicator) {
   }
 }
 function loghits() {
-  var q = byid("l_find").value.toLowerCase(), kind = byid("l_kind").value, a = logs[curlog], hits = [], i, r, txt;
+  var q = byid("l_find").value.toLowerCase(), kind = byid("l_kind").value, sev = curlog === "ioc" ? byid("l_sev").value : "", a = logs[curlog], hits = [], i, r, txt;
   for (i = 0; i < a.length; i++) {
     r = a[i];
-    txt = (r.raw || [r.when, r.tag, r.main, r.sub, r.rep].join(" ")).toLowerCase();
+    txt = (r.raw || [r.when, r.sev, r.tag, r.main, r.sub, r.rep].join(" ")).toLowerCase();
     if (kind && r.tag !== kind) continue;
+    if (sev === "critical" && r.sev !== "critical") continue;
+    if (sev === "warning" && r.sev !== "critical" && r.sev !== "warning") continue;
     if (q && txt.indexOf(q) < 0) continue;
     hits.push(r);
   }
@@ -538,10 +548,10 @@ function csvcell(v) {
 function csvblank(v) { return /^(n\/a|\?\?|never|no flags|no categories)$/.test(v) ? "" : v; }
 var csvlogs = {
   ioc: {
-    head: ["timestamp_local", "type", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail"],
+    head: ["timestamp_local", "type", "severity", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail"],
     row: function (r) {
       var c = /^([0-9A-Fa-f:.]+)->(.+)$/.exec(r.indicator), m = /^(?:TEST )?AbuseIPDB (\S+) (\d+)% (\d+)r\/(\d+)u ?(.*)$/.exec(r.rep);
-      return [csvtime(r.when), r.tag, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""]);
+      return [csvtime(r.when), r.tag, r.sev, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""]);
     }
   },
   dropbear: {
@@ -602,10 +612,11 @@ function drawlog() {
   clearnode(box);
   for (i = curpage * pagesize; i < end; i++) {
     r = hits[i];
-    row = make("div", "entry");
+    row = make("div", r.sev ? "entry " + r.sev : "entry");
     if (r.raw) { row.appendChild(make("div", "main mono", r.raw)); box.appendChild(row); continue; }
     top = make("div", "top");
     top.appendChild(make("span", "when num", r.when));
+    if (r.sev) top.appendChild(make("span", r.sev === "critical" ? "tag bad" : r.sev === "warning" ? "tag warn" : "tag off", r.sev));
     top.appendChild(make("span", r.bad || r.score >= 75 ? "tag bad" : r.score >= 25 ? "tag warn" : "tag", r.tag));
     row.appendChild(top);
     row.appendChild(make("div", "main mono", r.main));
@@ -627,6 +638,8 @@ function picklog(name) {
   curlog = name; curpage = 0;
   for (i = 0; i < names.length; i++) byid("tab_" + names[i]).className = names[i] === name ? "sel" : "";
   byid("l_kind").value = "";
+  byid("l_sev").value = "";
+  byid("l_sev").style.display = name === "ioc" ? "" : "none";
   byid("l_find").value = "";
   fillkinds(); drawlog(); drawfull(); loadlog(name);
 }
@@ -720,7 +733,7 @@ function initial() {
 
 <div class="tiles">
   <div class="tile"><div class="k">Indicators</div><div class="v num" id="t_feeds">-</div><div class="s" id="t_feedsub"></div></div>
-  <div class="tile"><div class="k">Alerts today</div><div class="v num" id="t_today">-</div></div>
+  <div class="tile"><div class="k">Alerts today</div><div class="v num" id="t_today">-</div><div class="s" id="t_level"></div></div>
   <div class="tile"><div class="k">Last alert</div><div class="v small num" id="t_last">-</div></div>
   <div class="tile"><div class="k">Reputation</div><div class="v small num" id="t_rep">-</div></div>
 </div>
@@ -773,9 +786,10 @@ function initial() {
   <div class="tools">
     <input type="text" id="l_find" placeholder="Search" maxlength="80" autocomplete="off" oninput="curpage=0;drawlog();"/>
     <select id="l_kind" onchange="curpage=0;drawlog();"></select>
+    <select id="l_sev" onchange="curpage=0;drawlog();"><option value="">All severities</option><option value="warning">Warning and Critical</option><option value="critical">Critical only</option></select>
     <select id="l_sort" onchange="curpage=0;drawlog();"><option value="new">Newest first</option><option value="old">Oldest first</option></select>
     <a class="btn" id="l_full" onclick="togglefull();">Full History</a>
-    <a class="btn dis" id="l_csv" title="Downloads every row matching this search and kind in the order shown, not just this page. Use Full History first for older rows." onclick="downloadcsv();">Download CSV</a>
+    <a class="btn dis" id="l_csv" title="Downloads every row matching this search and these filters in the order shown, not just this page. Use Full History first for older rows." onclick="downloadcsv();">Download CSV</a>
   </div>
   <div id="l_rows"></div>
   <div class="pager"><a id="l_prev" onclick="turn(-1);">&lt; Prev</a><span><span id="l_page"></span> | <span id="l_count"></span></span><a id="l_next" onclick="if(this.className!=='dis')turn(1);">Next &gt;</a></div>
