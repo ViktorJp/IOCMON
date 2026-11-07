@@ -4,7 +4,7 @@ To-Do:
 - Include the option to turn on the web UI in the initial setup.
 
 Done:
-- Build beginner mode that includes common domain exceptions and has DNS heuristics turned off. Maybe a a toggle under the main adv settings?
+- Build critical alerts-only mode that includes DNS heuristics turned off. Maybe a a toggle under the main adv settings?
 - Build a web interface (@AvalonOC)
 - Build integration into the AGH API to pull DNS lookup data - @mason
 - Would love to see more notification methods than just e-mail. E.g. like in connmon, at least Pushover would be really nice. Maybe you can just port that part over from connmon - @Eddga (Not pursuing this functionality for any alternative notification solution. Plenty of no-code automation currently exists that allow you to push an incoming alert email to the notification service of your choice).
