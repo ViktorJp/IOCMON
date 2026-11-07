@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.5.3
+# Version: 1.5.4
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-02
+# Last Updated: 2026-Nov-06
 # ============================================================================================================================
 #
 # Description:
@@ -103,7 +103,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.5.3"
+version="1.5.4"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -115,7 +115,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.3.0"  # web interface page version this script expects
+webuiversion="1.4.0"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -228,7 +228,10 @@ extdrivelabel=""                # resolved USB label, not the live path - drive 
 
 enablealertemail=1              # send an AMTM email whenever a real IOC detection fires
 alertbanneratbottom=0           # 0 = SECURITY ALERT banner at top of screen (default), 1 = just above the timer line
-alertfeedonly=0                 # 0 = alert/email on any detection (default), 1 = only ones matching a feed indicator
+alertlevel=""                   # "all" = banner/email for every alert, "critical" = only Critical ones; blank = migrate from alertfeedonly
+alertfeedonly=0                 # legacy key from before alertlevel, read once by migratealertlevel and no longer saved
+dnsescalatescore=75             # a DNS feed match becomes Critical when AbuseIPDB scores its reply IP at or above this (1-100)
+dnssharedhosts="github.com githubusercontent.com microsoft.com windows.net live.com office.com amazonaws.com cloudfront.net googleapis.com googleusercontent.com gstatic.com apple.com icloud.com steamcommunity.com steampowered.com roblox.com discord.com discordapp.com dropbox.com dropboxusercontent.com akamaized.net in-addr.arpa ip6.arpa"  # shared-hosting domains (and subdomains) whose DNS feed matches are logged as Info
 ratelimit=0                     # max emails/hour, 0 = unlimited
 logsize=2000                    # line cap for $logfile and other trimmed log files
 logfilepath="$jffslogfile"      # configured activity log location: JFFS default, or $iocmonroot/state/iocmon.log on the external drive
@@ -245,6 +248,7 @@ otxreportsort="frequency"       # OTX AlienVault Threat Report sort order: "freq
 fsstartupscripts="services-start services-stop service-event service-event-end firewall-start wan-start wan-event nat-start pre-mount post-mount unmount init-start dhcpc-event openvpn-event ddns-start update-notification qos-start wgserver-start wgserver-stop wgclient-start wgclient-stop wg-event"
 
 # Security-relevant NVRAM variables checknvram() diffs every main-loop tick
+nvramruntimevars="wan_dns wan0_dns wan1_dns"  # watched vars the firmware rewrites itself on a WAN reconnect or DHCP renewal - their changes are Warning, not Critical
 nvramwatchvars="sshd_enable sshd_forwarding sshd_pass sshd_port sshd_port_x sshd_authkeys telnetd_enable wan_dns wan_dnsenable_x wan_dns1_x wan_dns2_x wan0_dns wan0_dnsenable_x wan0_dns1_x wan0_dns2_x wan1_dns wan1_dnsenable_x wan1_dns1_x wan1_dns2_x dhcp_dns1_x dhcp_dns2_x ipv6_dnsenable ipv6_dns1 ipv6_dns2 ipv6_dns3 ipv6_dns1_x dnspriv_enable dnspriv_rulelist wan_proto wan0_proto wan1_proto jffs2_scripts dmz_ip vts_enable_x vts_rulelist vts_upnplist autofw_enable_x autofw_rulelist"
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -825,10 +829,22 @@ betacheck()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# migratealertlevel fills a blank or unknown alertlevel from the legacy alertfeedonly key (1 = critical, else all)
+
+migratealertlevel()
+{
+  case "$alertlevel" in
+    all|critical) ;;
+    *) if [ "$alertfeedonly" = "1" ]; then alertlevel="critical"; else alertlevel="all"; fi ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # saveconfig writes the current in-memory config out to iocmon.cfg, then sources it back immediately
 
 saveconfig()
 {
+  migratealertlevel
   { echo 'timerloop='$timerloop
     echo 'feedupdatehrs='$feedupdatehrs
     echo 'fsintegrityhrs='$fsintegrityhrs
@@ -898,7 +914,9 @@ saveconfig()
 
     echo 'enablealertemail='$enablealertemail
     echo 'alertbanneratbottom='$alertbanneratbottom
-    echo 'alertfeedonly='$alertfeedonly
+    echo 'alertlevel="'"$alertlevel"'"'
+    echo 'dnsescalatescore='$dnsescalatescore
+    echo 'dnssharedhosts="'"$dnssharedhosts"'"'
     echo 'ratelimit='$ratelimit
     echo 'logsize='$logsize
     echo 'logfilepath="'"$logfilepath"'"'
@@ -1165,6 +1183,7 @@ initialsetup()
   esac
 
   fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /jffs/.ssh /tmp/mnt/$extdrivelabel"
+  alertlevel="critical"
   saveconfig
 
   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
@@ -1280,6 +1299,14 @@ validdatestr()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# validdomainentry accepts one domain name made of letters, digits, dots and hyphens, with a dot and no leading/trailing dot or hyphen
+
+validdomainentry()
+{
+  echo "$1" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' && case "$1" in *.*) ! echo "$1" | grep -q '\.\.' ;; *) false ;; esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # veditlist is a numbered add/edit/delete editor for a space-separated list stored in $1
 
 veditlist()
@@ -1334,7 +1361,13 @@ veditlist()
             echo -e "${CRed}Invalid entry - expected a single IP (e.g. 204.44.63.22) or a CIDR range (e.g. 204.44.0.0/16, prefix 0-32).${CClear}"
             sleep 3
             continue
+          elif [ "$varname" = "dnssharedhosts" ] && ! validdomainentry "$newval"; then
+            echo ""
+            echo -e "${CRed}Invalid entry - expected one domain name, e.g. github.com (letters, digits, dots and hyphens only).${CClear}"
+            sleep 3
+            continue
           fi
+          [ "$varname" = "dnssharedhosts" ] && newval="$(echo "$newval" | tr 'A-Z' 'a-z')"
           eval "$varname=\"\${$varname:+\$$varname }\$newval\""
           saveconfig
         fi
@@ -1369,7 +1402,13 @@ veditlist()
               echo -e "${CRed}Invalid entry - expected a single IP (e.g. 204.44.63.22) or a CIDR range (e.g. 204.44.0.0/16, prefix 0-32).${CClear}"
               sleep 3
               continue
+            elif [ "$varname" = "dnssharedhosts" ] && ! validdomainentry "$newval"; then
+              echo ""
+              echo -e "${CRed}Invalid entry - expected one domain name, e.g. github.com (letters, digits, dots and hyphens only).${CClear}"
+              sleep 3
+              continue
             fi
+            [ "$varname" = "dnssharedhosts" ] && newval="$(echo "$newval" | tr 'A-Z' 'a-z')"
             set -- $list
             idx=0
             newlist=""
@@ -1802,29 +1841,38 @@ vadvancedalerting()
     clear
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.1 Advanced Settings - Alerting & Notifications" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls whether/how often IOCMON emails you, where the SECURITY ALERT banner appears on screen, and which detections are allowed to${CClear}"
-    echo -e "${InvGreen} ${CClear} raise it and send email.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls whether/how often IOCMON emails you, where the SECURITY ALERT banner appears on screen, and which alerts raise it. Every alert${CClear}"
+    echo -e "${InvGreen} ${CClear} has a severity, shown as its colour in the IoC log: ${CRed}Critical${CClear} (feed-matched connections, file hash matches, brute-force logins, file,${CClear}"
+    echo -e "${InvGreen} ${CClear} cron, firewall and NVRAM setting changes), ${CYellow}Warning${CClear} (DNS feed matches, firmware-rewritten WAN DNS values) and ${CDkGray}Info${CClear} (DNS tunneling${CClear}"
+    echo -e "${InvGreen} ${CClear} hints and DNS matches on shared-hosting domains). With the Critical Only level, only Critical alerts raise the banner and send email;${CClear}"
+    echo -e "${InvGreen} ${CClear} the others are still logged. A DNS match becomes Critical when ThreatFox lists it as botnet C2, or AbuseIPDB scores its IP at or${CClear}"
+    echo -e "${InvGreen} ${CClear} above item 5.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Send an AMTM email whenever a real IOC detection fires" 68; echo -e ": $(booleantoyesno "$enablealertemail")"
     menurow "(2)" "Maximum alert emails per hour (0 = unlimited)" "${CGreen}$ratelimit${CClear}" 68 "$enablealertemail"
     if [ "$alertbanneratbottom" -eq 1 ]; then bannerposdisp="Bottom"; else bannerposdisp="Top"; fi
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(3)${CClear} : "; padright "SECURITY ALERT banner screen position (Top/Bottom)" 68; echo -e ": ${CGreen}${bannerposdisp}${CClear}"
-    if [ "$alertfeedonly" -eq 1 ]; then alertleveldisp="Feed Matches Only"; else alertleveldisp="All Alerts"; fi
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Alert banner content/email level" 68; echo -e ": ${CGreen}${alertleveldisp}${CClear}"
+    migratealertlevel
+    if [ "$alertlevel" = "critical" ]; then alertleveldisp="Critical Only"; else alertleveldisp="All Alerts"; fi
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Alert level for the banner and email (All Alerts/Critical Only)" 68; echo -e ": ${CGreen}${alertleveldisp}${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "AbuseIPDB score that makes a DNS match Critical (1-100)" 68; echo -e ": ${CGreen}${dnsescalatescore}%${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-4, e=Exit): " sel
+    read -p "Please select? (1-5, e=Exit): " sel
     case "$sel" in
       1) togglesetting enablealertemail ;;
       2) [ "$enablealertemail" -eq 1 ] && { echo -e "Current: ${CGreen}${ratelimit}${CClear}"
          read -p "New email rate limit, emails/hr (0=unlimited, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 0 && ratelimit="$val" && saveconfig; }; } ;;
       3) togglesetting alertbanneratbottom ;;
-      4) togglesetting alertfeedonly ;;
+      4) if [ "$alertlevel" = "critical" ]; then alertlevel="all"; else alertlevel="critical"; fi; saveconfig ;;
+      5) echo ""; echo -e "Current: ${CGreen}${dnsescalatescore}%${CClear}"
+         read -p "New AbuseIPDB score, 1-100 (blank to keep current): " val
+         [ -n "$val" ] && validateint "$val" 1 && [ "$val" -le 100 ] && { dnsescalatescore="$val"; saveconfig; } ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -1844,7 +1892,7 @@ vadvanceddns()
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
     echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, or from AdGuard Home's query log through its API when AdGuard Home${CClear}"
-    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 10). A second AdGuard Home can be a backup (items 13 and 14), read only when the first fails.${CClear}"
+    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 11). A second AdGuard Home can be a backup (items 14 and 15), read only when the first fails.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
@@ -1869,26 +1917,27 @@ vadvanceddns()
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
     menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
-    menurow "( 3)" "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" "$(booleantoyesno "$enablednstunnel")" 68 "$enablednswatch"
-    menurow "( 4)" "  Distinct subdomains/tick under one domain to flag as tunneling" "${CGreen}$dnstunnelsubthreshold${CClear}" 68 "$tunnelon"
-    menurow "( 5)" "  Single query-name length (chars) to flag on its own" "${CGreen}$dnstunnelnamelen${CClear}" 68 "$tunnelon"
-    menurow "( 6)" "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" "${CGreen}${dnslogpath:-auto}${CClear}" 68 "$enablednswatch"
+    menurow "( 3)" "Shared-hosting domains (DNS matches logged as Info, not alerted)" "${CGreen}$(echo "$dnssharedhosts" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
+    menurow "( 4)" "Watch for DNS-tunneling/exfiltration patterns (behavioral, no feed)" "$(booleantoyesno "$enablednstunnel")" 68 "$enablednswatch"
+    menurow "( 5)" "  Distinct subdomains/tick under one domain to flag as tunneling" "${CGreen}$dnstunnelsubthreshold${CClear}" 68 "$tunnelon"
+    menurow "( 6)" "  Single query-name length (chars) to flag on its own" "${CGreen}$dnstunnelnamelen${CClear}" 68 "$tunnelon"
+    menurow "( 7)" "DNS query log file (for syslog-ng/scribe; blank = auto-detect)" "${CGreen}${dnslogpath:-auto}${CClear}" 68 "$enablednswatch"
     filelogon=0; [ "$enablednswatch" -eq 1 ] && [ "$dnsforcefilelog" -eq 1 ] && filelogon=1
-    menurow "( 7)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
-    menurow "( 8)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
-    menurow "( 9)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
-    menurow "(10)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
-    menurow "(11)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
-    menurow "(12)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
-    menurow "(13)" "  Backup AdGuard Home API login (optional)" "$aghdisp2" 68 "$aghon"
-    menurow "(14)" "  Backup AdGuard Home API address (optional)" "$aghurl2disp" 68 "$aghon"
-    menurow "(15)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
+    menurow "( 8)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
+    menurow "( 9)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
+    menurow "(10)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
+    menurow "(11)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
+    menurow "(12)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
+    menurow "(13)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
+    menurow "(14)" "  Backup AdGuard Home API login (optional)" "$aghdisp2" 68 "$aghon"
+    menurow "(15)" "  Backup AdGuard Home API address (optional)" "$aghurl2disp" 68 "$aghon"
+    menurow "(16)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-15, e=Exit): " sel
+    read -p "Please select? (1-16, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -1905,7 +1954,7 @@ vadvanceddns()
              echo ""
              echo -e "AdGuard Home answers DNS on this router, so DNS watch reads AdGuard Home's query log through its API."
              echo -e "AdGuard Home: ${CGreen}$(aghstatus)${CClear}"
-             echo -e "Set or change the AdGuard Home login with item 11."
+             echo -e "Set or change the AdGuard Home login with item 12."
              echo ""
              read -rsp $'Press any key to continue...\n' -n1 key
            elif dnsquerylogactiveinetc; then
@@ -1930,14 +1979,17 @@ vadvanceddns()
          fi
          ;;
       2) [ "$enablednswatch" -eq 1 ] && vdnsexceptions ;;
-      3) [ "$enablednswatch" -eq 1 ] && togglesetting enablednstunnel ;;
-      4) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelsubthreshold}${CClear}"
+      3) [ "$enablednswatch" -eq 1 ] && veditlist dnssharedhosts "${advsettingsmenunum}.2.3 Shared-Hosting Domains" "a domain, e.g. github.com - also covers its subdomains" \
+           "A DNS feed match on these domains (or their subdomains) is logged as Info: it stays in the IoC log in gray, but never raises the banner" \
+           "or sends email in the Critical Only alert level. Malware is sometimes downloaded from these sites, so only list ones you trust." ;;
+      4) [ "$enablednswatch" -eq 1 ] && togglesetting enablednstunnel ;;
+      5) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelsubthreshold}${CClear}"
          read -p "New distinct-subdomain threshold (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnstunnelsubthreshold="$val" && saveconfig; }; } ;;
-      5) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
+      6) [ "$tunnelon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnstunnelnamelen}${CClear}"
          read -p "New query-name length threshold, chars (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnstunnelnamelen="$val" && saveconfig; }; } ;;
-      6) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
+      7) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnslogpath:-auto-detect}${CClear}"; echo ""
          read -p "Full path to the file holding dnsmasq's query lines (blank keeps current, 'auto' clears): " val
          if [ "$val" = "auto" ]; then
            dnslogpath=""; dnslogautotime=0; saveconfig
@@ -1948,7 +2000,7 @@ vadvanceddns()
              *) echo -e "${CRed}Please enter an absolute path (starting with /).${CClear}"; sleep 2 ;;
            esac
          fi; } ;;
-      7) if [ "$enablednswatch" -eq 1 ]; then
+      8) if [ "$enablednswatch" -eq 1 ]; then
            if [ "$dnsforcefilelog" -eq 1 ]; then
              togglesetting dnsforcefilelog
              echo ""
@@ -1962,13 +2014,13 @@ vadvanceddns()
            read -rsp $'Press any key to continue...\n' -n1 key
          fi
          ;;
-      8) [ "$filelogon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnsquerylogmaxkb}${CClear} KB"
+      9) [ "$filelogon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnsquerylogmaxkb}${CClear} KB"
          read -p "New rotation size threshold in KB (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnsquerylogmaxkb="$val" && saveconfig; }; } ;;
-      9) [ "$filelogon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnsquerylogkeep}${CClear}"
+      10) [ "$filelogon" -eq 1 ] && { echo -e "Current: ${CGreen}${dnsquerylogkeep}${CClear}"
          read -p "New number of rotated generations to keep (>=1, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 1 && dnsquerylogkeep="$val" && saveconfig; }; } ;;
-      10) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnssource}${CClear}"; echo ""
+      11) [ "$enablednswatch" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${dnssource}${CClear}"; echo ""
           echo -e "  1 : auto         - AdGuard Home's query log when AdGuard Home answers on port 53, otherwise dnsmasq's (default)"
           echo -e "  2 : dnsmasq      - always dnsmasq's query log (log-queries)"
           echo -e "  3 : AdGuard Home - always AdGuard Home's query log, through its API"
@@ -1982,10 +2034,10 @@ vadvanceddns()
             *) echo -e "${CRed}Please enter 1, 2 or 3.${CClear}"; sleep 2; val="" ;;
           esac
           [ -n "$val" ] && { dnslogannounced=""; saveconfig; }; } ;;
-      11) [ "$aghon" -eq 1 ] && { echo ""
+      12) [ "$aghon" -eq 1 ] && { echo ""
           echo -e "IOCMON reads AdGuard Home's query log with the same login as AdGuard Home's web UI."
           echo -e "It is stored base64-encoded in ${CGreen}${config}${CClear} (readable by root only) and never passed on a command line."
-          echo -e "API address: ${CGreen}$(aghapiurl)${CClear} (change it with item 12)"
+          echo -e "API address: ${CGreen}$(aghapiurl)${CClear} (change it with item 13)"
           echo ""
           read -p "AdGuard Home username (blank to keep the current login): " aghu
           if [ -n "$aghu" ]; then
@@ -2000,7 +2052,7 @@ vadvanceddns()
           fi
           echo ""; echo -e "Testing: $(aghstatus)"; echo ""
           read -rsp $'Press any key to continue...\n' -n1 key; } ;;
-      12) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl:-auto}${CClear} (in use: $(aghapiurl))"; echo ""
+      13) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl:-auto}${CClear} (in use: $(aghapiurl))"; echo ""
           read -p "AdGuard Home address, e.g. http://192.168.50.1:3000 (blank keeps current, 'auto' reads AdGuardHome.yaml): " val
           if [ "$val" = "auto" ]; then
             aghurl=""
@@ -2008,9 +2060,9 @@ vadvanceddns()
             val="$(aghnormurl "$val")" && aghurl="$val" || { echo -e "${CRed}Please enter an address like http://192.168.50.1:3000 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""; }
           fi
           [ -n "$val" ] && { dnslogannounced=""; saveconfig; echo ""; echo -e "Testing: $(aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; } ;;
-      13) [ "$aghon" -eq 1 ] && { echo ""
-          echo -e "IOCMON reads a backup AdGuard Home only when the primary (items 11 and 12) fails, and returns to the primary as soon as it answers."
-          echo -e "The backup needs its own login and address (item 14). The login is stored the same way as item 11."
+      14) [ "$aghon" -eq 1 ] && { echo ""
+          echo -e "IOCMON reads a backup AdGuard Home only when the primary (items 12 and 13) fails, and returns to the primary as soon as it answers."
+          echo -e "The backup needs its own login and address (item 15). The login is stored the same way as item 12."
           echo ""
           read -p "Backup AdGuard Home username (blank keeps the current login, 'none' removes it): " aghu
           if [ "$aghu" = "none" ]; then
@@ -2029,7 +2081,7 @@ vadvanceddns()
           [ -n "$aghcred2" ] && { echo ""; echo -e "Testing: $(aghslot=2; aghstatus)"; }
           echo ""
           read -rsp $'Press any key to continue...\n' -n1 key; } ;;
-      14) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl2:-none}${CClear}"; echo ""
+      15) [ "$aghon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${aghurl2:-none}${CClear}"; echo ""
           read -p "Backup AdGuard Home address, e.g. http://192.168.50.3:80 (blank keeps current, 'none' removes it): " val
           if [ "$val" = "none" ]; then
             aghurl2=""
@@ -2039,7 +2091,7 @@ vadvanceddns()
             val="$(aghnormurl "$val")" && aghurl2="$val" || { echo -e "${CRed}Please enter an address like http://192.168.50.3:80 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""; }
           fi
           [ -n "$val" ] && { saveconfig; [ -n "$aghurl2" ] && { echo ""; echo -e "Testing: $(aghslot=2; aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; }; } ;;
-      15) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
+      16) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -4213,7 +4265,7 @@ reputationlookup()
 {
   local kind="$1" indicator="$2" source="$3" ip="" target="" rec="" reason="" cachednote="" cyclefile="${abuseipdbcyclefile:-/tmp/iocmon_aipdb_cycle.$$}" cyclecount=0 now
   local rip epoch score total users last cc cname usage isp domain tor wl hostnames cats flags="" catnames testmark="" testtag=""
-  reptag=""; repip=""; repreason=""
+  reptag=""; repip=""; repreason=""; repscore=""
   [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ -n "$stateroot" ] || return
   [ "$kind" = "simulated" ] && { testmark=" [SIMULATED TEST]"; testtag="TEST "; }
 
@@ -4284,6 +4336,7 @@ EOF
   catnames="$(echo "$cats" | sed 's/([0-9]*)//g')"
 
   repip="$ip"
+  repscore="$score"
   reptag="${testtag}AbuseIPDB $ip ${score}% ${total}r/${users}u ${cc:-??} $(shortusagetype "$usage")"
   [ "$tor" = "true" ] && reptag="$reptag Tor"
   [ "$wl" = "true" ] && reptag="$reptag Whitelisted"
@@ -4373,13 +4426,35 @@ isfeedmatchsource()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# alertseverity sets $alertsev to critical/warning/info for kind $1, indicator $2, source $3, detail $4, AbuseIPDB score $5
+
+alertseverity()
+{
+  local kind="$1" indicator="$2" source="$3" detail="$4" score="$5"
+  alertsev="critical"
+  case "$kind" in
+    dns)
+      if [ "$source" = "dns-tunnel-heuristic" ] || indomainlist "${indicator#*->}" "$dnssharedhosts"; then
+        alertsev="info"
+      else
+        case "$detail" in *botnet_cc*) return ;; esac
+        case "$score" in ''|*[!0-9]*) ;; *) [ "$score" -ge "$dnsescalatescore" ] && return ;; esac
+        alertsev="warning"
+      fi ;;
+    nvram)
+      case " $nvramruntimevars " in *" $indicator "*) alertsev="warning" ;; esac ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # raisealert is the single entry point every detection check routes an IOC/brute-force match through.
 
 raisealert()
 {
   local kind="$1" indicator="$2" source="$3" detail="$4" dedupkey="${5:-$2}"
-  local key="${kind}|${dedupkey}" nowepoch cooldownsec=21600 lastepoch=0
-  reptag=""; repip=""
+  local key="${kind}|${dedupkey}" nowepoch cooldownsec=21600 lastepoch=0 sevtag
+  reptag=""; repip=""; repscore=""
+  migratealertlevel
 
   resolvestateroot
   nowepoch=$(date +%s)
@@ -4400,20 +4475,20 @@ raisealert()
     mv "${dbfile}.tmp" "$dbfile"
   fi
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail)." >> "$logfile"
-
   [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
 
+  alertseverity "$kind" "$indicator" "$source" "$detail" "$repscore"
+  sevtag="$(echo "$alertsev" | tr 'a-z' 'A-Z')"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail) [$sevtag]." >> "$logfile"
+
   local raisebanner=1
-  if [ "$alertfeedonly" -eq 1 ] && [ "$kind" != "simulated" ] && ! isfeedmatchsource "$source"; then
-    raisebanner=0
-  fi
+  [ "$alertlevel" = "critical" ] && [ "$alertsev" != "critical" ] && raisebanner=0
 
   if [ -n "$stateroot" ]; then
     local alertline
     alertline="$(date +'%b %d %Y %X') | $kind | $indicator | $source | $detail"
     [ -n "$reptag" ] && alertline="$alertline | $reptag"
-    echo "$alertline" >> "$stateroot/ioc_alerts.log"
+    echo "$alertline | sev:$alertsev" >> "$stateroot/ioc_alerts.log"
     trimlogfile "$stateroot/ioc_alerts.log" "$logsize"
 
     if [ "$raisebanner" -eq 1 ]; then
@@ -4426,6 +4501,40 @@ raisealert()
   fi
 
   [ "$raisebanner" -eq 1 ] && queueemailalert "$kind" "$indicator" "$source" "$detail" "$repip"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# migrateiocseverity adds a " | sev:<level>" field, once, to ioc_alerts.log lines written before alerts had a severity
+
+migrateiocseverity()
+{
+  local file tmp us kind indicator source detail score line count=0
+  resolvestateroot
+  [ -n "$stateroot" ] || return
+  file="$stateroot/ioc_alerts.log"
+  [ -s "$file" ] || return
+  awk -F' [|] ' 'NF >= 5 && !/ [|] sev:[a-z]*$/ { f = 1; exit } END { exit !f }' "$file" || return
+  tmp="$file.sev"
+  us="$(printf '\037')"
+  awk -F' [|] ' -v us="$us" '
+    / [|] sev:[a-z]*$/ || NF < 5 { print "-" us us us us us $0; next }
+    {
+      n = NF; score = ""
+      if ($n ~ /^(TEST )?AbuseIPDB /) { if (match($n, /[0-9]+%/)) score = substr($n, RSTART, RLENGTH - 1); n-- }
+      ind = $3; for (i = 4; i <= n - 2; i++) ind = ind " | " $i
+      print $2 us ind us $(n - 1) us $n us score us $0
+    }
+  ' "$file" | while IFS="$us" read -r kind indicator source detail score line; do
+    if [ "$kind" = "-" ]; then
+      echo "$line"
+    else
+      alertseverity "$kind" "$indicator" "$source" "$detail" "$score"
+      echo "$line | sev:$alertsev"
+    fi
+  done > "$tmp"
+  count="$(grep -c ' | sev:[a-z]*$' "$tmp")"
+  mv -f "$tmp" "$file"
+  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added a severity to the IoC detection log ($count line(s) now carry one)." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4693,7 +4802,7 @@ aghstatus()
   [ "$aghslot" = "2" ] && item=13
   jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
   aghhaslogin || { echo "no AdGuard Home login set (Advanced Settings - DNS Watch, item $item)"; return 1; }
-  [ "$aghslot" = "2" ] && [ -z "$aghurl2" ] && { echo "no backup AdGuard Home address set (Advanced Settings - DNS Watch, item 14)"; return 1; }
+  [ "$aghslot" = "2" ] && [ -z "$aghurl2" ] && { echo "no backup AdGuard Home address set (Advanced Settings - DNS Watch, item 15)"; return 1; }
   code="$(aghcurl /control/querylog/config "$b")"
   [ "$code" = "404" ] && code="$(aghcurl /control/querylog_info "$b")"
   case "$code" in
@@ -4950,8 +5059,16 @@ resolvednslogfile()
 
 indnsexceptionlist()
 {
+  indomainlist "$1" "$dnsexceptions"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# indomainlist succeeds when domain $1 equals, or is a subdomain of, any entry in the space-separated list $2
+
+indomainlist()
+{
   local domain="$1" ex
-  for ex in $dnsexceptions; do
+  for ex in $2; do
     case "$domain" in
       "$ex"|*".$ex") return 0 ;;
     esac
@@ -5175,9 +5292,9 @@ checkdns()
 
   if [ "$aghmode" -eq 1 ] && ! aghanylogin; then
     aghfailover=0
-    [ "$aghloginwarned" = "1" ] || aghlog "WARNING" "DNS watch is skipped: AdGuard Home is the DNS source but no login is set. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11."
+    [ "$aghloginwarned" = "1" ] || aghlog "WARNING" "DNS watch is skipped: AdGuard Home is the DNS source but no login is set. Add it under Configuration Menu ${advsettingsmenunum}.2, item 12."
     aghloginwarned=1
-    dnslogshort="Add the login under Configuration Menu ${advsettingsmenunum}.2, item 11"
+    dnslogshort="Add the login under Configuration Menu ${advsettingsmenunum}.2, item 12"
     return
   fi
   if [ "$aghloginwarned" = "1" ]; then
@@ -7504,6 +7621,7 @@ webpublish()
     echo "updatever=$updatever"
     echo "pendingcount=$pendingcount"
     echo "pendingsummary=$pendingsummary"
+    echo "alertlevel=$alertlevel"
     echo "lastalert=$lastalert"
     echo "todaycount=$todaycount"
     echo "reputation=$(stripansi "$(reputationstatus 200)")"
@@ -7853,7 +7971,9 @@ applyimportedconfig()
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
   local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keptkeys=""
 
+  alertlevel=""; alertfeedonly=0
   . "$importfile"
+  migratealertlevel
 
   extdrivelabel="$keepextdrivelabel"
   logfilepath="$keeplogfilepath"
@@ -8566,11 +8686,16 @@ if [ -f "$config" ]; then
   resolvelogfile
   migratefeedkeys
   aghmigrateauth
+  if [ -z "$alertlevel" ]; then
+    saveconfig
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Alert level set to '$alertlevel', carried over from the earlier 'Feed Matches Only' setting." >> "$logfile"
+  fi
 else
   initialsetup
 fi
 
 webuirefreshpage
+migrateiocseverity
 
 # Check for updates
 updatecheck
@@ -8773,6 +8898,13 @@ renderdashboard()
       dnsnum=0
       tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
         kind="$(echo "$iocline" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')"
+        case "$iocline" in
+          *" | sev:critical") ioccolor="$CRed" ;;
+          *" | sev:warning") ioccolor="$CYellow" ;;
+          *" | sev:info") ioccolor="$CDkGray" ;;
+          *) ioccolor="$CGreen" ;;
+        esac
+        iocline="${iocline% | sev:*}"
         if [ "$kind" = "dns" ]; then
           dnsnum=$((dnsnum + 1))
           domain="$(echo "$iocline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
@@ -8780,10 +8912,10 @@ renderdashboard()
           printf '%s\t%s\n' "$dnsnum" "$domain" >> "$dnsnummapfile"
           numstr="$dnsnum"; [ "$dnsnum" -eq 10 ] && numstr=0
           [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [${CGreen}${numstr}${CClear}] ${CGreen}${iocline}${CClear}"
+          echo -e "${InvGreen} ${CClear}   [${CGreen}${numstr}${CClear}] ${ioccolor}${iocline}${CClear}"
         else
           [ "${#iocline}" -gt 130 ] && iocline="$(printf '%.129s' "$iocline")>"
-          echo -e "${InvGreen} ${CClear}   [ ] ${CGreen}${iocline}${CClear}"
+          echo -e "${InvGreen} ${CClear}   [ ] ${ioccolor}${iocline}${CClear}"
         fi
       done
     else
@@ -8834,7 +8966,7 @@ while true; do
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then
       echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from the ${CYellow}backup${CClear} AdGuard Home (${aghurl2%/}) against known-malicious-domain feeds"
     elif dnsusesagh && ! aghanylogin; then
-      echo -e "  ${CYellow}* WARNING: DNS watch skipped - the AdGuard Home login is missing. Add it under Configuration Menu ${advsettingsmenunum}.2, item 11.${CClear}"
+      echo -e "  ${CYellow}* WARNING: DNS watch skipped - the AdGuard Home login is missing. Add it under Configuration Menu ${advsettingsmenunum}.2, item 12.${CClear}"
     elif dnsusesagh; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds"
     elif dnsquerylogenabled; then
