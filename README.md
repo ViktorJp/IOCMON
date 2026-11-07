@@ -11,6 +11,7 @@ Terminal Interface:
 <img width="1250" height="666" alt="image" src="https://github.com/user-attachments/assets/01a57093-4c58-4227-a2fd-26add2e3807b" />
 
 Router Web UI:
+
 <img width="749" height="662" alt="image" src="https://github.com/user-attachments/assets/502f5426-09c4-4c90-a6c5-3c766153a572" />
 <img width="749" height="734" alt="image" src="https://github.com/user-attachments/assets/ff269f6a-8341-4ff3-8771-d2b8ab1843bf" />
 <img width="744" height="626" alt="image" src="https://github.com/user-attachments/assets/71c50041-9ae6-4344-830c-12b4526ab41e" />
