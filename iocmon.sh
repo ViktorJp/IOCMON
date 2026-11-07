@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.5.4
+# Version: 1.5.5
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Nov-06
 # ============================================================================================================================
@@ -20,6 +20,7 @@
 #   /jffs/addons/iocmon.d/updating.txt                                  : maintenance-mode lock file
 #   /jffs/addons/iocmon.d/iocmon.asp                                    : router web interface page, copied to a /www/user slot when the toggle is on
 #   /www/ext/iocmon/                                                    : web interface data files (RAM, HTML-escaped, rebuilt each boot)
+#   /jffs/addons/shared-jy/redirect.htm                                 : shared Help & Support target, only if no other add-on supplied one
 #   /jffs/addons/iocmon.d/feeds-degraded/                               : small JFFS-safe feed cache used only in degraded mode
 #   /jffs/addons/iocmon.d/state-degraded/                               : small JFFS-safe alert-dedup state used only in degraded mode
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/ips.txt                     : canonical combined IP/netblock indicator list
@@ -103,7 +104,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.5.4"
+version="1.5.5"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -128,7 +129,10 @@ webuimenutree="/www/require/modules/menuTree.js"  # firmware menu file the edite
 webuimenutmp="/tmp/menuTree.js"  # menu copy shared by all add-ons
 webuimenubak="/tmp/menuTree.js.iocmon"  # our restore point while editing the shared menu
 webuilockfile="/tmp/addonwebui.lock"  # lock shared by add-ons editing the menu
-webuiredirect="/www/ext/shared-jy/redirect.htm"  # target of the shared Help & Support tab
+webuisharedjffs="/jffs/addons/shared-jy"  # folder add-ons share for common web files, kept on JFFS
+webuisharedweb="/www/ext/shared-jy"  # web path add-ons expect as a link to webuisharedjffs
+webuiredirect="$webuisharedjffs/redirect.htm"  # target of the shared Help & Support tab
+webuiredirectmark="IOCMON-WEBUI-REDIRECT"  # marks a redirect.htm that IOCMON wrote
 webuiservicesstart="/jffs/scripts/services-start"  # boot hook file
 webuiserviceevent="/jffs/scripts/service-event"  # hook file the page's buttons reach IOCMON through
 webuijoblock="/tmp/iocmon_webjob.lock"  # held while a web job runs, so only one runs at a time
@@ -7290,13 +7294,31 @@ BLOCKEND
   rm -f "$block"
   cat "$webuimenutmp.new" > "$webuimenutmp"
   rm -f "$webuimenutmp.new"
-  if [ ! -f "$webuiredirect" ]; then
-    mkdir -p "${webuiredirect%/*}"
-    cat > "$webuiredirect" <<'REDIRECTEND'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuisharedlink links /www/ext/shared-jy to the JFFS shared folder as other add-ons do, replacing a folder only IOCMON made
+
+webuisharedlink()
+{
+  if [ -d "$webuisharedweb" ] && [ ! -L "$webuisharedweb" ]; then
+    case "$(ls -A "$webuisharedweb" 2>/dev/null)" in
+      "") rmdir "$webuisharedweb" 2>/dev/null ;;
+      redirect.htm) grep -qF "$webuiredirectmark" "$webuisharedweb/redirect.htm" 2>/dev/null && rm -f "$webuisharedweb/redirect.htm" && rmdir "$webuisharedweb" 2>/dev/null ;;
+    esac
+    if [ -d "$webuisharedweb" ] && [ ! -L "$webuisharedweb" ]; then
+      webuilog "WARNING" "Web interface: $webuisharedweb is a folder, not the usual link to $webuisharedjffs, and holds other files - left unchanged. Add-on pages may not find their shared files."
+    else
+      webuilog "INFO" "Web interface: replaced the $webuisharedweb folder an earlier IOCMON version made with a link to $webuisharedjffs, so other add-ons find their shared files."
+    fi
+  fi
+  mkdir -p "$webuisharedjffs"
+  [ -e "$webuisharedweb" ] || [ -L "$webuisharedweb" ] || ln -s "$webuisharedjffs" "$webuisharedweb" 2>/dev/null
+  [ -f "$webuiredirect" ] && return 0
+  cat > "$webuiredirect" <<'REDIRECTEND'
 <!-- IOCMON-WEBUI-REDIRECT -->
 <html><head><meta http-equiv="refresh" content="0; url=https://www.snbforums.com/forums/asuswrt-merlin-addons.60/"/></head><body></body></html>
 REDIRECTEND
-  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -7358,6 +7380,7 @@ webuimount()
     return 1
   fi
   webuiunlockmenu
+  webuisharedlink
   mkdir -p "$webuidir"
   webuilog "INFO" "Web interface page mounted as $page."
 }
@@ -7375,8 +7398,14 @@ webuiremove()
     sed -i "/tabName: \"$webuitab\"/d" "$webuimenutmp"
     if grep -q 'BEGIN:_AddOns_' "$webuimenutmp" && [ "$(awk '/BEGIN:_AddOns_/ { s = 1; next } /ENDIN:_AddOns_/ { s = 0 } s && /url:/ && !/shared-jy|"NULL"/ { n++ } END { print n + 0 }' "$webuimenutmp")" = "0" ]; then
       sed -i '/BEGIN:_AddOns_/,/ENDIN:_AddOns_/d' "$webuimenutmp"
-      grep -qF 'IOCMON-WEBUI-REDIRECT' "$webuiredirect" 2>/dev/null && rm -f "$webuiredirect"
-      rmdir "${webuiredirect%/*}" 2>/dev/null
+      grep -qF "$webuiredirectmark" "$webuiredirect" 2>/dev/null && rm -f "$webuiredirect"
+      if rmdir "$webuisharedjffs" 2>/dev/null && [ "$(readlink "$webuisharedweb" 2>/dev/null)" = "$webuisharedjffs" ]; then
+        rm -f "$webuisharedweb"
+      fi
+      if [ ! -L "$webuisharedweb" ] && grep -qF "$webuiredirectmark" "$webuisharedweb/redirect.htm" 2>/dev/null; then
+        rm -f "$webuisharedweb/redirect.htm"
+        rmdir "$webuisharedweb" 2>/dev/null
+      fi
     fi
     webuiremount
   fi
@@ -7457,6 +7486,7 @@ webuirefreshpage()
 {
   local page
   [ "${enablewebui:-0}" = "1" ] || return 0
+  webuisharedlink
   webuisyncpage
   page="$(webuifindslot)"
   [ -n "$page" ] && cmp -s "$webuipagefile" "$webuiuserdir/$page" && return 0
