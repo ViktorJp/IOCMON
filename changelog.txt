@@ -1,4 +1,4 @@
-v1.5.3   - (TBA)
+v1.5.4   - (TBA)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
@@ -21,6 +21,15 @@ v1.5.3   - (TBA)
             value so that you can better track what happened during the last cycle. While doing so, I've
             added another 14 or so critical DNS/DHCP-related NVRAM variables to watch out for bringing the
             total to 38. Thanks to @skeal for bringing up this issue!
+          - PATCH: Spent some significant time addressing the "Alert Fatigue" issue due to the generous 
+            number of alerts that come through. By default, on first install, IOCMON will default to 
+            "Critical Only" alerts. This option is selectable between this and "All Alerts" under Advanced 
+            Settings menu item 10.1.4. "All Alerts" will continue showing all alerts as normal. "Critical
+            Only" will only display items that are considered critical, such as file hash matches, conntrack
+            matches, critical NVRAM changes, etc. DNS lookup heuristic triggers no longer produce alerts
+            unless the AbuseIPDB reaches a % threshold defined by option 10.1.5, and defaults to 75%. Colors
+            of alerts in the main UI IoC Detections log have changed to indicate criticality, using red,
+            yellow, and gray. IOCMON Web UI has been updated to match these particular changes.
 
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
