@@ -1,4 +1,17 @@
-v2.0.0   - (November 7, 2026)
+v2.0.1b   - (TBA)
+          - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
+            add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
+            no longer raise false "router infected" or DNS tunneling alerts, but logs them as information
+            instead. A device looking up the same site still raises an alert as before. When IOCMON raises an
+            alert for a domain or IP, it now also shows Astraea's verdict on that site (clear, confirm,
+            unknown or contained), with its reason, in the log, the alert email and the web page. The verdict
+            is for information only and never changes how an alert is handled.
+          - PATCH: Enhanced the way that IOCMON trims log files. This is now automatically being done when
+            feed lists are updated every 4 hours, or every 6 hours if a feed didn't run, whichever comes
+            first. It will also continue to trim logs after viewing the (L)og but won't any longer produce
+            any log entries saying it trimmed the log down to N lines.
+
+v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
