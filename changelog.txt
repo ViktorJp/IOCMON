@@ -1,4 +1,4 @@
-v1.5.5   - (TBA)
+v1.5.7   - (TBA)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
@@ -35,6 +35,9 @@ v1.5.5   - (TBA)
             add-on starts first at boot. If IOCMON starts first, the link it creates is the one the other
             add-ons would have made, and they download their shared files into the folder it points to. If
             they start first, IOCMON leaves their link and files alone. Thanks @EmeraldDeer for reporting!
+          - PATCH: Revamped the installation process to make it cleaner, providing more instructions, and
+            asking whether to enable "Critical Only" or "All Alerts" as a preference. Also, enabling the
+            Web UI is an option during the initial setup.
 
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
