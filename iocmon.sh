@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 1.5.5
+# Version: 2.0.0
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-06
+# Last Updated: 2026-Nov-07
 # ============================================================================================================================
 #
 # Description:
@@ -104,7 +104,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="1.5.5"
+version="2.0.0"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -358,9 +358,10 @@ logoNMexit ()
 # Promptyn is a simple function that accepts y/n input
 
 promptyn()
-{   # No defaults, just y or n
+{   # No defaults, just y or n, confirmed with Enter
   while true; do
-    read -p "$1" -n 1 -r yn
+    read -p "$1" -r yn
+    printf '\033[1A\033[%dC' "$(( ${#1} + ${#yn} ))"  # back to the end of the answer line, so callers lay out as with a single-key read
       case "${yn}" in
         [Yy]* ) return 0 ;;
         [Nn]* ) return 1 ;;
@@ -984,13 +985,9 @@ resolveiocmonroot()
 
 selectextdrive()
 {
-  clear
-  echo -e "${InvGreen} ${InvDkGray}${CWhite} 1. IOCMON External Drive Selection                                                                                                      ${CClear}"
-  echo -e "${InvGreen} ${CClear}"
-  echo -e "${InvGreen} ${CClear} IOCMON stores IoC feed data and detection state on an external USB drive to avoid wearing out the router's internal flash storage. Small${CClear}"
-  echo -e "${InvGreen} ${CClear} control files stay on JFFS.${CClear}"
-  echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
-  echo ""
+  setupbanner "1. IOCMON External Drive Selection" \
+    "IOCMON stores IoC feed data and detection state on an external USB drive to avoid wearing out the router's internal flash storage. Small" \
+    "control files stay on JFFS."
 
   mountpointpaths="$(awk '$1 ~ /^\/dev\/sd/ && $2 ~ /^\/tmp\/mnt\// {print $2}' /proc/mounts | sort -u)"
 
@@ -1152,7 +1149,7 @@ relocatelogfile()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# initialsetup creates the addons folder, runs the interactive drive picker, then persists the default config.
+# initialsetup runs the drive picker, an optional import, the settings and web interface questions, then saves the config.
 
 initialsetup()
 {
@@ -1164,33 +1161,133 @@ initialsetup()
     exit 1
   fi
 
-  echo ""
+  sleep 2
+  local importfile setupall=0
+  setupbanner "2. Import IOCMON Settings" \
+    "If you exported your settings from a previous IOCMON installation (Configuration Menu item 7), you can import that .ioc file now." \
+    "An import supplies every setting, so only the web interface question follows it. Otherwise setup continues with its other questions."
   echo -e "Would you like to import an existing IOCMON Settings Export (.ioc) file?"
-  local importanswer importfile
-  read -p "[y/n]: " importanswer
-  case "$importanswer" in
-    [Yy]*)
-      read -p "Full path to the .ioc file to import: " importfile
-      if [ -n "$importfile" ] && [ -f "$importfile" ] && grep -q '^timerloop=' "$importfile" && grep -q '^fswatchdirs=' "$importfile"; then
-        applyimportedconfig "$importfile"
-        echo ""
-        echo -e "${CGreen}Settings imported successfully.${CClear}"
-        echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created by importing $importfile." >> "$logfile"
-        return
-      else
-        echo ""
-        echo -e "${CRed}ERROR: $importfile not found or not a valid IOCMON export - continuing with default setup.${CClear}"
-        sleep 2
-      fi
-      ;;
-    *) ;;
-  esac
+  if promptyn "[y/n]: "; then
+    echo ""
+    echo ""
+    read -p "Full path to the .ioc file to import: " importfile
+    if [ -n "$importfile" ] && [ -f "$importfile" ] && grep -q '^timerloop=' "$importfile" && grep -q '^fswatchdirs=' "$importfile"; then
+      applyimportedconfig "$importfile"
+      echo ""
+      echo -e "${CGreen}Settings imported successfully.${CClear}"
+      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created by importing $importfile." >> "$logfile"
+      sleep 2
+      setupwebui 3
+      return
+    fi
+    echo ""
+    echo -e "${CRed}ERROR: $importfile not found or not a valid IOCMON export - continuing with default setup.${CClear}"
+    sleep 3
+  fi
 
   fswatchdirs="/jffs/scripts /jffs/configs /jffs/addons /jffs/.ssh /tmp/mnt/$extdrivelabel"
   alertlevel="critical"
+  setupprofile && setupall=1
   saveconfig
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
+  if [ "$setupall" -eq 1 ]; then
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with all detection features enabled." >> "$logfile"
+    setupdnswatch
+  else
+    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
+  fi
+
+  setupapikeyinfo
+  setupwebui 5
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# setupbanner clears the screen and draws a setup step's banner, titled $1, with each later argument as one description line
+
+setupbanner()
+{
+  local title="$1" line
+  shift
+  clear
+  echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "$title" 136; echo -e "${CClear}"
+  echo -e "${InvGreen} ${CClear}"
+  for line in "$@"; do
+    echo -e "${InvGreen} ${CClear} ${line}${CClear}"
+  done
+  echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+  echo ""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# setupprofile asks for the default settings or all functionality, returning 0 and switching the extra features on for the latter
+
+setupprofile()
+{
+  local answer
+  setupbanner "3. IOCMON Detection Settings" \
+    "Choose how much IOCMON watches and alerts on from the start. Any of these can be changed later under Configuration Menu ${advsettingsmenunum}." \
+    "" \
+    "${CGreen}1${CClear} = Default settings (recommended): only Critical alerts raise the banner and an email, and the detections most likely to" \
+    "    cause noise stay off." \
+    "${CGreen}2${CClear} = Enable all: every alert raises the banner and an email, and DNS watch, the DNS tunneling heuristic, permission-change watch and" \
+    "    quarantine of files matching a malware hash are switched on. DNS watch turns on dnsmasq query logging and restarts dnsmasq."
+  echo -e "Would you like to proceed with the default settings (recommended), or enable all possible functionality now?"
+  read -p "Please select? (1-2, Enter=1): " answer
+  [ "$answer" = "2" ] || return 1
+  alertlevel="all"
+  enablednswatch=1
+  enablednstunnel=1
+  enablepermwatch=1
+  enablequarantine=1
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# setupdnswatch turns on the query source DNS watch reads, during setup's enable-all choice
+
+setupdnswatch()
+{
+  echo ""
+  if dnsusesagh; then
+    echo -e "AdGuard Home answers DNS on this router, so DNS watch reads its query log through its API. Add the AdGuard Home login under"
+    echo -e "Configuration Menu ${advsettingsmenunum}.2, item 12."
+  else
+    enablednsquerylogging
+  fi
+  sleep 3
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# setupapikeyinfo explains which optional services need an API key and where to enter it, then waits for a key press
+
+setupapikeyinfo()
+{
+  setupbanner "4. Optional API Keys" \
+    "Some optional IOCMON services need a free API key: the URLhaus and ThreatFox feeds (one abuse.ch Auth-Key from ${CGreen}auth.abuse.ch${CClear} works" \
+    "for both), the Q-Feeds feed (a token from ${CGreen}tip.qfeeds.com${CClear}) and AbuseIPDB reputation checks (a key from ${CGreen}abuseipdb.com${CClear}). To use one, sign" \
+    "up on its site, create an API key, then open Configuration Menu item 2 (Feed Sources, Reputation & API Keys), switch the service on" \
+    "and paste the key into its key field. Until then, IOCMON uses its keyless feeds: Feodo Tracker, Spamhaus DROP/EDROP and NetAPI."
+  read -rsp $'Press any key to continue...\n' -n1 key
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# setupwebui offers to install the web interface tab during setup, leaving it off with a pointer to 10.6 if that fails
+
+setupwebui()
+{
+  setupbanner "$1. IOCMON Web Interface" \
+    "The web interface adds an IOCMON tab under the Addons menu of the router's web interface, showing the same status, feeds and logs as" \
+    "this script, with buttons for common actions. It needs a web interface login to view, and publishes no API keys, passwords or settings."
+  echo -e "Would you like to enable the IOCMON Web Interface?"
+  if ! promptyn "[y/n]: "; then
+    echo ""
+    return
+  fi
+  echo ""
+  if ! webuienable; then
+    echo -e "You can try again later under Configuration Menu ${advsettingsmenunum}.6, item 9."
+  fi
+  sleep 3
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -7518,18 +7615,25 @@ vwebuitoggle()
   echo -e "Enable the web interface tab?"
   promptyn "[y/n]: " || return
   echo ""
+  webuienable
+  sleep 3
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webuienable installs the web interface tab, printing the result and leaving it off if any step fails
+
+webuienable()
+{
   if ! nvram get rc_support 2>/dev/null | grep -q am_addons; then
-  	echo ""
+    echo ""
     echo -e "${CRed}This firmware has no add-on page support - 386.1 or later is required.${CClear}"
-    sleep 3
-    return
+    return 1
   fi
   webuisyncpage
   if [ ! -f "$webuipagefile" ]; then
-  	echo ""
+    echo ""
     echo -e "${CRed}The web interface page could not be downloaded - see the activity log. Nothing was changed.${CClear}"
-    sleep 3
-    return
+    return 1
   fi
   enablewebui=1
   saveconfig
@@ -7538,12 +7642,11 @@ vwebuitoggle()
     saveconfig
     echo ""
     echo -e "${CRed}The tab could not be added - see the activity log. The web interface has been left off.${CClear}"
-    sleep 3
-    return
+    return 1
   fi
   echo ""
   echo -e "${CGreen}Enabled. Reload the router's web page and open Addons > $webuitab. Its data appears after the next monitor cycle.${CClear}"
-  sleep 3
+  return 0
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
