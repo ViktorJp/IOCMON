@@ -1,9 +1,12 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
-- Build a web interface (@AvalonOC)
+
 
 Done:
+- Include the option to turn on the web UI in the initial setup.
+- Build critical alerts-only mode that includes DNS heuristics turned off. Maybe a a toggle under the main adv settings?
+- Build a web interface (@AvalonOC)
 - Build integration into the AGH API to pull DNS lookup data - @mason
 - Would love to see more notification methods than just e-mail. E.g. like in connmon, at least Pushover would be really nice. Maybe you can just port that part over from connmon - @Eddga (Not pursuing this functionality for any alternative notification solution. Plenty of no-code automation currently exists that allow you to push an incoming alert email to the notification service of your choice).
 - With the addition of Q-Feeds API, I see occasional hits identified by IP address. Please consider adding a clickable link to obtain info on the
