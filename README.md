@@ -1,17 +1,19 @@
-# IOCMON v1.5.5 BETA
+# IOCMON v2.0.0
 Asus-Merlin IDS/IPS Security Intelligence Monitor
 
-Modified: Nov-06-2026
+Modified: Nov-07-2026
 
 > **License:** GPLv3 with additional terms (§7c/§7e) — see [`NOTICE.md`](./NOTICE.md). The code is free to fork and modify; the name **IOCMON** is reserved for this project — see [`TRADEMARK.md`](./TRADEMARK.md) before publishing a rebrand or fork.
 
 -----
 
 Terminal Interface:
-<img width="1251" height="670" alt="image" src="https://github.com/user-attachments/assets/20d3a012-792e-4bdd-8540-fadb282bb09d" />
+<img width="1250" height="666" alt="image" src="https://github.com/user-attachments/assets/01a57093-4c58-4227-a2fd-26add2e3807b" />
 
 Router Web UI:
-<img width="990" height="756" alt="image" src="https://github.com/user-attachments/assets/4e7ee9cb-b0f6-4434-ad9a-77e242013a15" />
+<img width="749" height="662" alt="image" src="https://github.com/user-attachments/assets/502f5426-09c4-4c90-a6c5-3c766153a572" />
+<img width="749" height="734" alt="image" src="https://github.com/user-attachments/assets/ff269f6a-8341-4ff3-8771-d2b8ab1843bf" />
+<img width="744" height="626" alt="image" src="https://github.com/user-attachments/assets/71c50041-9ae6-4344-830c-12b4526ab41e" />
 
 -----
 # IOCMON — User Manual
