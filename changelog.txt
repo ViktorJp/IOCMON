@@ -1,4 +1,4 @@
-v1.5.4   - (TBA)
+v1.5.6   - (TBA)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background
@@ -30,6 +30,11 @@ v1.5.4   - (TBA)
             unless the AbuseIPDB reaches a % threshold defined by option 10.1.5, and defaults to 75%. Colors
             of alerts in the main UI IoC Detections log have changed to indicate criticality, using red,
             yellow, and gray. IOCMON Web UI has been updated to match these particular changes.
+          - PATCH:  IOCMON no longer creates its own shared-jy folder in the web directory. It now uses the
+            same layout as the AMTM-OSR add-ons, so its menu works on its own and their charts load whichever
+            add-on starts first at boot. If IOCMON starts first, the link it creates is the one the other
+            add-ons would have made, and they download their shared files into the folder it points to. If
+            they start first, IOCMON leaves their link and files alone. Thanks @EmeraldDeer for reporting!
 
 v1.4.9    - (November 1, 2026)
           - MINOR: With the generous help of @Mason, he provided a pathway of making IOCMON compatible with
