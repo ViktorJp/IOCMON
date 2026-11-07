@@ -1,9 +1,10 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
-- Include the option to turn on the web UI in the initial setup.
+
 
 Done:
+- Include the option to turn on the web UI in the initial setup.
 - Build critical alerts-only mode that includes DNS heuristics turned off. Maybe a a toggle under the main adv settings?
 - Build a web interface (@AvalonOC)
 - Build integration into the AGH API to pull DNS lookup data - @mason
