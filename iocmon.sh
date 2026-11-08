@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.0
+# Version: 2.0.4
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
 # Last Updated: 2026-Nov-07
 # ============================================================================================================================
@@ -15,7 +15,7 @@
 #   /jffs/addons/iocmon.d/iocmon.cfg                                    : config (flat key=value, sourced)
 #   /jffs/addons/iocmon.d/version.txt                                   : stable track version file
 #   /jffs/addons/iocmon.d/beta.txt                                      : beta track version file
-#   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, trimmed) - default location
+#   /jffs/addons/iocmon.d/iocmon.log                                    : activity/alert log (nano-viewable, rotated to .1/.2 at $logsize lines) - default location
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/iocmon.log                  : optional drive-side activity log location (logfilepath), to spare JFFS writes
 #   /jffs/addons/iocmon.d/updating.txt                                  : maintenance-mode lock file
 #   /jffs/addons/iocmon.d/iocmon.asp                                    : router web interface page, copied to a /www/user slot when the toggle is on
@@ -34,8 +34,10 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
+#   /tmp/astraea/selfq, /tmp/kairos/selfq                               : read only - the router's own lookups for Astraea/Kairos, set aside by DNS watch
+#   /tmp/iocmon_selfq_seen, /tmp/iocmon_astraea_intel                   : set-aside lookups already logged, and recent Astraea verdicts for emails (RAM)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_marker              : reference file `find -newer` compares against
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/cron_baseline.db            : last-seen `cru l` output for the cron-diff heuristic
@@ -44,14 +46,14 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_scan_errors.txt          : this cycle's find stderr, if any
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_size_baseline.db         : per-file size, for mtime-independent MOD detection
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_content_hash.db          : per-file content hash, used only when fsmodalertmode=hash
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_new.txt             : timestamped log of added filenames, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_new.txt             : timestamped log of added filenames, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_modified.txt        : timestamped log of modified filenames
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_deleted.txt         : timestamped log of deleted filenames
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_permchanged.txt     : timestamped log of permission-only changes
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending               : pending-count + latest summary; presence = red banner up
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, trimmed to $logsize
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/reputation.log              : every AbuseIPDB reputation lookup (or skip reason) for a raised alert, trimmed to $logsize
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, rotated to .1/.2 at $logsize lines
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/reputation.log              : every AbuseIPDB reputation lookup (or skip reason) for a raised alert, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/abuseipdb_cache.db          : "ip|epoch|score|..." AbuseIPDB results reused for abuseipdbcachehrs (+ abuseipdb_usage/_block quota state)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/etc_critical_hash.db        : per-file content hash baseline for $etccriticalpaths - see checketccritical()
 #
@@ -104,7 +106,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.0"
+version="2.0.4"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -116,7 +118,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.4.0"  # web interface page version this script expects
+webuiversion="1.4.1"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -198,8 +200,20 @@ aghincludeblocked=0             # 1 = also check queries AdGuard Home already bl
 aghpagesize=500                 # query-log entries fetched per API call
 aghmaxpages=20                  # most API pages read per cycle before giving up and warning about a gap
 aghcred=""                      # AdGuard Home "user:password" login, base64-encoded with openssl (encoded, not encrypted)
-aghauthfile="/jffs/addons/iocmon.d/agh.auth"   # legacy login file, moved into aghcred at startup
-aghreplyfile="/tmp/iocmon_agh_replies"         # "domain|ip" answers seen recently, RAM only, for dnsreplyip
+aghauthfile="/jffs/addons/iocmon.d/agh.auth"  # legacy login file, moved into aghcred at startup
+aghreplyfile="/tmp/iocmon_agh_replies"  # "domain|ip" answers seen recently, RAM only, for dnsreplyip
+selfqpaths="/tmp/astraea/selfq /tmp/kairos/selfq"  # Astraea's and Kairos's own router lookups ("name|type|epoch", RAM, 2 hours), read only
+selfqseenfile="/tmp/iocmon_selfq_seen"  # "name epoch" of set-aside lookups already logged, so each is logged once per 6 hours
+logtrimstamp="/tmp/iocmon_logtrim.last"  # time of the last 6-hourly activity log rotation check
+logkeep=2                       # rotated copies kept per log (.1 newest, .2 oldest)
+timeoutcmd=""                   # "timeout " once Entware's /opt/bin/timeout is found, for nvram and cru calls
+timeoutsec=""                   # seconds before a hung nvram or cru call is killed
+timeoutlng=""                   # longer limit for slower commands
+timeoutpkg="coreutils-timeout"  # Entware package that provides /opt/bin/timeout
+LAN_HostName=""                 # router's lan_hostname, read once and reused by every log line
+astraeascript="/jffs/scripts/astraea.sh"  # Astraea, asked for its certificate verdict on an alerted name or address
+astraealogmark="# Astraea: site names for certificate checks"  # marker line Astraea writes above its own log-queries in dnsmasq.conf.add
+astraeaintelfile="/tmp/iocmon_astraea_intel"  # "target<TAB>verdict<TAB>reason" of recent Astraea verdicts, RAM only, for alert emails
 aghyamlpaths="/opt/etc/AdGuardHome/AdGuardHome.yaml /opt/etc/AdGuardHome.yaml /jffs/addons/AdGuardHome.d/AdGuardHome.yaml"
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
@@ -237,7 +251,7 @@ alertfeedonly=0                 # legacy key from before alertlevel, read once b
 dnsescalatescore=75             # a DNS feed match becomes Critical when AbuseIPDB scores its reply IP at or above this (1-100)
 dnssharedhosts="github.com githubusercontent.com microsoft.com windows.net live.com office.com amazonaws.com cloudfront.net googleapis.com googleusercontent.com gstatic.com apple.com icloud.com steamcommunity.com steampowered.com roblox.com discord.com discordapp.com dropbox.com dropboxusercontent.com akamaized.net in-addr.arpa ip6.arpa"  # shared-hosting domains (and subdomains) whose DNS feed matches are logged as Info
 ratelimit=0                     # max emails/hour, 0 = unlimited
-logsize=2000                    # line cap for $logfile and other trimmed log files
+logsize=2000                    # lines at which $logfile and the other logs rotate to .1 (0 = never)
 logfilepath="$jffslogfile"      # configured activity log location: JFFS default, or $iocmonroot/state/iocmon.log on the external drive
 autostart=0                     # launch the background monitor via post-mount on boot
 schedule=1                      # run IOCMON's own daily self-update check via cron
@@ -355,6 +369,88 @@ logoNMexit ()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# _SetUpTimeoutCmdVars_ turns on the timeout shim for nvram and cru calls once Entware's timeout binary is present
+
+_SetUpTimeoutCmdVars_()
+{
+   if [ -z "${timeoutcmd:+xSETx}" ] && [ -f "/opt/bin/timeout" ]
+   then
+       timeoutcmd="timeout "
+       timeoutsec="10"
+       timeoutlng="60"
+   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# nvramtimeoutlog logs one hung nvram or cru call, without calling nvram again for the hostname
+
+nvramtimeoutlog()
+{
+  echo -e "$(date +'%b %d %Y %X') ${LAN_HostName:-$(uname -n 2>/dev/null)} IOCMON[$$] - WARNING: '$1' did not answer within ${timeoutsec}s and was stopped - $2." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# nvramget reads NVRAM value $1 into $nvramval through timeout, reusing the last value read if the call hangs (returns 1 if none)
+
+nvramget()
+{
+  local key rc
+  case "$1" in *[!A-Za-z0-9_]*) key="$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')" ;; *) key="$1" ;; esac
+  nvramval="$($timeoutcmd$timeoutsec nvram get "$1" 2>/dev/null)"
+  rc=$?
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+    if eval "[ -n \"\${nvc_$key+x}\" ]"; then
+      eval "nvramval=\"\$nvc_$key\""
+      nvramtimeoutlog "nvram get $1" "using the last value read"
+      return 0
+    fi
+    nvramval=""
+    nvramtimeoutlog "nvram get $1" "no earlier value to fall back on"
+    return 1
+  fi
+  eval "nvc_$key=\$nvramval"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# crul reads 'cru l' into $cruout through timeout, reusing the last list read if the call hangs (returns 1 if none)
+
+crul()
+{
+  local rc
+  cruout="$($timeoutcmd$timeoutsec cru l 2>/dev/null)"
+  rc=$?
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+    if [ -n "${crucache+x}" ]; then
+      cruout="$crucache"
+      nvramtimeoutlog "cru l" "using the last list read"
+      return 0
+    fi
+    cruout=""
+    nvramtimeoutlog "cru l" "no earlier list to fall back on"
+    return 1
+  fi
+  crucache="$cruout"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# _SetLAN_HostName_ reads lan_hostname once, falling back to the kernel hostname if nvram hangs
+
+_SetLAN_HostName_()
+{
+  [ -n "${LAN_HostName:+xSETx}" ] && return
+  nvramget lan_hostname
+  LAN_HostName="${nvramval:-$(uname -n 2>/dev/null)}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# _GetLAN_HostName_ prints the router's hostname for log lines
+
+_GetLAN_HostName_()
+{ _SetLAN_HostName_ ; echo "$LAN_HostName" ; }
+
+# -------------------------------------------------------------------------------------------------------------------------
 # Promptyn is a simple function that accepts y/n input
 
 promptyn()
@@ -432,7 +528,7 @@ ScriptUpdateFromAMTM()
     DLsuccess=$?
     if [ "$DLsuccess" -eq 0 ]; then
       touch "$restartpendingfile"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated via AMTM to v$(ondiskversion) - any running instance will restart into it." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated via AMTM to v$(ondiskversion) - any running instance will restart into it." >> "$logfile"
       echo -e "${InvGreen} ${CClear} IOCMON Download/Update Success."
       echo ""
     else
@@ -461,11 +557,11 @@ downloadiocmonupdate()
   if [ "$dlrc" -eq 0 ]; then
     mv "${apppath}.new" "$apppath"
     chmod 755 "$apppath"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
     return 0
   else
     rm -f "${apppath}.new"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
     return 1
   fi
 }
@@ -522,14 +618,14 @@ checkscriptreplaced()
   [ "$(wc -c < "$apppath" 2>/dev/null | tr -d ' ')" = "$sizebefore" ] || return 0
   if ! scriptfilevalid "$apppath"; then
     if [ "$scriptreplacewarned" -eq 0 ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Detected that $reason, but $apppath failed validation - staying on v$version until a valid copy is in place." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Detected that $reason, but $apppath failed validation - staying on v$version until a valid copy is in place." >> "$logfile"
       scriptreplacewarned=1
     fi
     return 0
   fi
 
   rm -f "$restartpendingfile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Detected that $reason - restarting into v${diskver} now." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Detected that $reason - restarting into v${diskver} now." >> "$logfile"
   clear
   if [ "$diskver" = "$version" ]; then
     echo -e "${CGreen}An updated copy of IOCMON v${diskver} was installed - restarting into it...${CClear}"
@@ -760,7 +856,7 @@ skynetprogress()
 lastalertsummary()
 {
   local line
-  line="$(grep "WARNING: IOC match" "$logfile" 2>/dev/null | tail -1)"
+  line="$(logall "$logfile" | grep "WARNING: IOC match" | tail -1)"
   if [ -z "$line" ]; then
     echo "none yet"
     return
@@ -770,7 +866,7 @@ lastalertsummary()
 
 alertstoday()
 {
-  grep "$(date +'%b %d %Y')" "$logfile" 2>/dev/null | grep -c "WARNING: IOC match"
+  logall "$logfile" | grep "$(date +'%b %d %Y')" | grep -c "WARNING: IOC match"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -936,7 +1032,7 @@ saveconfig()
   } > "$config"
   chmod 600 "$config"
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON config has been updated." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON config has been updated." >> "$logfile"
 
   if [ -f "$config" ]; then
     . "$config"
@@ -959,7 +1055,8 @@ getdrivelabel()
   devnode="${devsd##*/}"
 
   if [ -n "$devnode" ]; then
-    lbl="$(nvram get "usb_path_${devnode}_label" 2>/dev/null)"
+    nvramget "usb_path_${devnode}_label"
+    lbl="$nvramval"
     if [ -z "$lbl" ] && which blkid >/dev/null 2>&1; then
       lbl="$(blkid "$devsd" 2>/dev/null | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p')"
     fi
@@ -997,7 +1094,7 @@ selectextdrive()
     echo -e "IOCMON can still run in a ${CYellow}degraded JFFS-only mode${CClear}: small feed subsets only (e.g. Feodo's"
     echo -e "recommended list), no hash feeds, and no filesystem-integrity baseline."
     echo ""
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: No external USB drive found. Degraded JFFS-only mode offered." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: No external USB drive found. Degraded JFFS-only mode offered." >> "$logfile"
     echo -e "Continue in degraded JFFS-only mode?"
     if promptyn "[y/n]: "; then
       extdrivelabel=""
@@ -1005,7 +1102,7 @@ selectextdrive()
       [ "$logfilepath" != "$jffslogfile" ] && relocatelogfile "$jffslogfile"
       saveconfig
       echo ""
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Running in degraded JFFS-only mode (no external drive configured)." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Running in degraded JFFS-only mode (no external drive configured)." >> "$logfile"
       echo -e "${CYellow}IOCMON is now configured for degraded JFFS-only mode.${CClear}"
       echo ""
       read -rsp $'Press any key to continue...\n' -n1 key
@@ -1068,7 +1165,7 @@ selectextdrive()
   [ "$logfilepath" != "$jffslogfile" ] && relocatelogfile "$iocmonroot/state/iocmon.log"
   saveconfig
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: External drive selected: label=$extdrivelabel path=$selecteddrivepath" >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: External drive selected: label=$extdrivelabel path=$selecteddrivepath" >> "$logfile"
 
   echo ""
   echo ""
@@ -1095,7 +1192,7 @@ checkdrivealive()
     driveavailable=0
     drivestatus="${CRed}Drive Missing: label=$extdrivelabel is not mounted${CClear}"
     if [ "$driveunmountedalerted" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Configured external drive (label=$extdrivelabel) is not mounted. Feed/hash operations paused." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Configured external drive (label=$extdrivelabel) is not mounted. Feed/hash operations paused." >> "$logfile"
       driveunmountedalerted=1
     fi
   else
@@ -1114,15 +1211,15 @@ resolvelogfile()
     logfile="$jffslogfile"
   elif [ -d "${logfilepath%/*}" ]; then
     logfile="$logfilepath"
-    if [ -f "$jffslogfile" ]; then
-      cat "$jffslogfile" >> "$logfile" && rm -f "$jffslogfile"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Merged activity log lines written to $jffslogfile while $logfilepath was unavailable." >> "$logfile"
+    if [ -f "$jffslogfile" ] || [ -f "$jffslogfile.1" ]; then
+      logall "$jffslogfile" >> "$logfile" && rm -f "$jffslogfile" && logremoverotated "$jffslogfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Merged activity log lines written to $jffslogfile while $logfilepath was unavailable." >> "$logfile"
     fi
     logfilefallback=0
   else
     logfile="$jffslogfile"
     if [ "$logfilefallback" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Activity log location $logfilepath is unavailable (drive not mounted?) - logging to $jffslogfile until it returns." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Activity log location $logfilepath is unavailable (drive not mounted?) - logging to $jffslogfile until it returns." >> "$logfile"
       logfilefallback=1
     fi
   fi
@@ -1133,10 +1230,17 @@ resolvelogfile()
 
 relocatelogfile()
 {
-  local newpath="$1" oldpath="$logfile"
+  local newpath="$1" oldpath="$logfile" i="$logkeep"
 
   if [ "$newpath" != "$oldpath" ]; then
     mkdir -m 755 -p "${newpath%/*}" || return 1
+    while [ "$i" -ge 1 ]; do
+      if [ -f "$oldpath.$i" ]; then
+        cat "$oldpath.$i" >> "$newpath.$i" || return 1
+        rm -f "$oldpath.$i"
+      fi
+      i=$((i - 1))
+    done
     if [ -f "$oldpath" ]; then
       cat "$oldpath" >> "$newpath" || return 1
       rm -f "$oldpath"
@@ -1144,7 +1248,7 @@ relocatelogfile()
   fi
   logfilepath="$newpath"
   logfile="$newpath"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Activity log location set to $newpath (moved from $oldpath)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Activity log location set to $newpath (moved from $oldpath)." >> "$logfile"
   return 0
 }
 
@@ -1156,7 +1260,7 @@ initialsetup()
   mkdir -m 755 -p "$addonsdir"
 
   if ! selectextdrive; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Initial setup did not complete - external drive selection was cancelled." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Initial setup did not complete - external drive selection was cancelled." >> "$logfile"
     logoNMexit
     exit 1
   fi
@@ -1175,7 +1279,7 @@ initialsetup()
       applyimportedconfig "$importfile"
       echo ""
       echo -e "${CGreen}Settings imported successfully.${CClear}"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created by importing $importfile." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON initial config created by importing $importfile." >> "$logfile"
       sleep 2
       setupwebui 3
       return
@@ -1191,10 +1295,10 @@ initialsetup()
   saveconfig
 
   if [ "$setupall" -eq 1 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with all detection features enabled." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON initial config created with all detection features enabled." >> "$logfile"
     setupdnswatch
   else
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON initial config created with defaults." >> "$logfile"
   fi
 
   setupapikeyinfo
@@ -1532,7 +1636,7 @@ veditlist()
 listlivecronjobs()
 {
   local srcfiles="" f
-  cru l 2>/dev/null
+  crul && [ -n "$cruout" ] && printf '%s\n' "$cruout"
 
   [ -f /opt/etc/crontab ] && srcfiles="/opt/etc/crontab"
   for f in /opt/var/spool/cron/crontabs/*; do
@@ -2511,14 +2615,14 @@ vadvancedgeneral()
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Main loop / detection refresh interval, in seconds" 68; echo -e ": ${CGreen}$timerloop${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Maximum rows kept in the activity log (0 = unlimited)" 68; echo -e ": ${CGreen}$logsize${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Rows before each log is rotated to .1 and .2 (0 = never)" 68; echo -e ": ${CGreen}$logsize${CClear}"
     logloconly=0; [ -n "$extdrivelabel" ] && logloconly=1
     menurow "(3)" "IOCMON Activity Log folder location" "${CGreen}${logfilepath:-$jffslogfile}${CClear}" 68 "$logloconly"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
     menurow "(6)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
     menurow "(7)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
-    if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
+    if [ "$track" = "0" ]; then trackdisp="Stable"; tracklabel="STABLE"; else trackdisp="Beta"; tracklabel="BETA"; fi
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : "; padright "Router web interface tab (Addons > IOCMON)" 68; echo -e ": $(booleantoyesno "$enablewebui")"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
@@ -2532,7 +2636,7 @@ vadvancedgeneral()
          read -p "New main loop interval in seconds (>=5, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 5 && timerloop="$val" && saveconfig; } ;;
       2) echo -e "Current: ${CGreen}${logsize}${CClear}"
-         read -p "New log size, rows (0=unlimited, blank to keep current): " val
+         read -p "Rows before each log is rotated (0=never, blank to keep current): " val
          [ -n "$val" ] && { validateint "$val" 0 && logsize="$val" && saveconfig; } ;;
       3) [ "$logloconly" -eq 1 ] && vlogfilelocation ;;
       4) togglesetting autostart ;;
@@ -2690,7 +2794,7 @@ migratefeedkeys()
   [ -z "$qfeedsapikey" ] && enableqfeeds=0
   [ -z "$abuseipdbapikey" ] && enableabuseipdb=0
   saveconfig
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $reverted switched off - an API key is now required (abuse.ch no longer offers keyless URLhaus/ThreatFox downloads). Set it under Configuration Menu 2." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $reverted switched off - an API key is now required (abuse.ch no longer offers keyless URLhaus/ThreatFox downloads). Set it under Configuration Menu 2." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2831,46 +2935,103 @@ vfeedsources()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vlogs opens the log in nano, then trims it back down to the configured row count
+# vlogs opens the activity log in the editor
 
 vlogs()
 {
   if [ ! -f "$logfile" ]; then
     touch "$logfile"
   fi
-  openeditor "$logfile"
-  trimlogs
+  openlogview "$logfile"
   renderdashboard
 }
 
-trimlogs()
-{
-  if [ "$logsize" -gt 0 ]; then
-    currlogsize="$(wc -l "$logfile" | awk '{ print $1 }')"
-
-    if [ "$currlogsize" -gt "$logsize" ]; then
-      tail -"$logsize" "$logfile" > "${logfile}.tmp"
-      mv "${logfile}.tmp" "$logfile"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Trimmed the log file down to $logsize lines" >> "$logfile"
-    fi
-  fi
-}
-
 # -------------------------------------------------------------------------------------------------------------------------
-# trimlogfile is trimlogs' trim-to-N-lines logic generalized to any file/size pair, with no INFO log line of its own.
+# rotatelogfile moves $1 to $1.1 (older copies to .2 and so on, up to $logkeep) once it reaches $2 lines, silently
 
-trimlogfile()
+rotatelogfile()
 {
-  local file="$1" maxlines="$2" curr
+  local file="$1" maxlines="$2" curr i
 
   [ "$maxlines" -gt 0 ] || return
   [ -f "$file" ] || return
 
   curr="$(wc -l < "$file" | tr -d ' ')"
-  if [ "$curr" -gt "$maxlines" ]; then
-    tail -"$maxlines" "$file" > "${file}.tmp"
-    mv "${file}.tmp" "$file"
+  [ "$curr" -ge "$maxlines" ] || return
+  i="$logkeep"
+  rm -f "$file.$i"
+  while [ "$i" -gt 1 ]; do
+    [ -f "$file.$((i - 1))" ] && mv -f "$file.$((i - 1))" "$file.$i"
+    i=$((i - 1))
+  done
+  mv -f "$file" "$file.1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# logall prints a log and its rotated copies, oldest line first
+
+logall()
+{
+  local file="$1" i="$logkeep"
+
+  while [ "$i" -ge 1 ]; do
+    [ -f "$file.$i" ] && cat "$file.$i"
+    i=$((i - 1))
+  done
+  [ -f "$file" ] && cat "$file"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# logtail prints a log's newest $2 lines, reaching into its newest rotated copy when the current file is shorter
+
+logtail()
+{
+  { tail -n "$2" "$1.1" 2>/dev/null; tail -n "$2" "$1" 2>/dev/null; } | tail -n "$2"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# openlogview opens a log in the editor, as one read-only /tmp copy with its rotated copies when it has any
+
+openlogview()
+{
+  local file="$1" viewcopy="/tmp/iocmon_logview.$$"
+
+  if [ -f "$file.1" ]; then
+    logall "$file" > "$viewcopy"
+    openeditor "$viewcopy"
+    rm -f "$viewcopy"
+  else
+    openeditor "$file"
   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# logremoverotated deletes a log's rotated copies
+
+logremoverotated()
+{
+  local i="$logkeep"
+
+  while [ "$i" -ge 1 ]; do
+    rm -f "$1.$i"
+    i=$((i - 1))
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# checklogrotate rotates the activity log once every 6 hours, right after the feed update check, if it has reached $logsize
+
+checklogrotate()
+{
+  local nowepoch lastepoch
+
+  nowepoch=$(date +%s)
+  lastepoch="$(cat "$logtrimstamp" 2>/dev/null)"
+  [ -z "$lastepoch" ] && lastepoch=0
+  [ $((nowepoch - lastepoch)) -ge 21600 ] || return
+  rotatelogfile "$logfile" "$logsize"
+  echo "$nowepoch" > "$logtrimstamp"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -2908,7 +3069,7 @@ fetchfeedsource()
   curlrc=$?
 
   if [ "$curlrc" -ne 0 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download $name feed ($url) - curl exit $curlrc." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Unable to download $name feed ($url) - curl exit $curlrc." >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
@@ -2917,17 +3078,17 @@ fetchfeedsource()
     rm -f "$tmpfile"
     if [ -s "$rawfile" ]; then
       touch "$metafile"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $name feed unchanged since the last fetch ($(wc -l < "$rawfile" | tr -d ' ') lines kept)." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $name feed unchanged since the last fetch ($(wc -l < "$rawfile" | tr -d ' ') lines kept)." >> "$logfile"
       return 0
     else
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: $name feed returned no content and no prior cache exists." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: $name feed returned no content and no prior cache exists." >> "$logfile"
       return 1
     fi
   fi
 
   mv "$tmpfile" "$rawfile"
   touch "$metafile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $name feed updated ($(wc -l < "$rawfile" | tr -d ' ') lines)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $name feed updated ($(wc -l < "$rawfile" | tr -d ' ') lines)." >> "$logfile"
   return 0
 }
 
@@ -2940,7 +3101,7 @@ fetchthreatfox()
   local modefile="$feedsroot/meta/threatfox.mode" tmpfile="$rawfile.tmp" curlrc
 
   if [ -z "$threatfoxapikey" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: ThreatFox is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: ThreatFox is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
     return 2
   fi
 
@@ -2951,7 +3112,7 @@ fetchthreatfox()
   curlrc=$?
 
   if [ "$curlrc" -ne 0 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download ThreatFox feed - curl exit $curlrc." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Unable to download ThreatFox feed - curl exit $curlrc." >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
@@ -2962,13 +3123,13 @@ fetchthreatfox()
       touch "$metafile"
       return 0
     else
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: ThreatFox feed returned no content and no prior cache exists." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: ThreatFox feed returned no content and no prior cache exists." >> "$logfile"
       return 1
     fi
   fi
 
   if ! grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$tmpfile"; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: ThreatFox API returned an unexpected response (bad Auth-Key or rate limit): $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: ThreatFox API returned an unexpected response (bad Auth-Key or rate limit): $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
@@ -2976,7 +3137,7 @@ fetchthreatfox()
   mv "$tmpfile" "$rawfile"
   echo "api" > "$modefile"
   touch "$metafile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ThreatFox feed updated ($(grep -o '"ioc_type"' "$rawfile" | wc -l | tr -d ' ') IOC records)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ThreatFox feed updated ($(grep -o '"ioc_type"' "$rawfile" | wc -l | tr -d ' ') IOC records)." >> "$logfile"
   return 0
 }
 
@@ -2989,7 +3150,7 @@ fetchurlhaus()
   local payfile="$feedsroot/urlhaus_payloads.raw" paytmp="$feedsroot/urlhaus_payloads.raw.tmp" code curlrc
 
   if [ -z "$urlhausapikey" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: URLhaus is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: URLhaus is enabled but no abuse.ch Auth-Key is set; skipping." >> "$logfile"
     return 2
   fi
 
@@ -3001,7 +3162,7 @@ fetchurlhaus()
   curlrc=$?
 
   if [ "$curlrc" -ne 0 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Unable to download the URLhaus export - curl exit $curlrc." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Unable to download the URLhaus export - curl exit $curlrc." >> "$logfile"
     rm -f "$tmpfile"
     return 1
   fi
@@ -3017,16 +3178,16 @@ fetchurlhaus()
       elif [ ! -s "$tmpfile" ] && grep -q '^"[0-9]' "$rawfile" 2>/dev/null; then
         rm -f "$tmpfile"; touch "$metafile"; urlhauslogstate="unchanged since the last fetch"
       else
-        echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: The URLhaus export was not in the expected CSV format: $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
+        echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The URLhaus export was not in the expected CSV format: $(head -c 200 "$tmpfile" | tr -d '\r\n')" >> "$logfile"
         rm -f "$tmpfile"
         return 1
       fi ;;
     401|403)
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: URLhaus rejected the Auth-Key (HTTP $code) - check it under Configuration Menu 2, item 5." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: URLhaus rejected the Auth-Key (HTTP $code) - check it under Configuration Menu 2, item 5." >> "$logfile"
       rm -f "$tmpfile"
       return 1 ;;
     *)
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: The URLhaus export returned HTTP ${code:-000}: $(head -c 200 "$tmpfile" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The URLhaus export returned HTTP ${code:-000}: $(head -c 200 "$tmpfile" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
       rm -f "$tmpfile"
       return 1 ;;
   esac
@@ -3035,7 +3196,7 @@ fetchurlhaus()
   if grep -q '"query_status"[[:space:]]*:[[:space:]]*"ok"' "$paytmp" 2>/dev/null; then
     mv "$paytmp" "$payfile"
   else
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: The URLhaus recent-payloads query failed; keeping the previous payload hash list: $(head -c 200 "$paytmp" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: The URLhaus recent-payloads query failed; keeping the previous payload hash list: $(head -c 200 "$paytmp" 2>/dev/null | tr -d '\r\n')" >> "$logfile"
     rm -f "$paytmp"
   fi
 
@@ -3069,7 +3230,7 @@ fetchqfeedlist()
   code="$(printf 'user = "api_token:%s"\n' "$qfeedsapikey" | curl --silent --retry 1 --connect-timeout 10 --max-time 180 -K - -o "$tmp" -w '%{http_code}' "https://api.qfeeds.com/api.php?feed_type=${feed}&type=text&ipv6=0&download=0")"
 
   if [ "$code" != "200" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Q-Feeds $feed download failed (HTTP ${code:-none}); keeping any previous list." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Q-Feeds $feed download failed (HTTP ${code:-none}); keeping any previous list." >> "$logfile"
     rm -f "$tmp"
     return 1
   fi
@@ -3083,13 +3244,13 @@ fetchqfeedlist()
 
   n="$(wc -l < "${tmp}.ok" | tr -d ' ')"
   if [ "${n:-0}" -lt 1000 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Q-Feeds $feed returned only ${n:-0} valid lines (expected thousands); keeping any previous list." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Q-Feeds $feed returned only ${n:-0} valid lines (expected thousands); keeping any previous list." >> "$logfile"
     rm -f "${tmp}.ok"
     return 1
   fi
 
   mv "${tmp}.ok" "$dest"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Q-Feeds $feed updated ($n entries)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Q-Feeds $feed updated ($n entries)." >> "$logfile"
   return 0
 }
 
@@ -3101,7 +3262,7 @@ fetchqfeeds()
   local stamp="$feedsroot/meta/qfeeds.last" nowepoch lastepoch=0 rc=0
 
   if [ -z "$qfeedsapikey" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Q-Feeds is enabled but no API token is set; skipping." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Q-Feeds is enabled but no API token is set; skipping." >> "$logfile"
     return 2
   fi
 
@@ -3238,7 +3399,7 @@ normalizefeeds()
     fi
 
     if [ -n "$urlhauslogstate" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: URLhaus feed $urlhauslogstate ($(grep -c '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ') URL records -> ${urlhauskeptcount:-0} active host(s), online or added in the last 2 days; ${urlhauspayloadcount:-0} payload(s))." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: URLhaus feed $urlhauslogstate ($(grep -c '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null | tr -d ' ') URL records -> ${urlhauskeptcount:-0} active host(s), online or added in the last 2 days; ${urlhauspayloadcount:-0} payload(s))." >> "$logfile"
       urlhauslogstate=""
     fi
 
@@ -3274,7 +3435,7 @@ normalizefeeds()
     mv "$tmpips" "$feedsroot/ips.txt"
   else
     rm -f "$tmpips"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Feed normalization produced zero IP indicators; leaving the previous ips.txt in place." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Feed normalization produced zero IP indicators; leaving the previous ips.txt in place." >> "$logfile"
   fi
 
   if [ -s "$tmpdomains" ]; then
@@ -3342,11 +3503,11 @@ removeskynetimports()
     if sh /jffs/scripts/firewall rules remove "$id" >/dev/null 2>&1; then
       removed=$((removed + 1))
     else
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Failed to remove Skynet import rule $id." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Failed to remove Skynet import rule $id." >> "$logfile"
     fi
   done
   skynetremovedcount="$removed"
-  [ "$removed" -gt 0 ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed $removed existing IOCMON-tagged Skynet import rule(s)." >> "$logfile"
+  [ "$removed" -gt 0 ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Removed $removed existing IOCMON-tagged Skynet import rule(s)." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -3408,7 +3569,7 @@ syncskynetimport()
   skynetprogress 1 6 "Checking Skynet installation"
   if ! skynetinstalled; then
     if [ "$skynetmissinglogged" -ne 1 ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Skynet integration is enabled but Skynet was not detected - import skipped." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Skynet integration is enabled but Skynet was not detected - import skipped." >> "$logfile"
       skynetmissinglogged=1
     fi
     return 2
@@ -3450,12 +3611,12 @@ syncskynetimport()
   if [ "$importrc" -eq 0 ]; then
     echo "$newhash" > "$hashfile"
     rm -f "$importfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Imported $entrycount IPv4 indicator(s) into Skynet's ban list, tagged IOCMON." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Imported $entrycount IPv4 indicator(s) into Skynet's ban list, tagged IOCMON." >> "$logfile"
     skynetimportcount="$entrycount"
     return 0
   else
     rm -f "$importfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Skynet import failed after 3 attempt(s) - will retry next refresh cycle. firewall output: $(echo "$importoutput" | tr '\n' ' ' | cut -c1-300)" >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Skynet import failed after 3 attempt(s) - will retry next refresh cycle. firewall output: $(echo "$importoutput" | tr '\n' ' ' | cut -c1-300)" >> "$logfile"
     return 3
   fi
 }
@@ -3469,7 +3630,7 @@ updatefeeds()
 
   mkdir -m 755 -p "$feedsroot/meta"
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Starting IoC feed refresh cycle." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Starting IoC feed refresh cycle." >> "$logfile"
 
   if [ "$enablefeodo" -eq 1 ]; then
     inlinestatus "Feodo Tracker: fetching"
@@ -3581,7 +3742,7 @@ updatefeeds()
   if [ "${threatfoxskippedcount:-0}" -gt 0 ]; then
     echo -e "  ${CYellow}*${CClear} ThreatFox: ${CYellow}${threatfoxskippedcount}${CClear} raw record(s) skipped (unsupported indicator type, e.g. ja3/tag-only entries)"
   fi
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: IoC feed refresh cycle complete ($okcount ok, $failcount failed)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IoC feed refresh cycle complete ($okcount ok, $failcount failed)." >> "$logfile"
   feedokcount="$okcount"; feedfailcount="$failcount"
 }
 
@@ -3633,7 +3794,7 @@ checkfeedupdate()
       echo "$nowepoch" > "$stampfile"
       feedsunlock
     else
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Feed refresh skipped - another refresh is already in progress." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Feed refresh skipped - another refresh is already in progress." >> "$logfile"
     fi
   fi
 }
@@ -3749,7 +3910,7 @@ _DownloadCEMLibraryFile_()
 
    printf "\33[2K\r"
    printf "${CGreen}\r[INFO: ${msgStr} the shared AMTM email library script file to support email notifications...]${CClear}"
-   echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ${msgStr} the shared AMTM email library script file to support email notifications..." >> "$logfile"
+   echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${msgStr} the shared AMTM email library script file to support email notifications..." >> "$logfile"
 
    mkdir -m 755 -p "$CUSTOM_EMAIL_LIBDir"
    curl -kLSs --retry 3 --retry-delay 5 --retry-connrefused \
@@ -3765,7 +3926,7 @@ _DownloadCEMLibraryFile_()
        retCode=1
        printf "\33[2K\r"
        printf "${CRed}\r[ERROR: Unable to download the shared library script file ($CUSTOM_EMAIL_LIBName).]${CClear}"
-       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - **ERROR**: Unable to download the shared AMTM email library script file [$CUSTOM_EMAIL_LIBName]." >> "$logfile"
+       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Unable to download the shared AMTM email library script file [$CUSTOM_EMAIL_LIBName]." >> "$logfile"
    fi
    return "$retCode"
 }
@@ -3780,7 +3941,7 @@ _SendEMailNotification_()
        printf "\33[2K\r"
        printf "${CRed}\r[ERROR: Email library script ($CUSTOM_EMAIL_LIBFile) *NOT* FOUND.]${CClear}"
        sleep 5
-       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - **ERROR**: Email library script [$CUSTOM_EMAIL_LIBFile] *NOT* FOUND." >> "$logfile"
+       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Email library script [$CUSTOM_EMAIL_LIBFile] *NOT* FOUND." >> "$logfile"
        return 1
    fi
 
@@ -3789,7 +3950,7 @@ _SendEMailNotification_()
        printf "\33[2K\r"
        printf "${CRed}\r[ERROR: INSUFFICIENT email parameters]${CClear}"
        sleep 5
-       echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - **ERROR**: INSUFFICIENT email parameters." >> "$logfile"
+       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: INSUFFICIENT email parameters." >> "$logfile"
        return 1
    fi
    local retCode  emailBodyTitleStr=""
@@ -3807,12 +3968,12 @@ _SendEMailNotification_()
    then
      printf "\33[2K\r"
      printf "${CGreen}\r[Email notification was sent successfully ($statustext)]${CClear}"
-     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Email notification was sent successfully [$2]" >> "$logfile"
+     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Email notification was sent successfully [$2]" >> "$logfile"
      sleep 5
    else
      printf "\33[2K\r"
      printf "${CRed}\r[ERROR: Failure to send email notification (Error Code: $retCode - $statustext).]${CClear}"
-     echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - **ERROR**: Failure to send email notification [$2]" >> "$logfile"
+     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Failure to send email notification [$2]" >> "$logfile"
      sleep 5
    fi
 
@@ -4033,7 +4194,7 @@ emailalertbody()
 
 sendmessage()
 {
-  local success="$1" kind="$2" indicator="$3" source="$4" detail="$5" repip="$6"
+  local success="$1" kind="$2" indicator="$3" source="$4" detail="$5" repip="$6" inteltarget="$7"
 
   [ "$enablealertemail" = "1" ] || return
 
@@ -4072,6 +4233,7 @@ sendmessage()
         emailalertbody "$kind" "$indicator" "$source" "$detail"
       fi
       [ -n "$repip" ] && reputationemailblock "$repip" "$kind"
+      [ -n "$inteltarget" ] && astraeaemailblock "$inteltarget"
     } > "$tmpEMailBodyFile"
 
     _SendEMailNotification_ "IOCMON v$version" "$emailSubject" "$tmpEMailBodyFile" "$emailBodyTitle"
@@ -4106,12 +4268,15 @@ sendbatchmessage()
     {
       printf "<b>Date/Time:</b> %s\n\n" "$(date +'%b %d %Y %X')"
       emailrow "" "IOCMON detected $count separate security events during a single scan cycle. Rather than send $count separate emails, they are grouped below."
-      local i=0 bkind bindicator bsource bdetail brepip
-      while IFS="$tab" read -r bkind bindicator bsource bdetail brepip; do
+      local i=0 bkind bindicator bsource bdetail brepip bintel
+      while IFS="$tab" read -r bkind bindicator bsource bdetail brepip bintel; do
+        [ "$brepip" = "-" ] && brepip=""
+        [ "$bintel" = "-" ] && bintel=""
         i=$((i+1))
         printf "\n<b>Event %d of %d (%s)</b>\n" "$i" "$count" "$bkind"
         emailalertbody "$bkind" "$bindicator" "$bsource" "$bdetail"
         [ -n "$brepip" ] && reputationemailblock "$brepip" "$bkind"
+        [ -n "$bintel" ] && astraeaemailblock "$bintel"
       done < "$batchfile"
       printf "\n"
       emailrow "" "Please review each item above."
@@ -4127,16 +4292,16 @@ sendbatchmessage()
 
 queueemailalert()
 {
-  local kind="$1" indicator="$2" source="$3" detail="$4" repip="$5"
+  local kind="$1" indicator="$2" source="$3" detail="$4" repip="$5" inteltarget="$6"
 
   resolvestateroot
   if [ -z "$stateroot" ]; then
-    sendmessage 1 "$kind" "$indicator" "$source" "$detail"
+    sendmessage 1 "$kind" "$indicator" "$source" "$detail" "" "$inteltarget"
     return
   fi
 
   mkdir -m 755 -p "$stateroot"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$indicator" "$source" "$detail" "$repip" >> "$stateroot/email_batch.pending"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$kind" "$indicator" "$source" "$detail" "${repip:--}" "${inteltarget:--}" >> "$stateroot/email_batch.pending"
 }
 
 flushemailbatch()
@@ -4152,10 +4317,12 @@ flushemailbatch()
   count="$(wc -l < "$sendfile" | tr -d ' ')"
 
   if [ "$count" -le 1 ]; then
-    local kind indicator source detail repip
+    local kind indicator source detail repip inteltarget
     tab="$(printf '\t')"
-    IFS="$tab" read -r kind indicator source detail repip < "$sendfile"
-    sendmessage 1 "$kind" "$indicator" "$source" "$detail" "$repip"
+    IFS="$tab" read -r kind indicator source detail repip inteltarget < "$sendfile"
+    [ "$repip" = "-" ] && repip=""
+    [ "$inteltarget" = "-" ] && inteltarget=""
+    sendmessage 1 "$kind" "$indicator" "$source" "$detail" "$repip" "$inteltarget"
   else
     sendbatchmessage "$sendfile" "$count"
   fi
@@ -4301,16 +4468,16 @@ abuseipdbquery()
       validateint "$reset" 1 && [ "$reset" -gt "$nowepoch" ] && retry=$((reset - nowepoch))
       printf '%s\t%s\n' "$((nowepoch + retry))" "AbuseIPDB rate limit reached (HTTP 429)" > "$stateroot/abuseipdb_block"
       repfailreason="AbuseIPDB rate limit reached (HTTP 429) - lookups paused for ${retry}s"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
       rm -f "$body" "$hdrs"; return 1 ;;
     401|403)
       printf '%s\t%s\n' "$((nowepoch + 3600))" "API key rejected (HTTP $code)" > "$stateroot/abuseipdb_block"
       repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 13 under Feed Sources, Reputation & API Keys"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
       rm -f "$body" "$hdrs"; return 1 ;;
     *)
       repfailreason="AbuseIPDB lookup failed (curl exit $rc, HTTP ${code:-000})"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
       rm -f "$body" "$hdrs"; return 1 ;;
   esac
 
@@ -4350,7 +4517,7 @@ abuseipdbquery()
 
   if [ -z "$rec" ]; then
     repfailreason="AbuseIPDB returned an unreadable reply (HTTP 200)"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $repfailreason for $ip." >> "$logfile"
     return 1
   fi
 
@@ -4425,7 +4592,7 @@ reputationlookup()
     [ -n "$reason" ] || return
     repreason="$reason"
     echo "$now | ${ip:-$target} | not checked: $reason | $kind/$source $indicator$testmark" >> "$stateroot/reputation.log"
-    trimlogfile "$stateroot/reputation.log" "$logsize"
+    rotatelogfile "$stateroot/reputation.log" "$logsize"
     return
   fi
 
@@ -4444,8 +4611,8 @@ EOF
   [ -n "$catnames" ] && reptag="$reptag $catnames"
 
   echo "$now | $ip | ${score}% | ${total} reports/${users} users | last ${last:-never} | ${cc:-??} | $(shortusagetype "$usage") | ${isp:-n/a} | ${flags:-no flags} | ${cats:-no categories} | $kind/$source $indicator${cachednote}${testmark}" >> "$stateroot/reputation.log"
-  trimlogfile "$stateroot/reputation.log" "$logsize"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: ${testtag:+SIMULATED TEST - }AbuseIPDB reputation for $ip ($kind $indicator): ${score}% abuse confidence, ${total} report(s) from ${users} user(s) in the last ${abuseipdbmaxage} days, last reported ${last:-never}, ${cname:-${cc:-unknown country}}, ${usage:-unknown usage}, ISP ${isp:-n/a}${flags:+, $flags}${cats:+, categories: $cats}${cachednote}." >> "$logfile"
+  rotatelogfile "$stateroot/reputation.log" "$logsize"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${testtag:+SIMULATED TEST - }AbuseIPDB reputation for $ip ($kind $indicator): ${score}% abuse confidence, ${total} report(s) from ${users} user(s) in the last ${abuseipdbmaxage} days, last reported ${last:-never}, ${cname:-${cc:-unknown country}}, ${usage:-unknown usage}, ISP ${isp:-n/a}${flags:+, $flags}${cats:+, categories: $cats}${cachednote}." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4480,6 +4647,64 @@ EOF
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# astraeatarget $1=kind $2=indicator prints the name or address Astraea can be asked about, or nothing
+
+astraeatarget()
+{
+  local t
+  case "$1" in
+    dns|conntrack) t="${2#*->}" ;;
+    simulated) t="${2%%/*}" ;;
+    *) return 0 ;;
+  esac
+  case "$t" in *.*|*:*) echo "$t" ;; esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# astraeaintel $1=name or address asks Astraea for its verdict (information only), setting inteltag/inteltarget and caching the reason
+
+astraeaintel()
+{
+  local target="$1" out v reason short
+  inteltag=""; inteltarget=""
+  [ -n "$target" ] && [ -x "$astraeascript" ] || return 0
+  if which timeout >/dev/null 2>&1; then
+    out="$(timeout 10 "$astraeascript" intel "$target" 2>/dev/null)"
+  else
+    out="$("$astraeascript" intel "$target" 2>/dev/null)"
+  fi
+  out="$(echo "$out" | grep '^verdict|' | tail -n 1)"
+  v="$(echo "$out" | cut -d'|' -f2)"
+  case "$v" in clear|confirm|unknown|contained) ;; *) return 0 ;; esac
+  reason="$(echo "$out" | cut -d'|' -f3- | tr '|\t' '//')"
+  short="$reason"
+  [ "${#short}" -gt 100 ] && short="$(printf '%.97s' "$reason")..."
+  inteltarget="$target"
+  inteltag="Astraea $v: ${short:-no detail}"
+  { awk -F'\t' -v t="$target" '$1 != t' "$astraeaintelfile" 2>/dev/null | tail -n 200; printf '%s\t%s\t%s\n' "$target" "$v" "$reason"; } > "$astraeaintelfile.t"
+  mv -f "$astraeaintelfile.t" "$astraeaintelfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Astraea's verdict on $target (information only): $v - ${reason:-no detail}" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# astraeaemailblock $1=name or address prints Astraea's cached verdict on it as email body lines
+
+astraeaemailblock()
+{
+  local rec v reason
+  [ -n "$1" ] && [ -f "$astraeaintelfile" ] || return 0
+  rec="$(awk -F'\t' -v t="$1" '$1 == t' "$astraeaintelfile" | tail -n 1)"
+  [ -n "$rec" ] || return 0
+  v="$(echo "$rec" | cut -f2)"; reason="$(echo "$rec" | cut -f3)"
+  printf "\n"
+  emailsection "Astraea certificate intel for $1"
+  emailrow "note" "information only - Astraea's view of this site's certificates; it does not change this alert"
+  emailrow "verdict" "$v"
+  emailrow "reason" "${reason:-no detail}"
+  emaildivider
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # reputationstatus echoes the dashboard's compact AbuseIPDB slot, fitted to $1 visible characters
 
 reputationstatus()
@@ -4493,7 +4718,7 @@ reputationstatus()
   fi
   used="$(abuseipdbusedtoday)"
   line=""
-  [ -n "$stateroot" ] && [ -f "$stateroot/reputation.log" ] && line="$(grep -E '^[^|]*\| [^|]* \| [0-9]+% \|' "$stateroot/reputation.log" | tail -n1)"
+  [ -n "$stateroot" ] && line="$(logall "$stateroot/reputation.log" | grep -E '^[^|]*\| [^|]* \| [0-9]+% \|' | tail -n1)"
   if [ -z "$line" ]; then
     echo -e "${CWhite}AbuseIPDB: no lookups yet (${CGreen}${used}/${abuseipdbdailymax}${CWhite})${CClear}"; return
   fi
@@ -4554,7 +4779,7 @@ raisealert()
 {
   local kind="$1" indicator="$2" source="$3" detail="$4" dedupkey="${5:-$2}"
   local key="${kind}|${dedupkey}" nowepoch cooldownsec=21600 lastepoch=0 sevtag
-  reptag=""; repip=""; repscore=""
+  reptag=""; repip=""; repscore=""; inteltag=""; inteltarget=""
   migratealertlevel
 
   resolvestateroot
@@ -4577,10 +4802,11 @@ raisealert()
   fi
 
   [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
+  astraeaintel "$(astraeatarget "$kind" "$indicator")"
 
   alertseverity "$kind" "$indicator" "$source" "$detail" "$repscore"
   sevtag="$(echo "$alertsev" | tr 'a-z' 'A-Z')"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail) [$sevtag]." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail) [$sevtag]." >> "$logfile"
 
   local raisebanner=1
   [ "$alertlevel" = "critical" ] && [ "$alertsev" != "critical" ] && raisebanner=0
@@ -4589,8 +4815,9 @@ raisealert()
     local alertline
     alertline="$(date +'%b %d %Y %X') | $kind | $indicator | $source | $detail"
     [ -n "$reptag" ] && alertline="$alertline | $reptag"
+    [ -n "$inteltag" ] && alertline="$alertline | $inteltag"
     echo "$alertline | sev:$alertsev" >> "$stateroot/ioc_alerts.log"
-    trimlogfile "$stateroot/ioc_alerts.log" "$logsize"
+    rotatelogfile "$stateroot/ioc_alerts.log" "$logsize"
 
     if [ "$raisebanner" -eq 1 ]; then
       local pendingfile="$stateroot/alert_pending" pendingcount=0
@@ -4601,7 +4828,7 @@ raisealert()
     fi
   fi
 
-  [ "$raisebanner" -eq 1 ] && queueemailalert "$kind" "$indicator" "$source" "$detail" "$repip"
+  [ "$raisebanner" -eq 1 ] && queueemailalert "$kind" "$indicator" "$source" "$detail" "$repip" "$inteltarget"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4635,7 +4862,7 @@ migrateiocseverity()
   done > "$tmp"
   count="$(grep -c ' | sev:[a-z]*$' "$tmp")"
   mv -f "$tmp" "$file"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added a severity to the IoC detection log ($count line(s) now carry one)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Added a severity to the IoC detection log ($count line(s) now carry one)." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4736,7 +4963,7 @@ checkconntrack()
 
 aghlog()
 {
-  printf '%s %s IOCMON[%s] - %s: %s\n' "$(date +'%b %d %Y %X')" "$(nvram get lan_hostname)" "$$" "$1" "$2" >> "$logfile"
+  printf '%s %s IOCMON[%s] - %s: %s\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "$1" "$2" >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4922,7 +5149,7 @@ aghstatus()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghjq turns one query-log page into M| (page meta), Q| (domain|client|blocked) and R| (domain|ip) lines; no regex (no Oniguruma)
+# aghjq turns one query-log page into M| (page meta), Q| (domain|client|epoch|blocked) and R| (domain|ip) lines; no regex (no Oniguruma)
 aghjq='
 def key: . as $t
   | (if ($t | endswith("Z")) then { b: $t[19:-1], z: 0 }
@@ -4938,7 +5165,7 @@ def blocked: (.reason // "") | (startswith("Filtered") and . != "FilteredSafeSea
   ($d[] | select((try (.time | key) catch "0") > $cur)
    | ((.question.name // "") | ascii_downcase | rtrimstr(".")) as $n
    | select($n != "")
-   | "Q|\($n)|\(.client // "")|\(if blocked then 1 else 0 end)",
+   | "Q|\($n)|\(.client // "")|\((try (.time | key) catch "0")[0:10] | tonumber)|\(if blocked then 1 else 0 end)",
      (.answer // [] | .[] | select(.type == "A" or .type == "AAAA") | "R|\($n)|\(.value)"))
 '
 
@@ -5017,7 +5244,8 @@ aghquerypairs()
 
   aghqueries="$(grep -c '^Q|' "$tmp/all")"
   aghskippedblocked="$(grep -c '^Q|.*|1$' "$tmp/all")"
-  if [ "$aghincludeblocked" = "1" ]; then grep '^Q|' "$tmp/all"; else grep '^Q|.*|0$' "$tmp/all"; fi | cut -d'|' -f2,3 | sort -u > "$outfile"
+  if [ "$aghincludeblocked" = "1" ]; then grep '^Q|' "$tmp/all"; else grep '^Q|.*|0$' "$tmp/all"; fi | cut -d'|' -f2,3,4 > "$outfile.times"
+  cut -d'|' -f1,2 "$outfile.times" | sort -u > "$outfile"
   [ "$aghincludeblocked" = "1" ] && aghskippedblocked=0
   rm -rf "$tmp"
   return 0
@@ -5198,10 +5426,18 @@ enablednsquerylogging()
   fi
 
   echo "log-queries" >> /jffs/configs/dnsmasq.conf.add
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Enabled dnsmasq query logging (log-queries) via dnsmasq.conf.add." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Enabled dnsmasq query logging (log-queries) via dnsmasq.conf.add." >> "$logfile"
   service restart_dnsmasq >/dev/null 2>&1
   echo ""
   echo -e "${CGreen}DNS query logging enabled and dnsmasq restarted.${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsquerylogowncount $1=file counts its active log-queries lines, leaving out the one Astraea adds under its own marker line
+
+dnsquerylogowncount()
+{
+  awk -v m="$astraealogmark" '$0 == m { a = 1; next } /^[[:space:]]*log-queries([[:space:]]*$|=)/ && !a { n++ } { a = 0 } END { print n + 0 }' "$1"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5209,28 +5445,30 @@ enablednsquerylogging()
 
 disablednsquerylogging()
 {
-  local conf="/jffs/configs/dnsmasq.conf.add" before after
+  local conf="/jffs/configs/dnsmasq.conf.add" before after astraeanote=""
 
   [ -f "$conf" ] || return 0
+  grep -qxF "$astraealogmark" "$conf" && astraeanote=" Astraea's own log-queries line was kept, so dnsmasq still logs queries for Astraea."
 
-  before="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
+  before="$(dnsquerylogowncount "$conf")"
   if [ "$before" -eq 0 ]; then
-    echo -e "${CGreen}No active log-queries line was found in dnsmasq.conf.add - nothing to remove.${CClear}"
+    echo -e "${CGreen}No active log-queries line of IOCMON's was found in dnsmasq.conf.add - nothing to remove.${astraeanote}${CClear}"
     return 0
   fi
 
-  sed -i -e '/^[[:space:]]*log-queries[[:space:]]*$/d' -e '/^[[:space:]]*log-queries=/d' "$conf"
-  after="$(grep -cE '^[[:space:]]*log-queries([[:space:]]*$|=)' "$conf")"
+  awk -v m="$astraealogmark" '$0 == m { print; a = 1; next } a && /^[[:space:]]*log-queries([[:space:]]*$|=)/ { print; a = 0; next } { a = 0 } !/^[[:space:]]*log-queries([[:space:]]*$|=)/' "$conf" > "$conf.iocmon" && cat "$conf.iocmon" > "$conf"
+  rm -f "$conf.iocmon"
+  after="$(dnsquerylogowncount "$conf")"
 
   if [ "$after" -ne 0 ]; then
     echo -e "${CRed}ERROR: Could not remove log-queries from dnsmasq.conf.add - remove it by hand, then run: service restart_dnsmasq${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Failed to remove log-queries from dnsmasq.conf.add." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Failed to remove log-queries from dnsmasq.conf.add." >> "$logfile"
     return 1
   fi
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed dnsmasq query logging (log-queries) from dnsmasq.conf.add." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Removed dnsmasq query logging (log-queries) from dnsmasq.conf.add." >> "$logfile"
   service restart_dnsmasq >/dev/null 2>&1
-  echo -e "${CGreen}DNS watch turned off: removed log-queries from dnsmasq.conf.add and restarted dnsmasq.${CClear}"
+  echo -e "${CGreen}DNS watch turned off: removed log-queries from dnsmasq.conf.add and restarted dnsmasq.${astraeanote}${CClear}"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5256,7 +5494,7 @@ enablednsfilelogging()
   mkdir -m 755 -p "$stateroot"
   : > "$targetfile"
   echo "log-facility=$targetfile" >> /jffs/configs/dnsmasq.conf.add
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Forced file-based dnsmasq query logging to $targetfile via dnsmasq.conf.add." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Forced file-based dnsmasq query logging to $targetfile via dnsmasq.conf.add." >> "$logfile"
   service restart_dnsmasq >/dev/null 2>&1
   echo -e "${CGreen}dnsmasq will now log queries directly to ${targetfile}, bypassing syslog.${CClear}"
 }
@@ -5289,11 +5527,11 @@ disablednsfilelogging()
 
   if grep -qxF "$wantline" "$conf"; then
     echo -e "${CRed}ERROR: Could not remove log-facility from dnsmasq.conf.add - remove it by hand, then run: service restart_dnsmasq${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Failed to remove log-facility from dnsmasq.conf.add." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Failed to remove log-facility from dnsmasq.conf.add." >> "$logfile"
     return 1
   fi
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Removed forced file-based dnsmasq query logging (log-facility) from dnsmasq.conf.add." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Removed forced file-based dnsmasq query logging (log-facility) from dnsmasq.conf.add." >> "$logfile"
   service restart_dnsmasq >/dev/null 2>&1
   echo -e "${CGreen}File-based query logging turned off: removed log-facility from dnsmasq.conf.add and restarted dnsmasq.${CClear}"
 }
@@ -5319,7 +5557,7 @@ rotatednsfilelog()
   mv -f "$file" "${file}.1"
   : > "$file"
   service restart_dnsmasq >/dev/null 2>&1
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Rotated dnsmasq query log ($file reached ${dnsquerylogmaxkb}KB) and restarted dnsmasq to reopen it." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Rotated dnsmasq query log ($file reached ${dnsquerylogmaxkb}KB) and restarted dnsmasq to reopen it." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5379,12 +5617,141 @@ authnewlines()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# checkdns tails new syslog lines since the last check
+# routeraddrs prints loopback and every address on the router's own interfaces, as Astraea defines them
+
+routeraddrs()
+{
+  echo "127.0.0.1"; echo "::1"
+  ip -o addr show 2>/dev/null | awk '{ a = $4; sub(/\/.*/, "", a); print a }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqfiles prints the Kairos/Astraea files listing the router's own lookups that exist and are not empty
+
+selfqfiles()
+{
+  local f
+  for f in $selfqpaths; do [ -s "$f" ] && echo "$f"; done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnslogtimes reads dnsmasq log lines on stdin and prints name|src|epoch for router-sourced queries ($1 = router addresses)
+
+dnslogtimes()
+{
+  set -- "$1" $(date +'%Y %m %d %H %M %S') "$(date +%s)"
+  awk -v r=" $(echo $1) " -v Y="$2" -v M="$3" -v D="$4" -v h="$5" -v mi="$6" -v s="$7" -v now="$8" '
+    function dn(y, m, d,   era, yoe, doy, doe) {
+      if (m <= 2) y -= 1
+      era = (y >= 0 ? y : y - 399); era = int(era / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    function hms(t,   a) { if (split(t, a, ":") < 3) return -1; return a[1] * 3600 + a[2] * 60 + int(a[3]) }
+    BEGIN {
+      n = split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " "); for (i = 1; i <= n; i++) mon[names[i]] = i
+      off = dn(Y + 0, M + 0, D + 0) * 86400 + h * 3600 + mi * 60 + s - now
+    }
+    {
+      name = ""; src = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^query\[[A-Za-z]+\]$/) name = $(i + 1)
+        if ($i == "from" && (i + 1) <= NF) src = $(i + 1)
+      }
+      if (name == "" || src == "") next
+      a = src; sub(/^::ffff:/, "", a)
+      if (index(r, " " a " ") == 0) next
+      e = 0
+      if (($1 in mon) && $2 ~ /^[0-9]+$/ && (t = hms($3)) >= 0) {
+        y = Y + 0
+        if (mon[$1] > M + 0 || (mon[$1] == M + 0 && $2 + 0 > D + 0)) y--
+        e = dn(y, mon[$1], $2 + 0) * 86400 + t - off
+      } else if ($1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) {
+        t = hms(substr($1, 12, 8)); z = substr($1, 20); sub(/^\.[0-9]+/, "", z)
+        e = dn(substr($1, 1, 4) + 0, substr($1, 6, 2) + 0, substr($1, 9, 2) + 0) * 86400 + t
+        if (z == "Z") e = e
+        else if (z ~ /^[+-][0-9][0-9]:?[0-9][0-9]$/) { gsub(/:/, "", z); e -= (substr(z, 1, 1) == "-" ? -1 : 1) * (substr(z, 2, 2) * 3600 + substr(z, 4, 2) * 60) }
+        else e -= off
+      }
+      print name "|" src "|" e
+    }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqmatch $1=name|src|epoch file prints domain|src|tool for router lookups that were Kairos's or Astraea's own, and RECENT if one under 10s old was not
+
+selfqmatch()
+{
+  local tf="$1" files
+  files="$(selfqfiles)"
+  awk -F'|' -v r=" $(routeraddrs | tr '\n' ' ') " -v now="$(date +%s)" -v lo="$dnsselfqfloor" -v tf="$tf" '
+    FILENAME != tf {
+      n = tolower($1); c[n]++; ep[n, c[n]] = $3 + 0; tl[n, c[n]] = (FILENAME ~ /astraea/ ? "Astraea" : "Kairos")
+      next
+    }
+    {
+      a = $2; sub(/^::ffff:/, "", a)
+      if (index(r, " " a " ") == 0) next
+      n = tolower($1); sub(/\.$/, "", n); e = $3 + 0; k = $1 "|" $2; seen[k] = 1; hit = ""
+      for (i = 1; i <= c[n]; i++) {
+        d = ep[n, i]
+        if (e > 0 ? (d - e <= 60 && e - d <= 60) : (d >= lo)) { hit = tl[n, i]; break }
+      }
+      if (hit == "") { bad[k] = 1; if (e > 0 && now - e < 10) recent = 1 }
+      else if (!(k in who)) who[k] = hit
+    }
+    END {
+      for (k in seen) if (!(k in bad)) print k "|" who[k]
+      if (recent) print "RECENT"
+    }' $files "$tf"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqfilter $1=pairs file $2=name|src|epoch file splits off the router's Kairos/Astraea lookups into $1.self, keeping device pairs in $1
+
+selfqfilter()
+{
+  local pairs="$1" times="$2" out
+  : > "$pairs.self"
+  dnsselfcount=0
+  [ -n "$(selfqfiles)" ] && [ -s "$times" ] || return 0
+  [ -n "$dnsselfqfloor" ] || dnsselfqfloor=$(( $(date +%s) - 7200 ))
+  out="$(selfqmatch "$times")"
+  case "$out" in
+    *RECENT*) sleep 3; out="$(selfqmatch "$times")" ;;
+  esac
+  dnsselfqfloor=$(( $(date +%s) - 60 ))
+  echo "$out" | grep -v '^RECENT$' | grep . > "$pairs.self"
+  [ -s "$pairs.self" ] || return 0
+  dnsselfcount="$(wc -l < "$pairs.self" | tr -d ' ')"
+  awk -F'|' 'NR == FNR { s[$1 "|" $2] = 1; next } !(($1 "|" $2) in s)' "$pairs.self" "$pairs" > "$pairs.dev"
+  mv -f "$pairs.dev" "$pairs"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqinfo $1=name $2=message logs one INFO line about a router lookup set aside, at most once per name every 6 hours
+
+selfqinfo()
+{
+  local now last
+  now=$(date +%s)
+  last="$(awk -v n="$1" '$1 == n { print $2 }' "$selfqseenfile" 2>/dev/null | tail -n 1)"
+  [ -n "$last" ] && [ $((now - last)) -lt 21600 ] && return 0
+  { awk -v n="$1" -v c=$((now - 21600)) '$1 != n && $2 >= c' "$selfqseenfile" 2>/dev/null; echo "$1 $now"; } > "$selfqseenfile.t"
+  mv -f "$selfqseenfile.t" "$selfqseenfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $2" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# checkdns tails new DNS query log lines since the last check
 
 checkdns()
 {
   dnschecked=0
   dnsqueriedcount=0
+  dnsselfcount=0
 
   [ "$enablednswatch" -eq 1 ] || return
 
@@ -5405,7 +5772,7 @@ checkdns()
 
   if [ "$aghmode" -eq 0 ] && ! dnsquerylogenabled; then
     if [ "$dnsquerylogwarned" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch is enabled but dnsmasq query logging is off - enable it from the Configuration Menu." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: DNS watch is enabled but dnsmasq query logging is off - enable it from the Configuration Menu." >> "$logfile"
       dnsquerylogwarned=1
     fi
     return
@@ -5424,7 +5791,7 @@ checkdns()
     resolvestateroot
     [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
     if [ "$dnslogannounced" != "adguardhome" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading AdGuard Home's query log via its API ($(aghapiurl))." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: DNS watch is reading AdGuard Home's query log via its API ($(aghapiurl))." >> "$logfile"
       dnslogannounced="adguardhome"
     fi
     dnslogshort="AdGuard Home API $(aghapiurl)"
@@ -5437,12 +5804,13 @@ checkdns()
     esac
     # 2 = first run, cursor set to now: still a completed check
     [ "$aghrc" -eq 2 ] && dnslastcheck=$(date +'%H:%M')
-    [ "$aghrc" -eq 0 ] || { rm -f "$dnspairfile.agh"; return; }
+    [ "$aghrc" -eq 0 ] || { rm -f "$dnspairfile.agh" "$dnspairfile.agh.times"; return; }
     dnschecked="$aghqueries"
     dnslastcheck=$(date +'%H:%M')
     querypairs="$(cat "$dnspairfile.agh")"
+    mv -f "$dnspairfile.agh.times" "$dnspairfile.times" 2>/dev/null
     rm -f "$dnspairfile.agh"
-    [ -z "$querypairs" ] && return
+    [ -z "$querypairs" ] && { rm -f "$dnspairfile.times"; return; }
   else
     # dnsmasq: tail its log-queries lines
     local synclog
@@ -5454,14 +5822,14 @@ checkdns()
     [ -f "$synclog" ] || return
 
     if [ "$synclog" != "$dnslogannounced" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: DNS watch is reading $synclog ($dnslogreason)." >> "$logfile"
       dnslogannounced="$synclog"
     fi
     dnslogshort="$synclog"
     [ "${#dnslogshort}" -gt 60 ] && dnslogshort="$(printf '%.59s' "$synclog")>"
 
     if [ "${dnslognonecount:-0}" -ge 2 ] && [ "$dnslognonewarned" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: DNS watch found no dnsmasq query lines in $synclog or any known dnsmasq log. If a syslog-ng/scribe filter or another tool routes dnsmasq to its own file, set that file in Advanced Settings - DNS Watch (DNS query log file)." >> "$logfile"
       dnslognonewarned=1
     fi
     [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
@@ -5511,32 +5879,23 @@ checkdns()
 
     if [ -z "$querypairs" ]; then
       if [ "$dnsmasqlines" -gt 0 ] && [ "$dnsquerymissingwarned" != "1" ]; then
-        echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: DNS watch sees dnsmasq activity in the log but no query[...] lines. Two known causes: (1) log-queries is configured but dnsmasq hasn't picked it up yet - try 'service restart_dnsmasq'; (2) DHCP hands LAN clients a DNS server that isn't this router's own LAN IP, so queries never pass through this dnsmasq at all - check the DHCP Server DNS setting in the web UI if (1) doesn't help." >> "$logfile"
+        echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: DNS watch sees dnsmasq activity in the log but no query[...] lines. Two known causes: (1) log-queries is configured but dnsmasq hasn't picked it up yet - try 'service restart_dnsmasq'; (2) DHCP hands LAN clients a DNS server that isn't this router's own LAN IP, so queries never pass through this dnsmasq at all - check the DHCP Server DNS setting in the web UI if (1) doesn't help." >> "$logfile"
         dnsquerymissingwarned=1
       fi
       return
     fi
     dnsquerymissingwarned=0
+    [ -n "$(selfqfiles)" ] && tail -n "$newlines" "$synclog" | grep -F 'dnsmasq' | dnslogtimes "$(routeraddrs)" > "$dnspairfile.times"
   fi
 
   dnsqueriedcount="$(echo "$querypairs" | wc -l | tr -d ' ')"
 
+  echo "$querypairs" > "$dnspairfile"
+  selfqfilter "$dnspairfile" "$dnspairfile.times"
+  querypairs="$(cat "$dnspairfile")"
+
   if [ "$enablednstunnel" -eq 1 ]; then
-    echo "$querypairs" | awk -F'|' -v namelen="$dnstunnelnamelen" '
-      {
-        domain=$1; src=$2
-        n=split(domain, parts, ".")
-        if (n>=2) base=parts[n-1]"."parts[n]; else base=domain
-        count[src"|"base]++
-        if (length(domain) >= namelen) print "LONG|"src"|"domain"|"base
-      }
-      END {
-        for (k in count) {
-          split(k, kk, "|")
-          print "VOL|"kk[1]"|"kk[2]"|"count[k]
-        }
-      }
-    ' | while IFS='|' read -r kind srcip a b; do
+    [ -n "$querypairs" ] && echo "$querypairs" | dnstunnelscan | while IFS='|' read -r kind srcip a b; do
       case "$kind" in
         LONG)
           indnsexceptionlist "$a" && continue
@@ -5548,9 +5907,15 @@ checkdns()
           ;;
       esac
     done
+    [ -s "$dnspairfile.self" ] && cut -d'|' -f1,2 "$dnspairfile.self" | dnstunnelscan | while IFS='|' read -r kind srcip a b; do
+      case "$kind" in
+        LONG) selfqinfo "tunnel:$a" "Unusually long DNS query name $a from the router ($srcip) was $(selfqwhat "$(selfqtool "$dnspairfile.self" "$srcip" "$a")") - no tunneling alert raised." ;;
+        VOL)  [ "$b" -ge "$dnstunnelsubthreshold" ] && selfqinfo "tunnel:$a" "$b distinct subdomains of $a looked up by the router ($srcip) were $(selfqwhat "$(selfqtool "$dnspairfile.self" "$srcip" "$a" base)") - no tunneling alert raised." ;;
+      esac
+    done
   fi
 
-  echo "$querypairs" > "$dnspairfile"
+  [ -s "$dnspairfile.self" ] && cut -d'|' -f1,2 "$dnspairfile.self" >> "$dnspairfile"
   set -- "$dnspairfile"
   [ -s "$domainsfile" ] && set -- "$@" "$domainsfile"
   [ -s "$qfdomfile" ] && set -- "$@" "$qfdomfile"
@@ -5569,13 +5934,61 @@ checkdns()
       for (d in msrc) { n = split(srcs[d], sl, ","); for (i = 1; i <= n; i++) print sl[i]"|"d"|"msrc[d]"|"mfam[d] }
     }
   ' "$@" | while IFS='|' read -r srcip matcheddomain source family; do
+    selftool=""
+    [ -s "$dnspairfile.self" ] && selftool="$(selfqtool "$dnspairfile.self" "$srcip" "$matcheddomain")"
     if indnsexceptionlist "$matcheddomain"; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: DNS query for $matcheddomain from $srcip matched the $source IoC feed but is on the DNS exception list - no alert raised." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: DNS query for $matcheddomain from $srcip matched the $source IoC feed but is on the DNS exception list - no alert raised." >> "$logfile"
+    elif [ -n "$selftool" ]; then
+      selfqinfo "feed:$matcheddomain" "DNS query for $matcheddomain from the router ($srcip) matched the $source IoC feed but was $(selfqwhat "$selftool") - no alert raised."
     else
       raisealert "dns" "${srcip}->${matcheddomain}" "$source" "$family" "$matcheddomain"
     fi
   done
-  rm -f "$dnspairfile"
+  rm -f "$dnspairfile" "$dnspairfile.self" "$dnspairfile.times"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnstunnelscan reads domain|src pairs on stdin and prints LONG|src|domain|base and VOL|src|base|count tunneling candidates
+
+dnstunnelscan()
+{
+  awk -F'|' -v namelen="$dnstunnelnamelen" '
+    {
+      domain=$1; src=$2
+      n=split(domain, parts, ".")
+      if (n>=2) base=parts[n-1]"."parts[n]; else base=domain
+      count[src"|"base]++
+      if (length(domain) >= namelen) print "LONG|"src"|"domain"|"base
+    }
+    END {
+      for (k in count) {
+        split(k, kk, "|")
+        print "VOL|"kk[1]"|"kk[2]"|"count[k]
+      }
+    }
+  '
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqtool $1=self file $2=src $3=name prints which add-on made that router lookup ($4=base: any name under $3), "Kairos and Astraea" if both
+
+selfqtool()
+{
+  awk -F'|' -v s="$2" -v d="$3" -v b="$4" '
+    $2 == s && ($1 == d || (b != "" && substr("." $1, length($1) - length(d) + 1) == "." d)) { t[$3] = 1 }
+    END { if (("Kairos" in t) && ("Astraea" in t)) print "Kairos and Astraea"; else for (k in t) print k }' "$1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqwhat $1=add-on name prints how a set-aside router lookup is described in the log
+
+selfqwhat()
+{
+  case "$1" in
+    Astraea) echo "Astraea's own certificate check" ;;
+    Kairos) echo "Kairos's own lookup (time servers and DNS checks)" ;;
+    *) echo "Kairos's and Astraea's own lookups" ;;
+  esac
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5639,12 +6052,12 @@ checkauth()
         mv "$olddropbearlog" "$dropbearlogfile"
       fi
       rm -f "$olddropbearlog"
-      trimlogfile "$dropbearlogfile" "$logsize"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Migrated dropbear_attempts.log from JFFS to the state folder on the feed storage location." >> "$logfile"
+      rotatelogfile "$dropbearlogfile" "$logsize"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Migrated dropbear_attempts.log from JFFS to the state folder on the feed storage location." >> "$logfile"
     fi
     if grep -qE '^[A-Z][a-z][a-z] +[0-9]+ [0-9][0-9]:' "$dropbearlogfile" 2>/dev/null; then
       syslogaddyear < "$dropbearlogfile" > "${dropbearlogfile}.tmp" && mv -f "${dropbearlogfile}.tmp" "$dropbearlogfile"
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added the year to existing dropbear_attempts.log dates." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Added the year to existing dropbear_attempts.log dates." >> "$logfile"
     fi
   fi
 
@@ -5660,7 +6073,7 @@ checkauth()
       awk '!seenline[$0]++' "$dropbearlogfile" > "/tmp/iocmon_dbdedupe.$$" && mv "/tmp/iocmon_dbdedupe.$$" "$dropbearlogfile"
     fi
     [ -n "$stateroot" ] && : > "$stateroot/auth_slow_dropbear.db"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Dropbear attempt ledger initialized - de-duplicated the existing dropbear log and reset the sustained-attempt counter." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Dropbear attempt ledger initialized - de-duplicated the existing dropbear log and reset the sustained-attempt counter." >> "$logfile"
   fi
   if [ "$hdfirst" -eq 1 ]; then
     httpdlines=""
@@ -5669,7 +6082,7 @@ checkauth()
 
   if [ -n "$dropbearlines" ] && [ -n "$dropbearlogfile" ]; then
     echo "$dropbearlines" | syslogaddyear >> "$dropbearlogfile"
-    trimlogfile "$dropbearlogfile" "$logsize"
+    rotatelogfile "$dropbearlogfile" "$logsize"
   fi
   dropbearips="$(echo "$dropbearlines" | grep -oE 'from [0-9]{1,3}(\.[0-9]{1,3}){3}' | awk '{print $2}')"
 
@@ -5731,7 +6144,11 @@ checknvram()
 
   echo "__recorded=$(date +'%b %d %Y %X')" > "$newbaseline"
   for var in $nvramwatchvars; do
-    newval="$(nvram get "$var" 2>/dev/null | tr '\n' ' ')"
+    if ! nvramget "$var"; then
+      grep "^${var}=" "$baseline" >> "$newbaseline" 2>/dev/null
+      continue
+    fi
+    newval="$(printf '%s\n' "$nvramval" | tr '\n' ' ')"
     newval="${newval% }"
     echo "${var}=${newval}" >> "$newbaseline"
 
@@ -5759,7 +6176,7 @@ quarantinefile()
 
   chmod -x "$path" 2>/dev/null
   mv "$path" "${path}.iocmon-quarantine" 2>/dev/null
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Quarantined $path -> ${path}.iocmon-quarantine (execute bit stripped, not deleted)." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Quarantined $path -> ${path}.iocmon-quarantine (execute bit stripped, not deleted)." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -5819,7 +6236,7 @@ hashmatchcheck()
     else
       echo "${hashlogprefix} | no match" >> "$hashchecklogfile"
     fi
-    trimlogfile "$hashchecklogfile" "$logsize"
+    rotatelogfile "$hashchecklogfile" "$logsize"
   fi
 
   [ -z "$match" ] && return
@@ -6116,11 +6533,11 @@ checkfsintegrity()
   } > "$scansummary"
 
   if [ -s "$scanerrors" ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Filesystem-integrity scan hit $(wc -l < "$scanerrors" | tr -d ' ') find error(s) - see $scanerrors on the router. First: $(head -n1 "$scanerrors")" >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Filesystem-integrity scan hit $(wc -l < "$scanerrors" | tr -d ' ') find error(s) - see $scanerrors on the router. First: $(head -n1 "$scanerrors")" >> "$logfile"
   fi
 
   if [ -z "$dircount" ] || [ "$dircount" -eq 0 ]; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Filesystem-integrity scan found none of the configured fswatchdirs on disk - check the path list in Advanced Settings." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Filesystem-integrity scan found none of the configured fswatchdirs on disk - check the path list in Advanced Settings." >> "$logfile"
     rm -f "$newmarker"
     touch "$lastnewfile" "$lastmodfile" "$lastdelfile" "$lastpermfile"
     return
@@ -6146,7 +6563,7 @@ checkfsintegrity()
       mv "$newpermbaseline" "$permbaseline"
     fi
     touch "$lastnewfile" "$lastmodfile" "$lastdelfile" "$lastpermfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Filesystem-integrity baseline established ($fsscannedcount files across $dircount directories)." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Filesystem-integrity baseline established ($fsscannedcount files across $dircount directories)." >> "$logfile"
     return
   fi
 
@@ -6235,10 +6652,10 @@ checkfsintegrity()
   [ -s "$modpathsfile" ] && sed "s#^#${scandate} #" "$modpathsfile" >> "$lastmodfile"
   [ -s "$delpathsfile" ] && sed "s#^#${scandate} #" "$delpathsfile" >> "$lastdelfile"
   [ -s "$permchangesfile" ] && cut -f1 "$permchangesfile" | sed "s#^#${scandate} #" >> "$lastpermfile"
-  trimlogfile "$lastnewfile" "$logsize"
-  trimlogfile "$lastmodfile" "$logsize"
-  trimlogfile "$lastdelfile" "$logsize"
-  trimlogfile "$lastpermfile" "$logsize"
+  rotatelogfile "$lastnewfile" "$logsize"
+  rotatelogfile "$lastmodfile" "$logsize"
+  rotatelogfile "$lastdelfile" "$logsize"
+  rotatelogfile "$lastpermfile" "$logsize"
 
   {
     printf '[%s1%s] New files list: %s (%s new entries)\n' "$CGreen" "$CClear" "$lastnewfile" "$fsnewcount"
@@ -6247,7 +6664,7 @@ checkfsintegrity()
     printf '[%s4%s] Permission-changed files list: %s (%s new entries)\n' "$CGreen" "$CClear" "$lastpermfile" "$fspermcount"
   } >> "$scansummary"
 
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Filesystem-integrity scan complete: $fsscannedcount files scanned across $dircount directories; $fsnewcount new and $fsmodcount modified file(s) checked against known-malware hashes; $fsdelcount deletion(s) detected in critical watched paths; $fspermcount permission-only change(s) detected." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Filesystem-integrity scan complete: $fsscannedcount files scanned across $dircount directories; $fsnewcount new and $fsmodcount modified file(s) checked against known-malware hashes; $fsdelcount deletion(s) detected in critical watched paths; $fspermcount permission-only change(s) detected." >> "$logfile"
 
   if [ ! -s "$newpathsfile" ] && [ ! -s "$modpathsfile" ] && [ ! -s "$delpathsfile" ] && [ ! -s "$permchangesfile" ]; then
     rm -f "$newpathsfile" "$modpathsfile" "$delpathsfile" "$permchangesfile" "$sizechangesfile"
@@ -6328,7 +6745,8 @@ checkcronbaseline()
 
   local newcron="$stateroot/cron_baseline.db.new" oldcron="$stateroot/cron_baseline.db" newentries
 
-  cru l 2>/dev/null | sort > "$newcron"
+  crul || return
+  printf '%s\n' "$cruout" | sed '/^$/d' | sort > "$newcron"
 
   if [ ! -s "$oldcron" ]; then
     mv "$newcron" "$oldcron"
@@ -6343,7 +6761,7 @@ checkcronbaseline()
   echo "$newentries" | while IFS= read -r entry; do
     [ -z "$entry" ] && continue
     if incronexceptionlist "$entry"; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: New cru entry matches the cron exceptions list, not alerting: $entry" >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: New cru entry matches the cron exceptions list, not alerting: $entry" >> "$logfile"
       continue
     fi
     raisealert "cron" "$entry" "cru" "unexpected new cron entry"
@@ -6381,7 +6799,7 @@ checkentwarecron()
   echo "$newentries" | while IFS= read -r entry; do
     [ -z "$entry" ] && continue
     if incronexceptionlist "$entry"; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: New Entware cron entry matches the cron exceptions list, not alerting: $entry" >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: New Entware cron entry matches the cron exceptions list, not alerting: $entry" >> "$logfile"
       continue
     fi
     raisealert "cron" "$entry" "entware-cron" "unexpected new Entware cron entry"
@@ -6445,7 +6863,7 @@ checketccritical()
       [ -n "$h" ] && printf '%s\t%s\n' "$path" "$h" >> "$hashdb"
     done < "$curlist"
     rm -f "$curlist"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Critical /etc baseline established ($(wc -l < "$hashdb" | tr -d ' ') file(s))." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Critical /etc baseline established ($(wc -l < "$hashdb" | tr -d ' ') file(s))." >> "$logfile"
     return
   fi
 
@@ -6503,7 +6921,7 @@ fsintegrityunlock()
 runfsintegrityscan()
 {
   if ! fsintegritylock; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Filesystem-integrity scan skipped - another scan is already in progress." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Filesystem-integrity scan skipped - another scan is already in progress." >> "$logfile"
     return 1
   fi
   checkfsintegrity
@@ -6779,7 +7197,7 @@ votxreport()
     fi
 
     resolvestateroot
-    if [ -z "$stateroot" ] || [ ! -s "$stateroot/ioc_alerts.log" ]; then
+    if [ -z "$stateroot" ] || [ -z "$(logall "$stateroot/ioc_alerts.log" | head -n1)" ]; then
       clear
       echo -e "${CRed}No IoC detection history is available yet (no feed storage location resolved, or nothing logged).${CClear}"
       echo ""
@@ -6788,7 +7206,7 @@ votxreport()
       continue
     fi
 
-    logdays="$(awk -F'|' '
+    logdays="$(logall "$stateroot/ioc_alerts.log" | awk -F'|' '
       BEGIN {
         split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
         for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
@@ -6814,11 +7232,11 @@ votxreport()
         seen = 1
       }
       END { print (seen == 0 ? 1 : maxday - minday + 1) }
-    ' "$stateroot/ioc_alerts.log")"
+    ')"
 
     datafile="/tmp/iocmon_otxreport.$$"
     if [ "$sortmode" = "date" ]; then
-      awk -F'|' -v startday="$startday" -v endday="$endday" '
+      logall "$stateroot/ioc_alerts.log" | awk -F'|' -v startday="$startday" -v endday="$endday" '
         BEGIN {
           split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
           for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
@@ -6852,12 +7270,12 @@ votxreport()
           key = dn * 86400 + (tp[1] + 0) * 3600 + (tp[2] + 0) * 60 + (tp[3] + 0)
           printf "%d\t%04d-%02d-%02d %s\t%s\t%s\t%s\t%s\n", key, dp[3] + 0, mon, dp[2] + 0, substr(dp[4], 1, 5), parts[2], srcpart, detpart, parts[1]
         }
-      ' "$stateroot/ioc_alerts.log" | sort -rn > "$datafile"
+      ' | sort -rn > "$datafile"
       rowtotal="$(wc -l < "$datafile" | tr -d ' ')"
       eventtotal="$rowtotal"
       iptotal="$(awk -F"$tab" '{print $3}' "$datafile" | sort -u | wc -l | tr -d ' ')"
     else
-      awk -F'|' -v startday="$startday" -v endday="$endday" '
+      logall "$stateroot/ioc_alerts.log" | awk -F'|' -v startday="$startday" -v endday="$endday" '
         BEGIN {
           split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", marr, " ")
           for (i = 1; i <= 12; i++) monthnum[marr[i]] = i
@@ -6897,7 +7315,7 @@ votxreport()
         END {
           for (ip in count) print count[ip] "\t" ip "\t" srcfeed[ip] "\t" famset[ip] "\t" srcset[ip] "\t" events
         }
-      ' "$stateroot/ioc_alerts.log" | sort -rn > "$datafile"
+      ' | sort -rn > "$datafile"
       rowtotal="$(wc -l < "$datafile" | tr -d ' ')"
       [ "$rowtotal" -gt 0 ] && eventtotal="$(awk -F"$tab" '{print $6}' "$datafile" | head -n1)"
       iptotal="$rowtotal"
@@ -7011,7 +7429,7 @@ clearalertpending()
   resolvestateroot
   if [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     rm -f "$stateroot/alert_pending"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Security alert banner acknowledged$1." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Security alert banner acknowledged$1." >> "$logfile"
   fi
 }
 
@@ -7052,7 +7470,7 @@ addtodnsexception()
   else
     dnsexceptions="${dnsexceptions:+$dnsexceptions }$base"
     saveconfig
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Added $base to dnsexceptions via the (Z) hotkey (entry #$origkey: $domain)." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Added $base to dnsexceptions via the (Z) hotkey (entry #$origkey: $domain)." >> "$logfile"
     echo ""
     echo -e "${CGreen}Added ${base} to the DNS Exceptions list.${CClear}"
   fi
@@ -7081,13 +7499,13 @@ vioclog()
     [ -n "$stateroot" ] && viewfile="$stateroot/ioc_alerts.log"
   fi
 
-  if [ -z "$viewfile" ] || [ ! -s "$viewfile" ]; then
+  if [ -z "$viewfile" ] || [ -z "$(logall "$viewfile" | head -n1)" ]; then
     clear
     echo -e "${CYellow}${emptymsg}${CClear}"
     echo ""
     read -rsp $'Press any key to continue...\n' -n1 key
   else
-    openeditor "$viewfile"
+    openlogview "$viewfile"
   fi
   renderdashboard
 }
@@ -7129,14 +7547,15 @@ clearcurrentlog()
   clear
   echo -e "${CGreen}[Clear $viewlabel Log]${CClear}"
   echo ""
-  echo -e "This erases $viewfile. This is irreversible."
+  echo -e "This erases $viewfile and its rotated copies. This is irreversible."
   echo ""
   if promptyn "Do you wish to proceed? [y/n]: "; then
     : > "$viewfile"
+    logremoverotated "$viewfile"
     echo ""
     echo ""
     echo -e "${CGreen}Log cleared.${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $viewlabel log cleared via (R) hotkey." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $viewlabel log cleared via (R) hotkey." >> "$logfile"
     sleep 1
   fi
   renderdashboard
@@ -7151,7 +7570,8 @@ clearcurrentlognow()
 
   if [ -n "$viewfile" ]; then
     : > "$viewfile"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: $viewlabel log cleared via (R!) instant-clear hotkey." >> "$logfile"
+    logremoverotated "$viewfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $viewlabel log cleared via (R!) instant-clear hotkey." >> "$logfile"
   fi
   renderdashboard
   [ -n "$viewfile" ] && echo -e "${CGreen}$viewlabel log cleared.${CClear}"
@@ -7174,13 +7594,13 @@ vfslastfile()
     esac
   fi
 
-  if [ -z "$viewfile" ] || [ ! -s "$viewfile" ]; then
+  if [ -z "$viewfile" ] || [ -z "$(logall "$viewfile" | head -n1)" ]; then
     clear
     echo -e "${CYellow}No $label have been logged yet.${CClear}"
     echo ""
     read -rsp $'Press any key to continue...\n' -n1 key
   else
-    openeditor "$viewfile"
+    openlogview "$viewfile"
   fi
   renderdashboard
 }
@@ -7225,7 +7645,7 @@ testdetection()
     echo -e "Simulating a detection of ${CGreen}${simindicator}${CClear} (from the ${CGreen}${simsource}${CClear} feed)..."
     echo ""
     raisealert "simulated" "$simindicator" "$simsource" "$simfamily - SIMULATED TEST via (T) hotkey, not a real detection"
-    local testrepip="$repip" testrepreason="$repreason"
+    local testrepip="$repip" testrepreason="$repreason" testintel="$inteltag"
     flushemailbatch
     blanklineguard
     if [ "$enableabuseipdb" != "1" ] || [ -z "$abuseipdbapikey" ]; then
@@ -7236,6 +7656,7 @@ testdetection()
     else
       echo -e "${CYellow}AbuseIPDB reputation check (SIMULATED TEST): not checked - ${testrepreason:-no lookup was made}.${CClear}"
     fi
+    [ -n "$testintel" ] && echo -e "${CYellow}Astraea certificate intel (information only):${CClear} ${testintel#Astraea }"
     echo ""
     echo -e "${CGreen}Simulated detection logged. Check the IoC log ((V) from the main screen), the Reputation log ((U)) and the red banner${CClear}"
     echo -e "${CGreen}on the main screen to confirm the alert pipeline is working; press (A) there to acknowledge it.${CClear}"
@@ -7254,21 +7675,22 @@ schedulecron()
   which cru >/dev/null 2>&1 || return
 
   local crulist updatecmd feedscmd fsintcmd
-  crulist="$(cru l 2>/dev/null)"
+  crul
+  crulist="$cruout"
   updatecmd="$schedulemin $schedulehrs * * * sh $apppath -autoupdate"
   feedscmd="0 */$feedupdatehrs * * * sh $apppath -updatefeeds"
   fsintcmd="0 */$fsintegrityhrs * * * sh $apppath -fsintegrity"
 
   local wantedlines=""
   if [ "$schedule" -eq 1 ]; then
-    echo "$crulist" | grep -qF "$updatecmd #IOCMONUpdate#" || { cru d IOCMONUpdate >/dev/null 2>&1; cru a IOCMONUpdate "$updatecmd"; }
+    echo "$crulist" | grep -qF "$updatecmd #IOCMONUpdate#" || { $timeoutcmd$timeoutsec cru d IOCMONUpdate >/dev/null 2>&1; $timeoutcmd$timeoutsec cru a IOCMONUpdate "$updatecmd"; }
     wantedlines="cru a IOCMONUpdate \"$updatecmd\" # iocmon-cron
 "
   else
-    echo "$crulist" | grep -q '#IOCMONUpdate#' && cru d IOCMONUpdate >/dev/null 2>&1
+    echo "$crulist" | grep -q '#IOCMONUpdate#' && $timeoutcmd$timeoutsec cru d IOCMONUpdate >/dev/null 2>&1
   fi
-  echo "$crulist" | grep -qF "$feedscmd #IOCMONFeeds#" || { cru d IOCMONFeeds >/dev/null 2>&1; cru a IOCMONFeeds "$feedscmd"; }
-  echo "$crulist" | grep -qF "$fsintcmd #IOCMONFsIntegrity#" || { cru d IOCMONFsIntegrity >/dev/null 2>&1; cru a IOCMONFsIntegrity "$fsintcmd"; }
+  echo "$crulist" | grep -qF "$feedscmd #IOCMONFeeds#" || { $timeoutcmd$timeoutsec cru d IOCMONFeeds >/dev/null 2>&1; $timeoutcmd$timeoutsec cru a IOCMONFeeds "$feedscmd"; }
+  echo "$crulist" | grep -qF "$fsintcmd #IOCMONFsIntegrity#" || { $timeoutcmd$timeoutsec cru d IOCMONFsIntegrity >/dev/null 2>&1; $timeoutcmd$timeoutsec cru a IOCMONFsIntegrity "$fsintcmd"; }
   wantedlines="${wantedlines}cru a IOCMONFeeds \"$feedscmd\" # iocmon-cron
 cru a IOCMONFsIntegrity \"$fsintcmd\" # iocmon-cron"
 
@@ -7319,7 +7741,7 @@ autostart()
 
 webuilog()
 {
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - $1: $2" >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - $1: $2" >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -7451,7 +7873,8 @@ webuiaddtab()
 webuimount()
 {
   local page
-  if ! nvram get rc_support 2>/dev/null | grep -q am_addons; then
+  nvramget rc_support
+  if ! printf '%s\n' "$nvramval" | grep -q am_addons; then
     webuilog "ERROR" "Web interface: this firmware has no add-on page support."
     return 1
   fi
@@ -7624,7 +8047,8 @@ vwebuitoggle()
 
 webuienable()
 {
-  if ! nvram get rc_support 2>/dev/null | grep -q am_addons; then
+  nvramget rc_support
+  if ! printf '%s\n' "$nvramval" | grep -q am_addons; then
     echo ""
     echo -e "${CRed}This firmware has no add-on page support - 386.1 or later is required.${CClear}"
     return 1
@@ -7696,13 +8120,13 @@ webrecent()
 webpublishlog()
 {
   local dst="$webuidir/$1.htm" sigfile="$webuidir/.$1.sig" sig
-  if [ -z "$2" ] || [ ! -f "$2" ]; then
+  if [ -z "$2" ] || { [ ! -f "$2" ] && [ ! -f "$2.1" ]; }; then
     rm -f "$dst" "$sigfile"
     return
   fi
-  sig="$(ls -ln "$2" 2>/dev/null)"
+  sig="$(ls -ln "$2" "$2.1" 2>/dev/null)"
   [ -f "$dst" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ] && return
-  { echo "iocmon=1"; tail -n "$3" "$2" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
+  { echo "iocmon=1"; logall "$2" | tail -n "$3" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
   mv -f "$webuidir/.$1.tmp.$$" "$dst"
   echo "$sig" > "$sigfile"
 }
@@ -7747,7 +8171,7 @@ webpublish()
     echo "ts=$(date +%s)"
     echo "time=$(date +'%b %d %Y %X')"
     echo "loop=$timerloop"
-    echo "hostname=$(nvram get lan_hostname)"
+    echo "hostname=$(_GetLAN_HostName_)"
     echo "model=$routermodel"
     echo "uptime=$routeruptime"
     echo "track=$track"
@@ -7979,8 +8403,8 @@ webjobfull()
     reputation) src="reputation.log" ;;
   esac
   rm -f "$webuidir"/full-*.htm
-  if [ ! -s "$stateroot/$src" ]; then webjobmsg="Nothing has been logged yet."; return 1; fi
-  { echo "iocmon=1"; tail -n "$webuifullrows" "$stateroot/$src" | webcleanlog; } > "$webuidir/.full.tmp"
+  if [ -z "$(logall "$stateroot/$src" | head -n1)" ]; then webjobmsg="Nothing has been logged yet."; return 1; fi
+  { echo "iocmon=1"; logall "$stateroot/$src" | tail -n "$webuifullrows" | webcleanlog; } > "$webuidir/.full.tmp"
   mv -f "$webuidir/.full.tmp" "$dst"
   date +%s > "$webuidir/.full.ts"
   webjobmsg="$(($(wc -l < "$dst") - 1)) row(s) loaded."
@@ -8071,7 +8495,7 @@ webaction()
 vresetdefaults()
 {
   clear
-  echo -e "${InvGreen} ${InvDkGray}${CWhite} 5. Reset IOCMON to Default Settings                                                                                                     ${CClear}"
+  echo -e "${InvGreen} ${InvDkGray}${CWhite} 6. Reset IOCMON to Default Settings                                                                                                     ${CClear}"
   echo -e "${InvGreen} ${CClear}"
   echo -e "${InvGreen} ${CClear} This erases $config and restarts IOCMON: every toggle, threshold, and list (watched/excluded paths, cron/DNS${CClear}"
   echo -e "${InvGreen} ${CClear} exceptions, feed sources, etc.) reverts to its shipped default, and you will be walked through initial setup (drive selection) again.${CClear}"
@@ -8145,9 +8569,9 @@ applyimportedconfig()
   fswatchdirs="$newfswatchdirs"
 
   saveconfig
-  [ "$translated" -eq 1 ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Imported fswatchdirs entries were adjusted to this router's own drive label." >> "$logfile"
-  [ -n "$keptkeys" ] && echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: The imported settings had no $keptkeys API key(s) - this router's own key(s) were kept." >> "$logfile"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Settings imported from $importfile." >> "$logfile"
+  [ "$translated" -eq 1 ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Imported fswatchdirs entries were adjusted to this router's own drive label." >> "$logfile"
+  [ -n "$keptkeys" ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: The imported settings had no $keptkeys API key(s) - this router's own key(s) were kept." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Settings imported from $importfile." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -8163,7 +8587,7 @@ exportiocmonconfig()
 
   resolveiocmonroot
   if [ -n "$iocmonroot" ] && [ -d "$iocmonroot" ]; then defaultdir="$iocmonroot"; else defaultdir="$addonsdir"; fi
-  defaultname="$(nvram get lan_hostname)-config-export.ioc"
+  defaultname="$(_GetLAN_HostName_)-config-export.ioc"
 
   echo -e "Default: ${CGreen}${defaultdir}/${defaultname}${CClear}"
   read -p "Full path and filename to export to (blank = default above): " exportpath
@@ -8192,14 +8616,14 @@ exportiocmonconfig()
   echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys and the AdGuard Home logins in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
-  { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(nvram get lan_hostname)"
+  { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(_GetLAN_HostName_)"
     cat "$config"
   } > "$exportpath"
   [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
-  echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Settings exported to $exportpath (API keys $([ "$includekeys" -eq 1 ] && echo included || echo excluded))." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Settings exported to $exportpath (API keys $([ "$includekeys" -eq 1 ] && echo included || echo excluded))." >> "$logfile"
   echo ""
   read -rsp $'Press any key to continue...\n' -n1 key
 }
@@ -8253,7 +8677,7 @@ vimportexport()
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 6. Import/Export IOCMON Settings                                                                                                        ${CClear}"
+    echo -e "${InvGreen} ${InvDkGray}${CWhite} 7. Import/Export IOCMON Settings                                                                                                        ${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Export the current configuration (every toggle, threshold, and exclusion list) to a portable .ioc file, or import one from a previous${CClear}"
     echo -e "${InvGreen} ${CClear} install or another router.${CClear}"
@@ -8282,17 +8706,17 @@ vimportexport()
 
 vupdate()
 {
-  local trackdisp remoteversion remotelabel remoteurl selupdate
+  local trackdisp tracklabel remoteversion remotelabel remoteurl selupdate
 
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     updatecheck
     betacheck
 
-    if [ "$track" = "0" ]; then trackdisp="Stable"; else trackdisp="Beta"; fi
+    if [ "$track" = "0" ]; then trackdisp="Stable"; tracklabel="STABLE"; else trackdisp="Beta"; tracklabel="BETA"; fi
 
     clear
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 7. Update IOCMON                                                                                                                        ${CClear}"
+    echo -e "${InvGreen} ${InvDkGray}${CWhite} 8. Update IOCMON                                                                                                                        ${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Checks for and installs the latest IOCMON script from your preferred Stable or Beta track.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
@@ -8311,10 +8735,14 @@ vupdate()
 
     resolveupdatesource
 
-    if [ -n "$remoteversion" ] && [ "$version" = "$remoteversion" ]; then
-      echo -e "You are on the latest ${CGreen}${remotelabel}${CClear} version! Download & overwrite, or change tracks?"
+    if [ -z "$remoteversion" ]; then
+      echo -e "The latest ${CGreen}${tracklabel}${CClear} version could not be checked. Download anyway, or change tracks?"
     else
-      echo -e "A new ${CGreen}${remotelabel}${CClear} version is available! Download & upgrade, or change tracks?"
+      case "$(vercompare "$version" "$remoteversion")" in
+        eq) echo -e "You are on the latest ${CGreen}${tracklabel}${CClear} version! Download & overwrite, or change tracks?" ;;
+        gt) echo -e "No update available: v$version is newer than the latest ${CGreen}${tracklabel}${CClear} version (v$remoteversion). Download & go back to v$remoteversion, or change tracks?" ;;
+        *) echo -e "A new ${CGreen}${tracklabel}${CClear} version (v$remoteversion) is available! Download & upgrade, or change tracks?" ;;
+      esac
     fi
     read -p "(Stable = 0, Beta = 1, Download = y/n, e=Exit): " selupdate
     case "$selupdate" in
@@ -8364,7 +8792,7 @@ installentwarepkg()
   if [ ! -x /opt/bin/opkg ]; then
     echo -e "${CRed}ERROR: Entware was not found on this router.${CClear}"
     echo -e "Please install Entware using the AMTM utility first, then return to this menu."
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Entware was not found installed on router. Please investigate." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Entware was not found installed on router. Please investigate." >> "$logfile"
     echo ""
     read -rsp $'Press any key to continue...\n' -n1 key
     return
@@ -8384,10 +8812,109 @@ installentwarepkg()
     done
     echo ""
     echo -e "${CGreen}Install complete.${CClear}"
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Optional Entware package(s) installed: $pkgs" >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Optional Entware package(s) installed: $pkgs" >> "$logfile"
     echo ""
     read -rsp $'Press any key to continue...\n' -n1 key
   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# timedprompt shows $2 with a live countdown of $3 seconds; mode $1 "yn" returns 0 yes, 1 no, 2 no answer; "key" ends on any key
+
+timedprompt()
+{
+  local mode="$1" text="$2" deadline left key rc answer=""
+  deadline=$(( $(date +%s) + $3 ))
+  while true; do
+    left=$(( deadline - $(date +%s) ))
+    if [ "$left" -le 0 ]; then
+      printf '\n'
+      return 2
+    fi
+    if [ "$mode" = "yn" ]; then
+      printf '\r\033[K%s %ss: %s' "$text" "$left" "$answer"
+    else
+      printf '\r\033[K%s %ss...' "$text" "$left"
+    fi
+    key=""
+    read -rs -n 1 -t 1 key
+    rc=$?
+    if [ "$rc" -ne 0 ] && [ -z "$key" ]; then
+      [ "$(date +%s)" -le $(( deadline - left )) ] && sleep 1
+      continue
+    fi
+    if [ "$mode" != "yn" ]; then
+      printf '\n'
+      return 0
+    fi
+    case "$key" in
+      [Yy]) answer="y" ;;
+      [Nn]) answer="n" ;;
+      "") [ -n "$answer" ] && break ;;
+      *) answer="" ;;
+    esac
+  done
+  printf '\n'
+  [ "$answer" = "y" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# checktimeoutbin offers at startup to install the required Entware timeout binary, carrying on without it after 60s or a no
+
+checktimeoutbin()
+{
+  local yn key
+  _SetUpTimeoutCmdVars_
+  [ -f /opt/bin/timeout ] && return 0
+
+  setupbanner "Required Entware Component: timeout" \
+    "IOCMON needs Entware's ${CGreen}timeout${CClear} command (package ${CGreen}${timeoutpkg}${CClear}). On some firmware builds an 'nvram' or 'cru' call can hang and" \
+    "never return. timeout stops such a call after 10 seconds, so IOCMON keeps running and reuses the last value it read. Without it, a" \
+    "hung call stalls IOCMON until it is restarted. It can also be installed later from Configuration Menu item 9."
+
+  if [ ! -x /opt/bin/opkg ]; then
+    echo -e "${CRed}ERROR: Entware was not found on this router.${CClear}"
+    echo -e "Please install Entware using the AMTM utility, then restart IOCMON to install ${timeoutpkg}."
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: The required Entware package $timeoutpkg is missing and Entware is not installed - nvram and cru calls run without a time limit." >> "$logfile"
+    echo ""
+    timedprompt key "Press any key to continue - continuing on its own in" 60
+    return 1
+  fi
+
+  echo -e "Install ${timeoutpkg} now? Type y or n, then press Enter. IOCMON carries on without it when the countdown ends."
+  timedprompt yn "[y/n] - continuing without it in" 60
+  yn=$?
+  echo ""
+  case "$yn" in
+    0)
+      echo -e "${CGreen}Updating Entware package lists...${CClear}"
+      echo ""
+      opkg update
+      echo ""
+      echo -e "Installing Entware ${CGreen}${timeoutpkg}${CClear}..."
+      echo ""
+      opkg install "$timeoutpkg"
+      echo ""
+      _SetUpTimeoutCmdVars_
+      if [ -f /opt/bin/timeout ]; then
+        echo -e "${CGreen}Install complete.${CClear}"
+        echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Required Entware package installed: $timeoutpkg" >> "$logfile"
+        sleep 2
+        return 0
+      fi
+      echo -e "${CRed}ERROR: ${timeoutpkg} did not install - IOCMON will carry on without it.${CClear}"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The required Entware package $timeoutpkg failed to install - nvram and cru calls run without a time limit." >> "$logfile"
+      sleep 3
+      ;;
+    *)
+      [ "$yn" = 2 ] && echo -e "${CYellow}No answer within 60 seconds.${CClear}"
+      echo ""
+      echo -e "${CYellow}Continuing without ${timeoutpkg}. You will be asked again the next time IOCMON starts.${CClear}"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: The required Entware package $timeoutpkg is not installed - nvram and cru calls run without a time limit." >> "$logfile"
+      sleep 2
+      ;;
+  esac
+  return 1
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -8395,7 +8922,7 @@ installentwarepkg()
 
 ventwarecomponents()
 {
-  local screenstatus findstatus jqstatus selentware
+  local screenstatus findstatus jqstatus timeoutstatus selentware
 
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
@@ -8403,11 +8930,12 @@ ventwarecomponents()
     if [ -x /opt/sbin/screen ]; then screenstatus="${CGreen}Installed${CClear}"; else screenstatus="${CYellow}Not installed${CClear}"; fi
     if [ -x /opt/bin/find ]; then findstatus="${CGreen}Installed${CClear}"; else findstatus="${CYellow}Not installed${CClear}"; fi
     if which jq >/dev/null 2>&1; then jqstatus="${CGreen}Installed${CClear}"; else jqstatus="${CYellow}Not installed${CClear}"; fi
+    if [ -f /opt/bin/timeout ]; then timeoutstatus="${CGreen}Installed${CClear}"; else timeoutstatus="${CRed}Not installed${CClear}"; fi
 
-    echo -e "${InvGreen} ${InvDkGray}${CWhite} 8. Optional Entware Components                                                                                                          ${CClear}"
+    echo -e "${InvGreen} ${InvDkGray}${CWhite} 9. Optional Entware Components                                                                                                          ${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} IOCMON runs fully in a reduced mode without any of these - each one only unlocks or speeds up one specific feature. All of this requires${CClear}"
-    echo -e "${InvGreen} ${CClear} Entware itself, already installed via the AMTM utility.${CClear}"
+    echo -e "${InvGreen} ${CClear} Items 1-3 are optional: IOCMON runs fully in a reduced mode without them, and each one only unlocks or speeds up one specific feature.${CClear}"
+    echo -e "${InvGreen} ${CClear} Item 4 is required. All of this needs Entware itself, already installed via the AMTM utility.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : screen             : ${screenstatus}${CClear}"
@@ -8422,18 +8950,23 @@ ventwarecomponents()
     echo -e "${InvGreen} ${CClear}       A JSON parser used for ThreatFox's API data. Without it, IOCMON reads the same fields with its own built-in parser - ThreatFox${CClear}"
     echo -e "${InvGreen} ${CClear}       still works fully either way, jq is simply the more robust parser if abuse.ch ever changes the format.${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : Install all of the above${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : timeout            : ${timeoutstatus} ${CWhite}(required)${CClear}"
+    echo -e "${InvGreen} ${CClear}       Stops an 'nvram' or 'cru' call that hangs, a known firmware issue, after 10 seconds so IOCMON keeps running and reuses the last${CClear}"
+    echo -e "${InvGreen} ${CClear}       value it read. Installed from the ${timeoutpkg} package. Without it, one hung call can stall IOCMON until it is restarted.${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : Install all of the above${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Configuration Menu${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-4, e=Exit): " selentware
+    read -p "Please select? (1-5, e=Exit): " selentware
     case "$selentware" in
       1) installentwarepkg "screen" ;;
       2) installentwarepkg "findutils" ;;
       3) installentwarepkg "jq" ;;
-      4) installentwarepkg "screen findutils jq" ;;
+      4) installentwarepkg "$timeoutpkg"; _SetUpTimeoutCmdVars_ ;;
+      5) installentwarepkg "screen findutils jq $timeoutpkg"; _SetUpTimeoutCmdVars_ ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -8449,7 +8982,7 @@ ventwarecomponents()
 vuninstall()
 {
   clear
-  echo -e "${InvGreen} ${InvDkGray}${CWhite} 10. Uninstall Utility                                                                                                                   ${CClear}"
+  echo -e "${InvGreen} ${InvDkGray}${CWhite} 11. Uninstall Utility                                                                                                                  ${CClear}"
   echo -e "${InvGreen} ${CClear}"
   echo -e "${InvGreen} ${CClear} This will remove IOCMON from your router: the script, its cron jobs, autostart hook, and its config/log directory. This action is${CClear}"
   echo -e "${InvGreen} ${CClear} irreversible.${CClear}"
@@ -8465,9 +8998,9 @@ vuninstall()
     [ "$enableskynetimport" -eq 1 ] && removeskynetimports
     [ "$enablewebui" -eq 1 ] && webuiremove
     echo -e "${CGreen}Removing scheduled cron jobs...${CClear}"
-    cru d IOCMONUpdate >/dev/null 2>&1
-    cru d IOCMONFeeds >/dev/null 2>&1
-    cru d IOCMONFsIntegrity >/dev/null 2>&1
+    $timeoutcmd$timeoutsec cru d IOCMONUpdate >/dev/null 2>&1
+    $timeoutcmd$timeoutsec cru d IOCMONFeeds >/dev/null 2>&1
+    $timeoutcmd$timeoutsec cru d IOCMONFsIntegrity >/dev/null 2>&1
 
     if [ -f /jffs/scripts/services-start ]; then
       sed -i '/# iocmon-cron/d' /jffs/scripts/services-start
@@ -8538,6 +9071,9 @@ exitallmenus=0
 
 scriptreplacewarned=0
 
+_SetUpTimeoutCmdVars_
+_SetLAN_HostName_
+
 if [ ! -d "$addonsdir" ]; then
   mkdir -m 755 -p "$addonsdir"
 fi
@@ -8547,7 +9083,7 @@ if [ "$1" = "amtmupdate" ]; then
     [ -f "$config" ] && . "$config"
     resolvelogfile
     if [ "${track:-0}" = "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: AMTM update request ignored - this install is subscribed to the Beta track, which AMTM only ever installs Stable for; use Configuration Menu (6) to update a Beta install instead." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: AMTM update request ignored - this install is subscribed to the Beta track, which AMTM only ever installs Stable for; use Configuration Menu (6) to update a Beta install instead." >> "$logfile"
       exit 0
     fi
     ScriptUpdateFromAMTM "$@"
@@ -8615,6 +9151,7 @@ if [ "$1" == "-setup" ]; then
     else
       initialsetup
     fi
+    checktimeoutbin
     vsetup
     exit 0
 fi
@@ -8635,7 +9172,7 @@ fi
 # Check to see if autoupdate is being called (cron-callable).
 if [ "$1" == "-autoupdate" ]; then
     if [ ! -f "$config" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: Autoupdate skipped - IOCMON has not completed initial setup yet." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Autoupdate skipped - IOCMON has not completed initial setup yet." >> "$logfile"
       exit 1
     fi
     . "$config"
@@ -8658,12 +9195,13 @@ fi
 # Check to see if a one-shot feed refresh is being called (cron-callable via the IOCMONFeeds cru entry).
 if [ "$1" == "-updatefeeds" ]; then
     if [ ! -f "$config" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: -updatefeeds skipped - IOCMON has not completed initial setup yet." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: -updatefeeds skipped - IOCMON has not completed initial setup yet." >> "$logfile"
       exit 1
     fi
     . "$config"
     resolvelogfile
     checkfeedupdate
+    checklogrotate
     exit 0
 fi
 
@@ -8693,7 +9231,7 @@ fi
 # Check to see if a one-shot filesystem-integrity check is being called (cron-callable via IOCMONF -fsintegrity)
 if [ "$1" == "-fsintegrity" ]; then
     if [ ! -f "$config" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - WARNING: -fsintegrity skipped - IOCMON has not completed initial setup yet." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: -fsintegrity skipped - IOCMON has not completed initial setup yet." >> "$logfile"
       exit 1
     fi
     . "$config"
@@ -8784,7 +9322,7 @@ mkdir -m 755 -p "$addonsdir"
 if [ -f "$pidfile" ]; then
   oldpid="$(cat "$pidfile" 2>/dev/null)"
   if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && kill -0 "$oldpid" 2>/dev/null; then
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - ERROR: Another IOCMON instance (PID $oldpid) is already running - exiting to avoid state corruption." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Another IOCMON instance (PID $oldpid) is already running - exiting to avoid state corruption." >> "$logfile"
     clear
     echo -e "${CRed}ERROR: IOCMON is already running (PID $oldpid) - a second instance was not started, to avoid two${CClear}"
     echo -e "${CRed}copies corrupting shared detection data.${CClear}"
@@ -8821,12 +9359,13 @@ if [ -f "$config" ]; then
   aghmigrateauth
   if [ -z "$alertlevel" ]; then
     saveconfig
-    echo -e "$(date +'%b %d %Y %X') $(nvram get lan_hostname) IOCMON[$$] - INFO: Alert level set to '$alertlevel', carried over from the earlier 'Feed Matches Only' setting." >> "$logfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Alert level set to '$alertlevel', carried over from the earlier 'Feed Matches Only' setting." >> "$logfile"
   fi
 else
   initialsetup
 fi
 
+checktimeoutbin
 webuirefreshpage
 migrateiocseverity
 
@@ -8869,10 +9408,11 @@ collectstatus()
   todaycount="$(alertstoday)"
 
   cronscheduled=0
-  which cru >/dev/null 2>&1 && cru l 2>/dev/null | grep -q "IOCMONFeeds" && cronscheduled=1
+  which cru >/dev/null 2>&1 && crul && printf '%s\n' "$cruout" | grep -q "IOCMONFeeds" && cronscheduled=1
 
-  routermodel="$(nvram get odmpid)"
-  [ -z "$routermodel" ] && routermodel="$(nvram get productid)"
+  nvramget odmpid
+  routermodel="$nvramval"
+  [ -z "$routermodel" ] && nvramget productid && routermodel="$nvramval"
   routeruptime="$(uptime 2>/dev/null | sed -E 's/^[^,]*up[[:space:]]*//; s/,[[:space:]]*[0-9]+ users?.*//')"
   drivefreespace="n/a"
   [ -n "$iocmonroot" ] && drivefreespace="$(df -h "$iocmonroot" 2>/dev/null | awk 'NR==2{print $4}')"
@@ -8966,7 +9506,7 @@ renderdashboard()
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}nvram: $nvramstatus" 75; echo -e "${CWhite}fs-integrity: $fsstatus"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Email: $amtmdisp (limit: $rldisp)" 75; echo -e "${CWhite}Cron: $cronstatus"
-  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Router: ${CGreen}${routermodel:-unknown}${CClear} ($(nvram get lan_hostname))" 75; echo -e "${CWhite}Storage: $drivestatus"
+  echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Router: ${CGreen}${routermodel:-unknown}${CClear} ($(_GetLAN_HostName_))" 75; echo -e "${CWhite}Storage: $drivestatus"
   echo -en "${InvGreen} ${CClear} "; padright "${CDkGray}${routeruptime}${CClear}" 75; echo -e "${CWhite}Drive free: ${CGreen}${drivefreespace}${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
@@ -8987,8 +9527,8 @@ renderdashboard()
 
   if [ "$alertviewmode" = "dropbear" ]; then
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent Dropbear Attempts${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}H${CClear}] Hash, [${CGreen}U${CClear}] Reputation, [${CGreen}R${CClear}] Clear Log)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/dropbear_attempts.log" ]; then
-      tail -n 10 "$stateroot/dropbear_attempts.log" | while IFS= read -r dbline; do
+    if [ -n "$stateroot" ] && [ -n "$(logtail "$stateroot/dropbear_attempts.log" 1)" ]; then
+      logtail "$stateroot/dropbear_attempts.log" 10 | while IFS= read -r dbline; do
         [ "${#dbline}" -gt 134 ] && dbline="$(printf '%.133s' "$dbline")>"
         echo -e "${InvGreen} ${CClear}   ${CYellow}${dbline}${CClear}"
       done
@@ -8997,8 +9537,8 @@ renderdashboard()
     fi
   elif [ "$alertviewmode" = "reputation" ]; then
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent Reputation Lookups${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear, [${CGreen}H${CClear}] Hash, [${CGreen}R${CClear}] Clear Log)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/reputation.log" ]; then
-      tail -n 10 "$stateroot/reputation.log" | while IFS= read -r repline; do
+    if [ -n "$stateroot" ] && [ -n "$(logtail "$stateroot/reputation.log" 1)" ]; then
+      logtail "$stateroot/reputation.log" 10 | while IFS= read -r repline; do
         repscore="$(echo "$repline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
         repcolor="$CDkGray"
         case "$repscore" in
@@ -9016,8 +9556,8 @@ renderdashboard()
     fi
   elif [ "$alertviewmode" = "hash" ]; then
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear, [${CGreen}U${CClear}] Reputation, [${CGreen}R${CClear}] Clear Log)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/hash_check.log" ]; then
-      tail -n 10 "$stateroot/hash_check.log" | while IFS= read -r hashline; do
+    if [ -n "$stateroot" ] && [ -n "$(logtail "$stateroot/hash_check.log" 1)" ]; then
+      logtail "$stateroot/hash_check.log" 10 | while IFS= read -r hashline; do
         [ "${#hashline}" -gt 134 ] && hashline="$(printf '%.133s' "$hashline")>"
         echo -e "${InvGreen} ${CClear}   ${CCyan}${hashline}${CClear}"
       done
@@ -9026,10 +9566,10 @@ renderdashboard()
     fi
   else
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent IoC Detections${CClear} (Press [${CGreen}Z${CClear}] Add DNS Exceptions, Logs: [${CGreen}V${CClear}] Full, [${CGreen}D${CClear}] Dropbear, [${CGreen}H${CClear}] Hash, [${CGreen}U${CClear}] Reputation, [${CGreen}N${CClear}] OTX Rpt, [${CGreen}R${CClear}] Clear Log)"
-    if [ -n "$stateroot" ] && [ -s "$stateroot/ioc_alerts.log" ]; then
+    if [ -n "$stateroot" ] && [ -n "$(logtail "$stateroot/ioc_alerts.log" 1)" ]; then
       : > "$dnsnummapfile"
       dnsnum=0
-      tail -n 10 "$stateroot/ioc_alerts.log" | while IFS= read -r iocline; do
+      logtail "$stateroot/ioc_alerts.log" 10 | while IFS= read -r iocline; do
         kind="$(echo "$iocline" | cut -d'|' -f2 | sed 's/^ *//; s/ *$//')"
         case "$iocline" in
           *" | sev:critical") ioccolor="$CRed" ;;
@@ -9075,11 +9615,13 @@ while true; do
     initialsetup
   fi
 
+  _SetUpTimeoutCmdVars_
   checkscriptreplaced
   rm -f "$abuseipdbcyclefile"
 
   checkdrivealive
   checkfeedupdate
+  checklogrotate
 
   scanbulletprinted=0
 
@@ -9094,16 +9636,18 @@ while true; do
   checkdns
   if [ "$enablednswatch" -eq 1 ]; then
     blanklineguard
+    dnsselfnote=""
+    [ "${dnsselfcount:-0}" -gt 0 ] && dnsselfnote=" (${CGreen}${dnsselfcount}${CClear} router lookup(s) by Kairos/Astraea set aside)"
     if [ "$aghfailover" = "2" ] && dnsusesagh; then
       echo -e "  ${CYellow}* WARNING: DNS watch could not read the primary or the backup AdGuard Home - see the IOCMON log.${CClear}"
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then
-      echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from the ${CYellow}backup${CClear} AdGuard Home (${aghurl2%/}) against known-malicious-domain feeds"
+      echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from the ${CYellow}backup${CClear} AdGuard Home (${aghurl2%/}) against known-malicious-domain feeds${dnsselfnote}"
     elif dnsusesagh && ! aghanylogin; then
       echo -e "  ${CYellow}* WARNING: DNS watch skipped - the AdGuard Home login is missing. Add it under Configuration Menu ${advsettingsmenunum}.2, item 12.${CClear}"
     elif dnsusesagh; then
-      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds"
+      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from AdGuard Home's query log against known-malicious-domain feeds${dnsselfnote}"
     elif dnsquerylogenabled; then
-      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) against known-malicious-domain feeds"
+      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) against known-malicious-domain feeds${dnsselfnote}"
     else
       echo -e "  ${CYellow}*${CClear} DNS watch is on but dnsmasq query logging isn't - see Advanced Settings item 4"
     fi
