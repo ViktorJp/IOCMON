@@ -6,10 +6,11 @@ v2.0.4    - (BETA)
             alert for a domain or IP, it now also shows Astraea's verdict on that site (clear, confirm,
             unknown or contained), with its reason, in the log, the alert email and the web page. The verdict
             is for information only and never changes how an alert is handled.
-          - PATCH: Enhanced the way that IOCMON trims log files. This is now automatically being done when
+          - PATCH: Enhanced the way that IOCMON trims log files through log rotation, ie. iocmon.log is moved
+            to iocmon.log.1 -> iocmon.log.2 etc. as limits are met. This is now automatically being done when
             feed lists are updated every 4 hours, or every 6 hours if a feed didn't run, whichever comes
             first. It will also continue to trim logs after viewing the (L)og but won't any longer produce
-            any log entries saying it trimmed the log down to N lines.
+            any log entries saying it trimmed the log down to N lines. 
           - PATCH: Reintroduced the need for the "coreutils-timeout" command to ensure stuck processes do not
             occur when executing "nvram get" or "cru l" types of commands. Stuck commands are common on our
             older routers, and still see these creep up on the newer models. We are awaiting an imminent fix
