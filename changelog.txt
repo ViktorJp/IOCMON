@@ -10,7 +10,7 @@ v2.0.4    - (BETA)
             to iocmon.log.1 -> iocmon.log.2 etc. as limits are met. This is now automatically being done when
             feed lists are updated every 4 hours, or every 6 hours if a feed didn't run, whichever comes
             first. It will also continue to trim logs after viewing the (L)og but won't any longer produce
-            any log entries saying it trimmed the log down to N lines. 
+            any log entries saying it trimmed the log down to N lines. Thanks goes out to @scootertramp!
           - PATCH: Reintroduced the need for the "coreutils-timeout" command to ensure stuck processes do not
             occur when executing "nvram get" or "cru l" types of commands. Stuck commands are common on our
             older routers, and still see these creep up on the newer models. We are awaiting an imminent fix
