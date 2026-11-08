@@ -2,6 +2,7 @@ PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
 - Build a quick lookup tool by domain/IP to see if a threat is found on one of the threat feeds being used by IOCMON.
+- Look at using the /tmp/kairos/status file for relevancy
 
 Done:
 - Include the option to turn on the web UI in the initial setup.
