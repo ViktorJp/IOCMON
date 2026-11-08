@@ -15,6 +15,11 @@ v2.0.2    - (BETA)
             older routers, and still see these creep up on the newer models. We are awaiting an imminent fix
             from Asus to be implemented in some future firmware update that will fix this for good, with much
             thanks to @ExtremeFiretop for his efforts nipping this bug and working with Asus on a patch.
+          - PATCH: NVRAM variables now use previously known-good values should a stuck process wipe them out.
+            This was a great idea introduced by @Mason, and may help alleviate some of you who saw certain
+            variables like wan0_dns losing their value from one tick cycle to the next. 
+          - PATCH: Updates to the logic of the (8) Update menu, showing clearer language around the track
+            that you're currently enrolled in.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
