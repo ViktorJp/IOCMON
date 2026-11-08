@@ -1,4 +1,4 @@
-v2.0.1    - (BETA)
+v2.0.2    - (BETA)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as information
@@ -10,6 +10,11 @@ v2.0.1    - (BETA)
             feed lists are updated every 4 hours, or every 6 hours if a feed didn't run, whichever comes
             first. It will also continue to trim logs after viewing the (L)og but won't any longer produce
             any log entries saying it trimmed the log down to N lines.
+          - PATCH: Reintroduced the need for the "coreutils-timeout" command to ensure stuck processes do not
+            occur when executing "nvram get" or "cru l" types of commands. Stuck commands are common on our
+            older routers, and still see these creep up on the newer models. We are awaiting an imminent fix
+            from Asus to be implemented in some future firmware update that will fix this for good, with much
+            thanks to @ExtremeFiretop for his efforts nipping this bug and working with Asus on a patch.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
