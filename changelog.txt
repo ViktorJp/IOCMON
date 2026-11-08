@@ -1,4 +1,4 @@
-v2.0.2    - (BETA)
+v2.0.4    - (BETA)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as information
