@@ -6064,8 +6064,8 @@ checkauth()
   [ -f "$dropbearseenfile" ] || dbfirst=1
   [ -f "$httpdseenfile" ] || hdfirst=1
 
-  dropbearlines="$(grep -F 'dropbear' "$synclog" | grep -F 'Bad password attempt' | authnewlines "$dropbearseenfile")"
-  httpdlines="$(grep -iF 'httpd' "$synclog" | grep -iE 'login.?fail|invalid.?password|authentication.?fail' | authnewlines "$httpdseenfile")"
+  dropbearlines="$(grep -F 'dropbear' "$synclog" | grep -E 'Bad password attempt|Login attempt for nonexistent user' | authnewlines "$dropbearseenfile")"
+  httpdlines="$(grep -E ' HTTPD(\[[0-9]+\])?: \[LOGIN\]\[[a-z]+\]\[[A-Za-z]+\] failed \(' "$synclog" | authnewlines "$httpdseenfile")"
 
   if [ "$dbfirst" -eq 1 ]; then
     dropbearlines=""
