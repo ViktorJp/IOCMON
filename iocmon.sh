@@ -524,7 +524,7 @@ ScriptUpdateFromAMTM()
 
     echo ""
     echo -e "${InvGreen} ${CClear} Downloading latest ${CGreen}IOCMON${CClear}...Please stand by while we enhance your router's security posture..."
-    curl -fsSL "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
+    curl -fsSL --connect-timeout 10 --max-time 120 "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh.new" && scriptfilevalid "/jffs/scripts/iocmon.sh.new" && chmod 755 "/jffs/scripts/iocmon.sh.new" && mv -f "/jffs/scripts/iocmon.sh.new" "/jffs/scripts/iocmon.sh"
     DLsuccess=$?
     if [ "$DLsuccess" -eq 0 ]; then
       touch "$restartpendingfile"
@@ -547,14 +547,14 @@ downloadiocmonupdate()
   local url="$1" label="$2" dlrc
 
   if [ "$label" = "STABLE" ]; then
-    curl -fsSL "$iocmonreposcriptstable" -o "${apppath}.new"
+    curl -fsSL --connect-timeout 10 --max-time 120 "$iocmonreposcriptstable" -o "${apppath}.new"
     dlrc=$?
   else
     curl --silent --retry 3 --connect-timeout 10 --max-time 30 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"
     dlrc=$?
   fi
 
-  if [ "$dlrc" -eq 0 ]; then
+  if [ "$dlrc" -eq 0 ] && scriptfilevalid "${apppath}.new"; then
     mv "${apppath}.new" "$apppath"
     chmod 755 "$apppath"
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
@@ -3062,9 +3062,9 @@ fetchfeedsource()
   local tmpfile="${rawfile}.tmp" curlrc
 
   if [ -f "$metafile" ]; then
-    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -z "$metafile" -o "$tmpfile" "$url"
+    curl --silent --fail --retry 3 --connect-timeout 10 --max-time 180 -z "$metafile" -o "$tmpfile" "$url"
   else
-    curl --silent --retry 3 --connect-timeout 10 --max-time 180 -o "$tmpfile" "$url"
+    curl --silent --fail --retry 3 --connect-timeout 10 --max-time 180 -o "$tmpfile" "$url"
   fi
   curlrc=$?
 
@@ -3338,15 +3338,15 @@ normalizefeeds()
   : > "$tmphashes"
 
   if [ "$enablefeodo" -eq 1 ] && [ -s "$feedsroot/feodo.raw" ]; then
-    awk '!/^#/ && NF {print $1"|feodo|botnet-c2"}' "$feedsroot/feodo.raw" >> "$tmpips"
+    awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1"|feodo|botnet-c2"}' "$feedsroot/feodo.raw" >> "$tmpips"
   fi
 
   if [ "$feedsdegraded" -eq 0 ]; then
     if [ "$enablespamhaus" -eq 1 ] && [ -s "$feedsroot/spamhaus_drop.raw" ]; then
-      awk '!/^;/ && NF {print $1"|spamhaus-drop|netblock"}' "$feedsroot/spamhaus_drop.raw" >> "$tmpips"
+      awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1"|spamhaus-drop|netblock"}' "$feedsroot/spamhaus_drop.raw" >> "$tmpips"
     fi
     if [ "$enablespamhaus" -eq 1 ] && [ -s "$feedsroot/spamhaus_edrop.raw" ]; then
-      awk '!/^;/ && NF {print $1"|spamhaus-edrop|netblock"}' "$feedsroot/spamhaus_edrop.raw" >> "$tmpips"
+      awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1"|spamhaus-edrop|netblock"}' "$feedsroot/spamhaus_edrop.raw" >> "$tmpips"
     fi
 
     if [ "$enablenetapi" -eq 1 ] && [ -s "$feedsroot/netapi_ips.raw" ]; then
@@ -3913,9 +3913,13 @@ _DownloadCEMLibraryFile_()
    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${msgStr} the shared AMTM email library script file to support email notifications..." >> "$logfile"
 
    mkdir -m 755 -p "$CUSTOM_EMAIL_LIBDir"
-   curl -kLSs --retry 3 --retry-delay 5 --retry-connrefused \
-   "${CEM_LIB_URL}/$CUSTOM_EMAIL_LIBName" -o "$CUSTOM_EMAIL_LIBFile"
+   curl -fLSs --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 5 --retry-connrefused \
+   "${CEM_LIB_URL}/$CUSTOM_EMAIL_LIBName" -o "${CUSTOM_EMAIL_LIBFile}.new"
    curlCode="$?"
+   if [ "$curlCode" -eq 0 ] && sh -n "${CUSTOM_EMAIL_LIBFile}.new" >/dev/null 2>&1
+   then mv -f "${CUSTOM_EMAIL_LIBFile}.new" "$CUSTOM_EMAIL_LIBFile"
+   else rm -f "${CUSTOM_EMAIL_LIBFile}.new"; [ "$curlCode" -eq 0 ] && curlCode=1
+   fi
 
    if [ "$curlCode" -eq 0 ] && [ -f "$CUSTOM_EMAIL_LIBFile" ]
    then
@@ -3967,12 +3971,12 @@ _SendEMailNotification_()
    if [ "$retCode" -eq 0 ]
    then
      printf "\33[2K\r"
-     printf "${CGreen}\r[Email notification was sent successfully ($statustext)]${CClear}"
+     printf "${CGreen}\r[Email notification was sent successfully (%s)]${CClear}" "$statustext"
      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Email notification was sent successfully [$2]" >> "$logfile"
      sleep 5
    else
      printf "\33[2K\r"
-     printf "${CRed}\r[ERROR: Failure to send email notification (Error Code: $retCode - $statustext).]${CClear}"
+     printf "${CRed}\r[ERROR: Failure to send email notification (Error Code: %s - %s).]${CClear}" "$retCode" "$statustext"
      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Failure to send email notification [$2]" >> "$logfile"
      sleep 5
    fi
@@ -4806,7 +4810,7 @@ raisealert()
 
   alertseverity "$kind" "$indicator" "$source" "$detail" "$repscore"
   sevtag="$(echo "$alertsev" | tr 'a-z' 'A-Z')"
-  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: IOC match ($kind): $indicator matched $source ($detail) [$sevtag]." >> "$logfile"
+  printf '%s %s IOCMON[%s] - WARNING: IOC match (%s): %s matched %s (%s) [%s].\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "$kind" "$indicator" "$source" "$detail" "$sevtag" >> "$logfile"
 
   local raisebanner=1
   [ "$alertlevel" = "critical" ] && [ "$alertsev" != "critical" ] && raisebanner=0
@@ -5868,12 +5872,12 @@ checkdns()
 
     querypairs="$(tail -n "$newlines" "$synclog" | grep -F 'dnsmasq' | awk '
       {
-        domain=""; src=""
-        for (i=1; i<=NF; i++) {
-          if ($i ~ /^query\[[A-Za-z]+\]$/) { domain=$(i+1) }
-          if ($i=="from" && (i+1)<=NF) { src=$(i+1) }
-        }
-        if (domain!="" && src!="") print domain"|"src
+        q=0
+        for (i=1; i<=NF; i++) if ($i ~ /^query\[[^]]+\]$/) { q=i; break }
+        if (!q || NF < q+3 || $(NF-1)!="from" || $NF !~ /^[0-9a-fA-F.:]+$/) next
+        domain=$(q+1); for (i=q+2; i<=NF-2; i++) domain=domain"_"$i
+        domain=tolower(domain); gsub(/[^a-z0-9._-]/, "_", domain)
+        print domain"|"$NF
       }
     ' | sort -u)"
 
@@ -7465,6 +7469,12 @@ addtodnsexception()
   fi
 
   base="$(basedomain "$domain")"
+  if ! validdomainentry "$base"; then
+    echo -e "${CRed}Entry #$origkey is not a valid domain name - not added.${CClear}"
+    sleep 2
+    renderdashboard
+    return
+  fi
   if indnsexceptionlist "$base"; then
     echo -e "${CYellow}${base} is already in the DNS Exceptions list.${CClear}"
   else
@@ -9383,6 +9393,7 @@ renderalertbanner()
   pendingsummary="$(sed -n '2p' "$stateroot/alert_pending" 2>/dev/null)"
   [ "${#pendingsummary}" -gt 129 ] && pendingsummary="$(printf '%.128s' "$pendingsummary")>"
   echo -en "${InvRed}${CWhite} "; padright "!!! SECURITY ALERT: ${pendingcount:-1} unacknowledged IOC detection(s) !!!" 137; echo -e "${CClear}"
+  pendingsummary="$(printf '%s' "$pendingsummary" | sed 's/\\/\\\\/g')"
   echo -e " ${CWhite}Latest: ${pendingsummary:-see the IoC log}${CClear}"
   echo -en "${InvRed}${CWhite} "; padright "Press (A) to Acknowledge" 137; echo -e "${CClear}"
 }
@@ -9578,6 +9589,7 @@ renderdashboard()
           *) ioccolor="$CGreen" ;;
         esac
         iocline="${iocline% | sev:*}"
+        iocline="$(printf '%s' "$iocline" | sed 's/\\/\\\\/g')"
         if [ "$kind" = "dns" ]; then
           dnsnum=$((dnsnum + 1))
           domain="$(echo "$iocline" | cut -d'|' -f3 | sed 's/^ *//; s/ *$//')"
