@@ -3242,6 +3242,8 @@ fetchqfeedlist()
   ' > "${tmp}.ok"
   rm -f "$tmp"
 
+  [ "$kind" = "ip" ] && dropreservedindicators "${tmp}.ok"
+
   n="$(wc -l < "${tmp}.ok" | tr -d ' ')"
   if [ "${n:-0}" -lt 1000 ]; then
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Q-Feeds $feed returned only ${n:-0} valid lines (expected thousands); keeping any previous list." >> "$logfile"
@@ -3305,6 +3307,57 @@ qfeedscount()
     done
   fi
   echo "$n"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dropreservedindicators removes lines from list $1 whose indicator overlaps a loopback, private, link-local, CGNAT,
+# documentation, multicast or reserved range. A feed entry there cannot name a remote host, but it would match local
+# traffic in the conntrack watch and be sent to Skynet's ban list. A list is left as it was if the filter itself fails.
+
+dropreservedindicators()
+{
+  local f="$1" kept="$1.routable" result
+  [ -s "$f" ] || return 0
+  : > "$kept"
+  result="$(awk -F'|' -v kept="$kept" '
+    function toint(ip,  a) { split(ip, a, "."); return (a[1]*16777216)+(a[2]*65536)+(a[3]*256)+a[4] }
+    function reserved(ind,  p, o, m, k, d, v) {
+      if (index(ind, ":")) return (ind ~ /^::1?(\/|$)|^f[cd][0-9a-f][0-9a-f]:|^fe[89ab][0-9a-f]:|^ff[0-9a-f][0-9a-f]:/)
+      if (ind !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/) return 0
+      split(ind, p, "/")
+      m = (p[2] == "" ? 32 : p[2] + 0)
+      if (m > 32) return 0
+      split(p[1], o, ".")
+      # Most addresses are ruled out here, which matters on a list of 250k lines.
+      if (m >= 8 && !((o[1] + 0) in firstoctet)) return 0
+      v = (o[1]*16777216)+(o[2]*65536)+(o[3]*256)+o[4]
+      for (k = 1; k <= rn; k++) {
+        d = 2 ^ (32 - (m < rmask[k] ? m : rmask[k]))
+        if (int(v / d) == int(rnet[k] / d)) return 1
+      }
+      return 0
+    }
+    BEGIN {
+      rn = split("0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4", r, " ")
+      for (k = 1; k <= rn; k++) {
+        split(r[k], q, "/"); rnet[k] = toint(q[1]); rmask[k] = q[2] + 0
+        split(q[1], a, "."); last = a[1] + (rmask[k] < 8 ? 2 ^ (8 - rmask[k]) - 1 : 0)
+        for (i = a[1] + 0; i <= last; i++) firstoctet[i] = 1
+      }
+    }
+    {
+      if (reserved(tolower($1))) {
+        n++
+        if (n <= 5) shown = shown (shown == "" ? "" : ", ") $1 ($2 == "" ? "" : " (" $2 ")")
+        next
+      }
+      print > kept
+    }
+    END { print n + 0 "|" shown (n > 5 ? ", ..." : "") }
+  ' "$f")" || { rm -f "$kept"; return 0; }
+  mv "$kept" "$f"
+  [ "${result%%|*}" -gt 0 ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Dropped ${result%%|*} non-routable IP indicator(s) from the feeds: ${result#*|}." >> "$logfile"
+  return 0
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -3428,6 +3481,8 @@ normalizefeeds()
           END { print skip+0 }')"
     fi
   fi
+
+  dropreservedindicators "$tmpips"
 
   if [ -s "$tmpips" ]; then
     inlinestatus "Deduplicating IP/CIDR indicators"
