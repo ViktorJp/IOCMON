@@ -1,4 +1,4 @@
-v2.0.4    - (BETA)
+v2.0.5    - (BETA)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as informational
@@ -21,6 +21,10 @@ v2.0.4    - (BETA)
             variables like wan0_dns losing their value from one tick cycle to the next. 
           - PATCH: Updates to the logic of the (8) Update menu, showing clearer language around the track
             that you're currently enrolled in.
+          - PATCH: Added new functionality to the (2) Select Feed Sources, Reputation, API Keys & Lookups,
+            giving you the ability to search across the downloaded feed lists for a specific domain or IP
+            address. This helps quickly determine what feed is responsible for reporting a particular host.
+            This also optionally gives you the ability to do an AbuseIPDB lookup on that host as well.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
