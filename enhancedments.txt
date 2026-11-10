@@ -1,8 +1,10 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
-- Ability to clear logs from Web UI
-- Ability to add domain/IP exceptions from Web UI
+- Ability to clear logs from Web UI (@JB_1366)
+- Ability to add domain/IP exceptions from Web UI (@Radon)
+- Make sure 127.0.0.1 or other local IPs are whitelisted from being a feed destination (@Mason)
+- Integrate with Pi-Hole (@XIII)
 
 Done:
 - Build a quick lookup tool by domain/IP to see if a threat is found on one of the threat feeds being used by IOCMON.
