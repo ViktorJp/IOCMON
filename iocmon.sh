@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.4
+# Version: 2.0.5
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-07
+# Last Updated: 2026-Nov-08
 # ============================================================================================================================
 #
 # Description:
@@ -35,6 +35,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /tmp/astraea/selfq, /tmp/kairos/selfq                               : read only - the router's own lookups for Astraea/Kairos, set aside by DNS watch
+#   /tmp/kairos/status                                                  : read only - Kairos's state; its selfq is used only while this was written in the last 3 minutes
 #   /tmp/iocmon_selfq_seen, /tmp/iocmon_astraea_intel                   : set-aside lookups already logged, and recent Astraea verdicts for emails (RAM)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, rotated to .1/.2 at $logsize lines
@@ -106,7 +107,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.4"
+version="2.0.5"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -203,6 +204,7 @@ aghcred=""                      # AdGuard Home "user:password" login, base64-enc
 aghauthfile="/jffs/addons/iocmon.d/agh.auth"  # legacy login file, moved into aghcred at startup
 aghreplyfile="/tmp/iocmon_agh_replies"  # "domain|ip" answers seen recently, RAM only, for dnsreplyip
 selfqpaths="/tmp/astraea/selfq /tmp/kairos/selfq"  # Astraea's and Kairos's own router lookups ("name|type|epoch", RAM, 2 hours), read only
+kairosstatusfile="/tmp/kairos/status"  # Kairos's key=value state (time, dns, updated, version), read only
 selfqseenfile="/tmp/iocmon_selfq_seen"  # "name epoch" of set-aside lookups already logged, so each is logged once per 6 hours
 logtrimstamp="/tmp/iocmon_logtrim.last"  # time of the last 6-hourly activity log rotation check
 logkeep=2                       # rotated copies kept per log (.1 newest, .2 oldest)
@@ -1369,8 +1371,9 @@ setupapikeyinfo()
   setupbanner "4. Optional API Keys" \
     "Some optional IOCMON services need a free API key: the URLhaus and ThreatFox feeds (one abuse.ch Auth-Key from ${CGreen}auth.abuse.ch${CClear} works" \
     "for both), the Q-Feeds feed (a token from ${CGreen}tip.qfeeds.com${CClear}) and AbuseIPDB reputation checks (a key from ${CGreen}abuseipdb.com${CClear}). To use one, sign" \
-    "up on its site, create an API key, then open Configuration Menu item 2 (Feed Sources, Reputation & API Keys), switch the service on" \
-    "and paste the key into its key field. Until then, IOCMON uses its keyless feeds: Feodo Tracker, Spamhaus DROP/EDROP and NetAPI."
+    "up on its site, create an API key, then open Configuration Menu item 2 (Feed Sources, Reputation, API Keys and Lookups), switch the" \
+    "service on and paste the key into its key field. Until then, IOCMON uses its keyless feeds: Feodo Tracker, Spamhaus DROP/EDROP" \
+    "and NetAPI."
   read -rsp $'Press any key to continue...\n' -n1 key
 }
 
@@ -1412,7 +1415,7 @@ vsetup()
     echo -e "${InvGreen} ${CClear}${InvDkGray}${CWhite} [IOCMON Operations]                                                                                                                     ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : Select Feed Storage Location (Ext. Drive)${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources, Reputation & API Keys${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : Select Feed Sources, Reputation, API Keys and Lookups${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 3)${CClear} : Force IoC Threat Feed Refresh${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : Force Filesystem-Integrity Scan${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : OTX AlienVault Threat Report${CClear}"
@@ -2819,21 +2822,443 @@ abusechemaillinks()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# vfeedsources is the Feed Sources, Reputation & API Keys submenu: feed toggles, API keys and the AbuseIPDB reputation check.
+# lookuprow prints one "label : value" row of the lookup screen in colour $3, word-wrapped to the screen width
+
+lookuprow()
+{
+  local label="$1" color="${3:-$CClear}" first=1 ln
+  printf '%s\n' "$2" | awk -v w=110 '
+    { gsub(/[[:cntrl:]]/, ""); v = (NR == 1 ? $0 : v " " $0) }
+    END {
+      n = split(v, wd, " "); line = ""
+      for (i = 1; i <= n; i++) {
+        while (length(wd[i]) > w) { r = (line == "" ? w : w - length(line) - 1); if (r < 10) { print line; line = ""; r = w } line = (line == "" ? "" : line " ") substr(wd[i], 1, r); print line; line = ""; wd[i] = substr(wd[i], r + 1) }
+        if (line == "") line = wd[i]
+        else if (length(line) + 1 + length(wd[i]) <= w) line = line " " wd[i]
+        else { print line; line = wd[i] }
+      }
+      print line
+    }' | while IFS= read -r ln; do
+    printf '%b   ' "${InvGreen} ${CClear}"
+    if [ "$first" -eq 1 ] && [ -n "$label" ]; then padexact "$label" 22; printf ': '; else printf '%24s' ""; fi
+    first=0
+    printf '%b%s%b\n' "$color" "$ln" "$CClear"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupsection prints a white section heading with a blank sidebar line above it
+
+lookupsection()
+{
+  echo -e "${InvGreen} ${CClear}"
+  echo -e "${InvGreen} ${CClear} ${CWhite}$1${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupnormalize cleans a typed indicator (case, scheme, path, port, defanged dots) and echoes ip|<v>, domain|<v>, ipv6|<v> or nothing
+
+lookupnormalize()
+{
+  local v
+  v="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/\[\.\]/./g; s/(\.)/./g; s/^hxxp/http/; s|^[a-z][a-z0-9+.-]*://||; s|[/?#].*$||; s/^.*@//')"
+  case "$v" in
+    *:*:*|\[*) echo "ipv6|$v"; return ;;
+  esac
+  v="$(printf '%s' "$v" | sed 's/:[0-9]*$//; s/\.$//')"
+  if echo "$v" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+    echo "$v" | awk -F. '{ for (i = 1; i <= 4; i++) if ($i + 0 > 255) exit 1 }' && echo "ip|$v"
+  elif echo "$v" | grep -qE '^[a-z0-9_-]+(\.[a-z0-9_-]+)+$' && echo "$v" | grep -q '[a-z]'; then
+    echo "domain|$v"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupipfeeds prints entry|sources|families for every loaded feed entry equal to IP $1 or a netblock containing it
+
+lookupipfeeds()
+{
+  local ip="$1" qf="$feedsroot/qfeeds_ips.txt"
+  set --
+  [ -s "$feedsroot/ips.txt" ] && set -- "$@" "$feedsroot/ips.txt"
+  [ -s "$qf" ] && set -- "$@" "$qf"
+  [ "$#" -gt 0 ] || return 0
+  awk -F'|' -v ip="$ip" -v qf="$qf" '
+    function toint(s,  a) { split(s, a, "."); return a[1] * 16777216 + a[2] * 65536 + a[3] * 256 + a[4] }
+    BEGIN { t = toint(ip) }
+    {
+      e = $1; sub(/\r$/, "", e)
+      if (FILENAME == qf) { s = "qfeeds"; f = "osint-ip" } else { s = $2; f = $3 }
+      hit = (e == ip)
+      if (!hit && index(e, "/")) { split(e, p, "/"); m = p[2] + 0; if (m >= 0 && m <= 32) { d = 2 ^ (32 - m); hit = (int(t / d) == int(toint(p[1]) / d)) } }
+      if (hit) print e "|" s "|" f
+    }' "$@"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupdomainfeeds prints E|, P| (listed parent) or S| (listed subdomain) entry|sources|families for domain $1 in the loaded feeds
+
+lookupdomainfeeds()
+{
+  local d="$1" qf="$feedsroot/qfeeds_domains.txt"
+  set --
+  [ -s "$feedsroot/domains.txt" ] && set -- "$@" "$feedsroot/domains.txt"
+  [ -s "$qf" ] && set -- "$@" "$qf"
+  [ "$#" -gt 0 ] || return 0
+  awk -F'|' -v d="$d" -v qf="$qf" '
+    BEGIN { n = split(d, l, "."); for (i = 2; i < n; i++) { p = l[i]; for (j = i + 1; j <= n; j++) p = p "." l[j]; par[p] = 1 }; dl = length(d) }
+    {
+      e = $1; sub(/\r$/, "", e)
+      if (FILENAME == qf) { s = "qfeeds"; f = "osint-domain" } else { s = $2; f = $3 }
+      if (e == d) print "E|" e "|" s "|" f
+      else if (e in par) print "P|" e "|" s "|" f
+      else if (length(e) > dl && substr(e, length(e) - dl) == "." d) print "S|" e "|" s "|" f
+    }' "$@"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupfeedmatch prints one feed-match block (entry, feeds, each family piece, Spamhaus SBL reference) for entry|sources|families $1
+
+lookupfeedmatch()
+{
+  local entry srcs fams note="$2" sbl fam first=1
+  IFS='|' read -r entry srcs fams <<EOF
+$1
+EOF
+  echo -e "${InvGreen} ${CClear}"
+  lookuprow "Listed entry" "$entry${note:+ ($note)}" "$CRed"
+  lookuprow "Feed(s)" "$(emailfeedname "$srcs")"
+  echo "$fams" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep . | while IFS= read -r fam; do
+    if [ "$first" -eq 1 ]; then lookuprow "Details" "$fam"; first=0; else lookuprow "" "$fam"; fi
+  done
+  case "$srcs" in *spamhaus*)
+    sbl="$(cat "$feedsroot/spamhaus_drop.raw" "$feedsroot/spamhaus_edrop.raw" 2>/dev/null | awk -v e="$entry" '$1 == e { for (i = 2; i <= NF; i++) if ($i ~ /^SBL[0-9]+$/) { print $i; exit } }')"
+    [ -n "$sbl" ] && lookuprow "Spamhaus reference" "$sbl"
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupurlhausraw prints a summary and the newest 5 records of host $1 from the full URLhaus download (online and offline)
+
+lookupurlhausraw()
+{
+  local out total online first last threats tags rest ln
+  [ "$enableurlhaus" = "1" ] && grep -q '^"[0-9]' "$feedsroot/urlhaus.raw" 2>/dev/null || return 0
+  grep -qF "$1" "$feedsroot/urlhaus.raw" || return 0
+  out="$(awk -v h="$1" '
+    /^"[0-9]/ {
+      line = $0; sub(/\r$/, "", line); sub(/^"/, "", line); sub(/"$/, "", line)
+      if (split(line, f, /","/) < 7) next
+      host = f[3]; sub(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", host); sub(/[\/?#].*$/, "", host); sub(/^.*@/, "", host); sub(/:[0-9]+$/, "", host)
+      if (tolower(host) != h) next
+      n++; if (f[4] == "online") on++
+      if (first == "" || f[2] < first) first = f[2]
+      if (f[2] > last) last = f[2]
+      if (f[6] != "" && index(" " thr " ", " " f[6] " ") == 0) thr = (thr == "" ? f[6] : thr " " f[6])
+      nt = split(f[7], tg, ",")
+      for (i = 1; i <= nt; i++) { g = tg[i]; gsub(/^ +| +$/, "", g); if (g != "" && g != "None" && index(" " tags " ", " " g " ") == 0) tags = (tags == "" ? g : tags " " g) }
+      if (n <= 5) rec[n] = f[2] "\037" f[4] "\037" f[3]
+    }
+    END {
+      if (n == 0) exit
+      print n "\037" on + 0 "\037" first "\037" last "\037" thr "\037" tags
+      for (i = 1; i <= n && i <= 5; i++) print rec[i]
+    }' "$feedsroot/urlhaus.raw")"
+  [ -n "$out" ] || return 0
+  IFS="$(printf '\037')" read -r total online first last threats tags <<EOF
+$(echo "$out" | head -n 1)
+EOF
+  lookupsection "URLhaus Records (the full download, online and offline - DNS watch only uses online or recent ones)"
+  lookuprow "URLs listed" "$total ($online online)"
+  lookuprow "First / last added" "$first / $last UTC"
+  lookuprow "Threat" "${threats:-n/a}"
+  lookuprow "Tags" "${tags:-none}"
+  echo "$out" | sed 1d | while IFS="$(printf '\037')" read -r first online rest; do
+    lookuprow " $first" "[$online] $rest" "$CDkGray"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupthreatfoxraw prints every ThreatFox record (up to 5) whose IOC, ip:port or URL host is $1, from the API download
+
+lookupthreatfoxraw()
+{
+  local out id ioc typ tt mal alias conf fs ls rep ref tags n=0
+  [ "$enablethreatfox" = "1" ] && [ -s "$feedsroot/threatfox.raw" ] && [ "$(cat "$feedsroot/meta/threatfox.mode" 2>/dev/null)" = "api" ] || return 0
+  grep -qF "$1" "$feedsroot/threatfox.raw" || return 0
+  out="$(awk -v RS='}' -v t="$1" '
+    function jv(k,  r) {
+      if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"[^\"]*\"")) { r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*"/, "", r); sub(/"$/, "", r); gsub("\\\\/", "/", r); gsub(/[[:cntrl:]]/, " ", r); return r }
+      if (match($0, "\"" k "\"[[:space:]]*:[[:space:]]*[0-9]+")) { r = substr($0, RSTART, RLENGTH); sub(/^[^:]*:[[:space:]]*/, "", r); return r }
+      return ""
+    }
+    function jt(  r) { if (match($0, /"tags"[[:space:]]*:[[:space:]]*\[[^]]*\]/)) { r = substr($0, RSTART, RLENGTH); sub(/^[^[]*\[/, "", r); sub(/\]$/, "", r); gsub(/"/, "", r); gsub(/[[:space:]]*,[[:space:]]*/, " ", r); gsub(/^[[:space:]]+|[[:space:]]+$/, "", r); return r } return "" }
+    {
+      v = tolower(jv("ioc")); typ = jv("ioc_type"); if (v == "") next
+      h = v
+      if (typ == "ip:port") sub(/:[0-9]+$/, "", h)
+      else if (typ == "url") { sub(/^[a-z]+:\/\//, "", h); sub(/[\/?#].*$/, "", h); sub(/^.*@/, "", h); sub(/:[0-9]+$/, "", h) }
+      if (h != t) next
+      n++
+      if (n <= 5) printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\n", jv("id"), jv("ioc"), typ, jv("threat_type"), jv("malware_printable"), jv("malware_alias"), jv("confidence_level"), jv("first_seen"), jv("last_seen"), jv("reporter"), jv("reference"), jt()
+    }
+    END { if (n > 5) print "MORE\037" n }' "$feedsroot/threatfox.raw")"
+  [ -n "$out" ] || return 0
+  lookupsection "ThreatFox Records (the API download)"
+  echo "$out" | while IFS="$(printf '\037')" read -r id ioc typ tt mal alias conf fs ls rep ref tags; do
+    if [ "$id" = "MORE" ]; then lookuprow "" "... $ioc records in all, the newest 5 are shown" "$CDkGray"; continue; fi
+    echo -e "${InvGreen} ${CClear}"
+    lookuprow "IOC" "$ioc ($typ)" "$CRed"
+    lookuprow "Malware" "${mal:-n/a}${alias:+ (also known as $alias)}"
+    lookuprow "Threat / confidence" "${tt:-n/a} / ${conf:-n/a}%"
+    lookuprow "First / last seen" "${fs:-n/a} / ${ls:-n/a}"
+    lookuprow "Reporter" "${rep:-n/a}"
+    lookuprow "Tags" "${tags:-none}"
+    [ -n "$ref" ] && lookuprow "Reference" "$ref"
+    [ -n "$id" ] && lookuprow "ThreatFox entry" "https://threatfox.abuse.ch/ioc/$id/"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookuphistory prints how often IOCMON itself alerted on $1 ($2=domain also counts subdomains), with the newest 5 entries
+
+lookuphistory()
+{
+  local out total d k ind sev
+  resolvestateroot
+  lookupsection "Local Alert History (IOCMON's own IoC detections log)"
+  if [ -z "$stateroot" ]; then lookuprow "History" "not available without the external drive" "$CDkGray"; return; fi
+  out="$(logall "$stateroot/ioc_alerts.log" | grep -F "$1" | awk -F'|' -v t="$1" -v dom="$2" '
+    function trim(s) { sub(/^ +/, "", s); sub(/ +$/, "", s); return s }
+    {
+      ind = trim($3); h = ind; sub(/^.*->/, "", h); h = tolower(h)
+      if (!(h == t || (dom == "domain" && length(h) > length(t) && substr(h, length(h) - length(t)) == "." t))) next
+      sev = trim($NF); if (sev ~ /^sev:/) sev = substr(sev, 5); else sev = ""
+      n++; line[n] = trim($1) "\037" trim($2) "\037" ind "\037" sev
+    }
+    END { if (n == 0) exit; print n; for (i = n; i > 0 && i > n - 5; i--) print line[i] }')"
+  if [ -z "$out" ]; then lookuprow "Alerts" "none - IOCMON has not alerted on this indicator" "$CGreen"; return; fi
+  total="$(echo "$out" | head -n 1)"
+  lookuprow "Alerts" "$total (newest first, up to 5 shown)" "$CYellow"
+  echo "$out" | sed 1d | while IFS="$(printf '\037')" read -r d k ind sev; do
+    lookuprow " $d" "$k  $ind${sev:+  [$sev]}"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupexceptions prints whether IP or domain $2 ($1=ip|domain) sits on an exception or shared-hosting list
+
+lookupexceptions()
+{
+  local hit=""
+  lookupsection "Exception Lists"
+  if [ "$1" = "ip" ]; then
+    ispublicip "$2" || lookuprow "Address" "private or reserved - conntrack only matches public destinations" "$CYellow"
+    hit="$(awk -v ip="$2" -v exc="$ipexceptions" '
+      function toint(s,  a) { split(s, a, "."); return a[1] * 16777216 + a[2] * 65536 + a[3] * 256 + a[4] }
+      BEGIN {
+        n = split(exc, e, " "); t = toint(ip)
+        for (i = 1; i <= n; i++) {
+          if (e[i] == ip) { print e[i]; exit }
+          if (split(e[i], p, "/") == 2 && p[2] + 0 >= 0 && p[2] + 0 <= 32) { d = 2 ^ (32 - p[2]); if (int(t / d) == int(toint(p[1]) / d)) { print e[i]; exit } }
+        }
+      }')"
+    if [ -n "$hit" ]; then lookuprow "IP/CIDR exceptions" "yes, covered by $hit - conntrack never alerts on it" "$CYellow"
+    else lookuprow "IP/CIDR exceptions" "no"; fi
+  else
+    for hit in $dnsexceptions; do case "$2" in "$hit"|*".$hit") break ;; esac; hit=""; done
+    if [ -n "$hit" ]; then lookuprow "DNS exceptions" "yes, covered by $hit - DNS watch never alerts on it" "$CYellow"
+    else lookuprow "DNS exceptions" "no"; fi
+    hit=""
+    for hit in $dnssharedhosts; do case "$2" in "$hit"|*".$hit") break ;; esac; hit=""; done
+    if [ -n "$hit" ]; then lookuprow "Shared-hosting list" "yes, covered by $hit - a DNS feed match is logged as Info" "$CYellow"
+    else lookuprow "Shared-hosting list" "no"; fi
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupreputation offers a live AbuseIPDB check of IP $1 (or a domain's last DNS answer, $2=domain), showing a cached result without asking
+
+lookupreputation()
+{
+  local ip="$1" what="$2" rec rip epoch score total users last cc cname usage isp domain tor wl hostnames cats color
+  lookupsection "AbuseIPDB Reputation"
+  if [ "$enableabuseipdb" != "1" ] || [ -z "$abuseipdbapikey" ]; then
+    lookuprow "AbuseIPDB" "off - switch it on with item 12 and set its key with item 13" "$CDkGray"; return
+  fi
+  if [ "$what" = "domain" ]; then
+    ip="$(dnsreplyip "$1")"
+    if [ -z "$ip" ]; then lookuprow "AbuseIPDB" "not checked - no public IP for this domain in the DNS reply log (IOCMON never resolves it itself)" "$CDkGray"; return; fi
+    lookuprow "Last DNS answer" "$ip"
+  fi
+  if ! ispublicip "$ip"; then lookuprow "AbuseIPDB" "not checked - $ip is not a public IP address" "$CDkGray"; return; fi
+  resolvestateroot
+  if [ -z "$(abuseipdbcached "$ip")" ]; then
+    echo -e "${InvGreen} ${CClear}"
+    echo ""
+    if ! promptyn "Check $ip on AbuseIPDB now? It uses 1 of today's lookups ($(abuseipdbusedtoday) of $abuseipdbdailymax used) [y/n]: "; then
+      echo ""; echo ""
+      lookuprow "AbuseIPDB" "not checked" "$CDkGray"; return
+    fi
+    echo ""
+  fi
+  reputationlookup lookup "$ip" manual
+  printf '\33[2K\r'
+  rec=""
+  [ -n "$repip" ] && rec="$(awk -F'|' -v ip="$repip" '$1 == ip' "$stateroot/abuseipdb_cache.db" 2>/dev/null | tail -n 1)"
+  if [ -n "$rec" ]; then
+    IFS='|' read -r rip epoch score total users last cc cname usage isp domain tor wl hostnames cats <<EOF
+$rec
+EOF
+    color="$CGreen"; [ "$score" -ge 25 ] && color="$CYellow"; [ "$score" -ge 75 ] && color="$CRed"
+    echo ""
+    lookuprow "Score" "${score}% abuse confidence" "$color"
+    lookuprow "Reports" "$total from $users distinct user(s) in the last $abuseipdbmaxage days"
+    lookuprow "Last report" "${last:-never}"
+    lookuprow "Categories" "${cats:-none}"
+    lookuprow "Country" "${cname:-${cc:-unknown}}${cname:+ (${cc})}"
+    lookuprow "Usage type / ISP" "${usage:-n/a} / ${isp:-n/a}"
+    lookuprow "Domain / hostnames" "${domain:-n/a} / ${hostnames:-none}"
+    lookuprow "Tor / whitelisted" "${tor:-n/a} / ${wl:-n/a}"
+  else
+    lookuprow "AbuseIPDB" "not checked - ${repreason:-no lookup was made}" "$CDkGray"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# lookupresults searches every loaded feed for IP or domain $2 ($1=ip|domain) and prints all findings
+
+lookupresults()
+{
+  local kind="$1" v="$2" matches exact parents subs nsubs feedcount=0 enc="$2"
+  inlinestatus "Searching the feeds for $v"
+  if [ "$kind" = "ip" ]; then
+    exact="$(lookupipfeeds "$v")"
+  else
+    matches="$(lookupdomainfeeds "$v")"
+    exact="$(echo "$matches" | sed -n 's/^E|//p')"
+    parents="$(echo "$matches" | sed -n 's/^P|//p')"
+    subs="$(echo "$matches" | sed -n 's/^S|//p')"
+  fi
+  printf '\33[2K\r'
+  clear
+  echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2.L Lookup Threat Indicator - $v" 136; echo -e "${CClear}"
+  echo -e "${InvGreen} ${CClear}"
+  echo -e "${InvGreen} ${CClear} Results from the feeds IOCMON has downloaded (the lists DNS watch, conntrack and Skynet use), the raw URLhaus/ThreatFox downloads, and${CClear}"
+  echo -e "${InvGreen} ${CClear} IOCMON's own logs and settings. Feeds that are switched off, or have not downloaded yet, are not searched.${CClear}"
+  echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+
+  lookupsection "Feed Matches"
+  if [ -n "$exact" ]; then
+    feedcount="$(echo "$exact" | cut -d'|' -f2 | tr ',' '\n' | sort -u | grep -c .)"
+    lookuprow "Result" "FOUND - listed by $feedcount feed(s): $(emailfeedname "$(echo "$exact" | cut -d'|' -f2 | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')")" "$CRed"
+    echo "$exact" | while IFS= read -r m; do
+      if [ "$kind" = "ip" ] && [ "${m%%|*}" != "$v" ]; then lookupfeedmatch "$m" "netblock containing $v"; else lookupfeedmatch "$m"; fi
+    done
+  else
+    lookuprow "Result" "not listed in any loaded feed" "$CGreen"
+  fi
+
+  if [ "$kind" = "domain" ]; then
+    lookupsection "Related Listings"
+    if [ -n "$parents" ]; then
+      echo "$parents" | while IFS= read -r m; do lookupfeedmatch "$m" "parent domain of $v"; done
+    else
+      lookuprow "Parent domains" "none listed"
+    fi
+    if [ -n "$subs" ]; then
+      nsubs="$(echo "$subs" | grep -c .)"
+      echo -e "${InvGreen} ${CClear}"
+      lookuprow "Subdomains listed" "$nsubs$([ "$nsubs" -gt 20 ] && echo ", the first 20 shown")" "$CYellow"
+      echo "$subs" | head -n 20 | while IFS='|' read -r e s f; do lookuprow "" "$e  ($(emailfeedname "$s"): $f)"; done
+    else
+      lookuprow "Subdomains listed" "none"
+    fi
+  fi
+
+  lookupurlhausraw "$v"
+  lookupthreatfoxraw "$v"
+  lookuphistory "$v" "$kind"
+  lookupexceptions "$kind" "$v"
+
+  lookupsection "Lookup Links"
+  if [ "$kind" = "ip" ]; then
+    lookuprow "AlienVault OTX" "$(otxiplink "$v")"
+    lookuprow "AbuseIPDB" "https://www.abuseipdb.com/check/$v"
+  else
+    lookuprow "AlienVault OTX" "https://otx.alienvault.com/indicator/domain/$v"
+  fi
+  lookuprow "URLhaus" "https://urlhaus.abuse.ch/host/$enc/"
+  lookuprow "ThreatFox" "https://threatfox.abuse.ch/browse.php?search=ioc%3A$enc"
+
+  lookupreputation "$v" "$kind"
+  echo -e "${InvGreen} ${CClear}"
+  echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vlookupindicator is the Research - Lookup Threat Indicator screen: asks for an IP or domain and shows every feed finding for it
+
+vlookupindicator()
+{
+  local entry norm
+  while true; do
+    [ "$exitallmenus" -eq 1 ] && break
+    resolvefeedsroot
+    clear
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2.L Research - Lookup Threat Indicator" 136; echo -e "${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} Look up any IP address or domain in the threat feeds IOCMON has downloaded. The result shows every feed that lists it, with all the${CClear}"
+    echo -e "${InvGreen} ${CClear} detail those feeds carry, listed parent domains and subdomains, IOCMON's own alerts on it, any exception list covering it, lookup links,${CClear}"
+    echo -e "${InvGreen} ${CClear} and an optional AbuseIPDB check. A URL or a defanged entry such as hxxp://evil[.]com/path is reduced to its host. Feeds are IPv4 only.${CClear}"
+    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    if [ -z "$feedsroot" ] || { [ ! -s "$feedsroot/ips.txt" ] && [ ! -s "$feedsroot/domains.txt" ] && [ ! -s "$feedsroot/qfeeds_ips.txt" ] && [ ! -s "$feedsroot/qfeeds_domains.txt" ]; }; then
+      echo -e "${InvGreen} ${CClear} ${CYellow}No feed lists are available yet (the drive is not mounted, or no feed has downloaded). Use (F) on the main screen to refresh them.${CClear}"
+    else
+      echo -e "${InvGreen} ${CClear} Searching ${CGreen}$(cat "$feedsroot/ips.txt" "$feedsroot/qfeeds_ips.txt" 2>/dev/null | wc -l | tr -d ' ')${CClear} IP/netblock and ${CGreen}$(cat "$feedsroot/domains.txt" "$feedsroot/qfeeds_domains.txt" 2>/dev/null | wc -l | tr -d ' ')${CClear} domain entries, feeds last updated ${CGreen}$(feedsoldestfetch)${CClear} (oldest)."
+    fi
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+    echo ""
+    read -r -p "Please enter any IP or domain to determine if it is present in the available feeds (e=Exit): " entry
+    case "$entry" in
+      [Ee]) break ;;
+      [Ee]!) exitallmenus=1; break ;;
+      "") continue ;;
+    esac
+    norm="$(lookupnormalize "$entry")"
+    case "$norm" in
+      ip\|*|domain\|*)
+        lookupresults "${norm%%|*}" "${norm#*|}"
+        echo ""
+        read -r -p "Press Enter to look up another indicator, or e=Exit: " entry
+        case "$entry" in [Ee]) break ;; [Ee]!) exitallmenus=1; break ;; esac ;;
+      ipv6\|*)
+        echo ""; echo -e "${CYellow}IOCMON's feeds hold IPv4 addresses only, so an IPv6 address can't be looked up.${CClear}"; sleep 3 ;;
+      *)
+        echo ""; echo -e "${CYellow}That doesn't look like an IPv4 address or a domain name.${CClear}"; sleep 3 ;;
+    esac
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# vfeedsources is the Feed Sources, Reputation, API Keys and Lookups submenu: feed toggles, API keys and the AbuseIPDB reputation check.
 
 vfeedsources()
 {
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
-    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2. Feed Sources, Reputation & API Keys" 136; echo -e "${CClear}"
+    echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "2. Feed Sources, Reputation, API Keys and Lookups" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Please choose from the various options below to toggle an IoC feed source on or off, or to set its API key. Feodo, Spamhaus and NetAPI${CClear}"
     echo -e "${InvGreen} ${CClear} need no key, and NetAPI's compromised-domain list gives DNS watch its coverage out of the box. URLhaus and ThreatFox each need a free${CClear}"
     echo -e "${InvGreen} ${CClear} abuse.ch Auth-Key (one key from auth.abuse.ch works for both) and Q-Feeds needs a token; each key field becomes active once its feed is${CClear}"
     echo -e "${InvGreen} ${CClear} switched on. The optional AbuseIPDB reputation check (items 12-17) looks up the public IP behind each conntrack, DNS, dropbear or httpd${CClear}"
     echo -e "${InvGreen} ${CClear} alert as it is raised, and adds its abuse score, report history, top report categories, country, ISP and usage type to the dashboard,${CClear}"
-    echo -e "${InvGreen} ${CClear} the Reputation log ([U]), the IoC log and alert emails.${CClear}"
+    echo -e "${InvGreen} ${CClear} the Reputation log ([U]), the IoC log and alert emails. Under Research, (L) looks up any IP or domain in the downloaded feeds and${CClear}"
+    echo -e "${InvGreen} ${CClear} shows all they hold about it.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     urlhauskeydisp="<none - required for URLhaus>"
@@ -2863,13 +3288,17 @@ vfeedsources()
     menurow "(15)" "  Report age window (days)" "${CGreen}$abuseipdbmaxage${CClear}" 30 "$enableabuseipdb"
     menurow "(16)" "  Daily lookup ceiling" "${CGreen}$abuseipdbdailymax${CClear}" 30 "$enableabuseipdb"
     menurow "(17)" "  Max lookups per scan cycle" "${CGreen}$abuseipdbcyclemax${CClear}" 30 "$enableabuseipdb"
-    menurow " |--" "  Lookup(s) used today" "${CGreen}$(abuseipdbusedtoday) of ${abuseipdbdailymax}${CClear}" 30 "$enableabuseipdb"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
+    menurow "  |-" "  Lookup(s) used today" "${CGreen}$(abuseipdbusedtoday) of ${abuseipdbdailymax}${CClear}" 30 "$enableabuseipdb"
+    echo -e "${InvGreen} ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${CWhite}Research${CClear}"
+    echo -e "${InvGreen} ${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( L)${CClear} : "; padright "Lookup Threat Indicator" 30; echo -e ": ${CGreen}Search the loaded feeds for any IP or domain${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Exit${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-17, e=Exit): " selfeed
+    read -p "Please select? (1-17, L=Lookup, e=Exit): " selfeed
     case "$selfeed" in
       1) if [ "$enablefeodo" -eq 1 ]; then enablefeodo=0; else enablefeodo=1; fi; feedsaveconfig ;;
       2) if [ "$enablespamhaus" -eq 1 ]; then enablespamhaus=0; else enablespamhaus=1; fi; feedsaveconfig ;;
@@ -2927,6 +3356,7 @@ vfeedsources()
       17) [ "$enableabuseipdb" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${abuseipdbcyclemax}${CClear}"
           read -p "Most AbuseIPDB lookups in a single scan cycle (>=1, blank to keep current): " val
           [ -n "$val" ] && { validateint "$val" 1 && abuseipdbcyclemax="$val" && feedsaveconfig; }; } ;;
+      [Ll]) vlookupindicator ;;
       [Ee]) feedkeylessrevert; break ;;
       [Ee]!) feedkeylessrevert; exitallmenus=1; break ;;
       *) ;;
@@ -4472,7 +4902,7 @@ abuseipdbquery()
       rm -f "$body" "$hdrs"; return 1 ;;
     401|403)
       printf '%s\t%s\n' "$((nowepoch + 3600))" "API key rejected (HTTP $code)" > "$stateroot/abuseipdb_block"
-      repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 13 under Feed Sources, Reputation & API Keys"
+      repfailreason="AbuseIPDB rejected the API key (HTTP $code) - lookups paused for 1h, check item 13 under Feed Sources, Reputation, API Keys and Lookups"
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $repfailreason." >> "$logfile"
       rm -f "$body" "$hdrs"; return 1 ;;
     *)
@@ -4532,10 +4962,11 @@ abuseipdbquery()
 reputationlookup()
 {
   local kind="$1" indicator="$2" source="$3" ip="" target="" rec="" reason="" cachednote="" cyclefile="${abuseipdbcyclefile:-/tmp/iocmon_aipdb_cycle.$$}" cyclecount=0 now
-  local rip epoch score total users last cc cname usage isp domain tor wl hostnames cats flags="" catnames testmark="" testtag=""
+  local rip epoch score total users last cc cname usage isp domain tor wl hostnames cats flags="" catnames testmark="" testtag="" manualnote=""
   reptag=""; repip=""; repreason=""; repscore=""
   [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ -n "$stateroot" ] || return
   [ "$kind" = "simulated" ] && { testmark=" [SIMULATED TEST]"; testtag="TEST "; }
+  [ "$kind" = "lookup" ] && { testmark=" [MANUAL LOOKUP]"; manualnote="MANUAL LOOKUP - "; }
 
   case "$kind" in
     conntrack|auth)
@@ -4561,6 +4992,9 @@ reputationlookup()
       else
         reason="the test indicator $target is not a public IP address"
       fi ;;
+    lookup)
+      target="$indicator"; ip="$target"
+      ispublicip "$ip" || { reason="$ip is not a public IP address"; ip=""; } ;;
     *) return ;;
   esac
 
@@ -4576,7 +5010,7 @@ reputationlookup()
       reason=""
       [ -f "$cyclefile" ] && cyclecount="$(cat "$cyclefile" 2>/dev/null)"
       validateint "$cyclecount" 0 || cyclecount=0
-      if [ -z "$testtag" ] && [ "$cyclecount" -ge "$abuseipdbcyclemax" ]; then
+      if [ -z "$testmark" ] && [ "$cyclecount" -ge "$abuseipdbcyclemax" ]; then
         reason="per-cycle lookup limit ($abuseipdbcyclemax) reached"
       else
         echo "$((cyclecount + 1))" > "$cyclefile"
@@ -4612,7 +5046,7 @@ EOF
 
   echo "$now | $ip | ${score}% | ${total} reports/${users} users | last ${last:-never} | ${cc:-??} | $(shortusagetype "$usage") | ${isp:-n/a} | ${flags:-no flags} | ${cats:-no categories} | $kind/$source $indicator${cachednote}${testmark}" >> "$stateroot/reputation.log"
   rotatelogfile "$stateroot/reputation.log" "$logsize"
-  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${testtag:+SIMULATED TEST - }AbuseIPDB reputation for $ip ($kind $indicator): ${score}% abuse confidence, ${total} report(s) from ${users} user(s) in the last ${abuseipdbmaxage} days, last reported ${last:-never}, ${cname:-${cc:-unknown country}}, ${usage:-unknown usage}, ISP ${isp:-n/a}${flags:+, $flags}${cats:+, categories: $cats}${cachednote}." >> "$logfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${testtag:+SIMULATED TEST - }${manualnote}AbuseIPDB reputation for $ip ($kind $indicator): ${score}% abuse confidence, ${total} report(s) from ${users} user(s) in the last ${abuseipdbmaxage} days, last reported ${last:-never}, ${cname:-${cc:-unknown country}}, ${usage:-unknown usage}, ISP ${isp:-n/a}${flags:+, $flags}${cats:+, categories: $cats}${cachednote}." >> "$logfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -4718,7 +5152,7 @@ reputationstatus()
   fi
   used="$(abuseipdbusedtoday)"
   line=""
-  [ -n "$stateroot" ] && line="$(logall "$stateroot/reputation.log" | grep -E '^[^|]*\| [^|]* \| [0-9]+% \|' | tail -n1)"
+  [ -n "$stateroot" ] && line="$(logall "$stateroot/reputation.log" | grep -E '^[^|]*\| [^|]* \| [0-9]+% \|' | grep -vF '[MANUAL LOOKUP]' | tail -n1)"
   if [ -z "$line" ]; then
     echo -e "${CWhite}AbuseIPDB: no lookups yet (${CGreen}${used}/${abuseipdbdailymax}${CWhite})${CClear}"; return
   fi
@@ -5626,12 +6060,39 @@ routeraddrs()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# selfqfiles prints the Kairos/Astraea files listing the router's own lookups that exist and are not empty
+# selfqfiles prints the Kairos/Astraea files listing the router's own lookups that exist, are not empty and (Kairos) whose add-on is running
 
 selfqfiles()
 {
   local f
-  for f in $selfqpaths; do [ -s "$f" ] && echo "$f"; done
+  for f in $selfqpaths; do
+    [ -s "$f" ] || continue
+    case "$f" in "${kairosstatusfile%/*}"/*) kairosactive || continue ;; esac
+    echo "$f"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# kairosactive succeeds while Kairos's state is known: its status file written in the last 3 minutes, or for an older Kairos, kairos_time in nvram
+
+kairosactive()
+{
+  local k v t="" updated=""
+  if [ -f "$kairosstatusfile" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in
+        time) t="$v" ;;
+        updated) updated="$v" ;;
+      esac
+    done < "$kairosstatusfile"
+    validateint "$updated" 0 || return 1
+    [ $(( $(date +%s) - updated )) -le 180 ] || return 1
+  else
+    nvramget kairos_time || return 1
+    t="$nvramval"
+  fi
+  case "$t" in booting|synced|degraded) return 0 ;; esac
+  return 1
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -9552,7 +10013,7 @@ renderdashboard()
     elif [ "$enableabuseipdb" -eq 1 ]; then
       echo -e "${InvGreen} ${CClear}   ${CDkGray}No AbuseIPDB reputation lookups yet - one runs each time a conntrack, DNS, dropbear or httpd alert is raised.${CClear}"
     else
-      echo -e "${InvGreen} ${CClear}   ${CDkGray}The AbuseIPDB reputation check is off - turn it on under Configuration Menu (2) Feed Sources, Reputation & API Keys.${CClear}"
+      echo -e "${InvGreen} ${CClear}   ${CDkGray}The AbuseIPDB reputation check is off - turn it on under Configuration Menu (2) Feed Sources, Reputation, API Keys and Lookups.${CClear}"
     fi
   elif [ "$alertviewmode" = "hash" ]; then
     echo -e "${InvGreen} ${CClear} ${CWhite}Recent Hash-Check Log${CClear} (Logs: [${CGreen}V${CClear}] Full, [${CGreen}O${CClear}] IoC Detections, [${CGreen}D${CClear}] Dropbear, [${CGreen}U${CClear}] Reputation, [${CGreen}R${CClear}] Clear Log)"
