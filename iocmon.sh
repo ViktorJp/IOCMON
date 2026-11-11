@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.5
+# Version: 2.0.6
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-08
+# Last Updated: 2026-Nov-10
 # ============================================================================================================================
 #
 # Description:
@@ -107,7 +107,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.5"
+version="2.0.6"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -205,6 +205,7 @@ aghauthfile="/jffs/addons/iocmon.d/agh.auth"  # legacy login file, moved into ag
 aghreplyfile="/tmp/iocmon_agh_replies"  # "domain|ip" answers seen recently, RAM only, for dnsreplyip
 selfqpaths="/tmp/astraea/selfq /tmp/kairos/selfq"  # Astraea's and Kairos's own router lookups ("name|type|epoch", RAM, 2 hours), read only
 kairosstatusfile="/tmp/kairos/status"  # Kairos's key=value state (time, dns, updated, version), read only
+emailfallbacksubject="ALERT: IOCMON could not deliver a security alert"  # notice sent when an alert email is rejected
 selfqseenfile="/tmp/iocmon_selfq_seen"  # "name epoch" of set-aside lookups already logged, so each is logged once per 6 hours
 logtrimstamp="/tmp/iocmon_logtrim.last"  # time of the last 6-hourly activity log rotation check
 logkeep=2                       # rotated copies kept per log (.1 newest, .2 oldest)
@@ -526,7 +527,7 @@ ScriptUpdateFromAMTM()
 
     echo ""
     echo -e "${InvGreen} ${CClear} Downloading latest ${CGreen}IOCMON${CClear}...Please stand by while we enhance your router's security posture..."
-    curl -fsSL --connect-timeout 10 --max-time 120 "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh.new" && scriptfilevalid "/jffs/scripts/iocmon.sh.new" && chmod 755 "/jffs/scripts/iocmon.sh.new" && mv -f "/jffs/scripts/iocmon.sh.new" "/jffs/scripts/iocmon.sh"
+    curl -fsSL "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
     DLsuccess=$?
     if [ "$DLsuccess" -eq 0 ]; then
       touch "$restartpendingfile"
@@ -549,21 +550,28 @@ downloadiocmonupdate()
   local url="$1" label="$2" dlrc
 
   if [ "$label" = "STABLE" ]; then
-    curl -fsSL --connect-timeout 10 --max-time 120 "$iocmonreposcriptstable" -o "${apppath}.new"
+    curl -fsSL "$iocmonreposcriptstable" -o "${apppath}.new"
     dlrc=$?
   else
     curl --silent --retry 3 --connect-timeout 10 --max-time 30 --retry-delay 1 --retry-all-errors --fail "$url" -o "${apppath}.new"
     dlrc=$?
   fi
 
-  if [ "$dlrc" -eq 0 ] && scriptfilevalid "${apppath}.new"; then
+  [ "$dlrc" -eq 0 ] && ! scriptfilevalid "${apppath}.new" && dlrc=255
+
+  if [ "$dlrc" -eq 0 ]; then
     mv "${apppath}.new" "$apppath"
     chmod 755 "$apppath"
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
     return 0
   else
     rm -f "${apppath}.new"
-    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
+    if [ "$dlrc" -eq 255 ]; then
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The downloaded IOCMON $label script failed validation and was not installed." >> "$logfile"
+    else
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
+    fi
+    [ "$dlrc" -eq 255 ] && return 2
     return 1
   fi
 }
@@ -3740,9 +3748,7 @@ qfeedscount()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# dropreservedindicators removes lines from list $1 whose indicator overlaps a loopback, private, link-local, CGNAT,
-# documentation, multicast or reserved range. A feed entry there cannot name a remote host, but it would match local
-# traffic in the conntrack watch and be sent to Skynet's ban list. A list is left as it was if the filter itself fails.
+# dropreservedindicators removes list $1 lines whose indicator overlaps a loopback, private, CGNAT, multicast or other reserved range
 
 dropreservedindicators()
 {
@@ -4249,7 +4255,7 @@ feedslock()
   local lockpid
   if [ -f "$feedslockfile" ]; then
     lockpid="$(cat "$feedslockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && { tr '\0' ' ' < "/proc/$lockpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
+    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && iocmonpid "$lockpid"; then
       return 1
     fi
   fi
@@ -4408,13 +4414,9 @@ _DownloadCEMLibraryFile_()
    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: ${msgStr} the shared AMTM email library script file to support email notifications..." >> "$logfile"
 
    mkdir -m 755 -p "$CUSTOM_EMAIL_LIBDir"
-   curl -fLSs --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 5 --retry-connrefused \
-   "${CEM_LIB_URL}/$CUSTOM_EMAIL_LIBName" -o "${CUSTOM_EMAIL_LIBFile}.new"
+   curl -kLSs --retry 3 --retry-delay 5 --retry-connrefused \
+   "${CEM_LIB_URL}/$CUSTOM_EMAIL_LIBName" -o "$CUSTOM_EMAIL_LIBFile"
    curlCode="$?"
-   if [ "$curlCode" -eq 0 ] && sh -n "${CUSTOM_EMAIL_LIBFile}.new" >/dev/null 2>&1
-   then mv -f "${CUSTOM_EMAIL_LIBFile}.new" "$CUSTOM_EMAIL_LIBFile"
-   else rm -f "${CUSTOM_EMAIL_LIBFile}.new"; [ "$curlCode" -eq 0 ] && curlCode=1
-   fi
 
    if [ "$curlCode" -eq 0 ] && [ -f "$CUSTOM_EMAIL_LIBFile" ]
    then
@@ -4431,8 +4433,6 @@ _DownloadCEMLibraryFile_()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-emailfallbacksubject="ALERT: IOCMON could not deliver a security alert"
-
 # _SendEMailNotification_ - ARG1 FROM_NAME alias, ARG2 subject, ARG3 body-text file path, ARG4 body title (optional).
 
 _SendEMailNotification_()
@@ -4828,10 +4828,11 @@ flushemailbatch()
   local retryfile="$stateroot/email_batch.retry" tries=0 nextretry=0
 
   [ -s "$batchfile" ] || return
+  tab="$(printf '\t')"
   [ -f "$retryfile" ] && read -r tries nextretry < "$retryfile"
   case "$tries" in ""|*[!0-9]*) tries=0 ;; esac
   case "$nextretry" in ""|*[!0-9]*) nextretry=0 ;; esac
-  [ "$(date +%s)" -lt "$nextretry" ] && return
+  [ "$(date +%s)" -lt "$nextretry" ] && ! grep -q "^simulated$tab" "$batchfile" && return
   emailsendrc=0
   mv "$batchfile" "$sendfile"
 
@@ -4839,7 +4840,6 @@ flushemailbatch()
 
   if [ "$count" -le 1 ]; then
     local kind indicator source detail repip inteltarget
-    tab="$(printf '\t')"
     IFS="$tab" read -r kind indicator source detail repip inteltarget < "$sendfile"
     [ "$repip" = "-" ] && repip=""
     [ "$inteltarget" = "-" ] && inteltarget=""
@@ -4848,8 +4848,9 @@ flushemailbatch()
     sendbatchmessage "$sendfile" "$count"
   fi
 
-  if [ "$emailsendrc" -eq 0 ]; then
-    rm -f "$sendfile" "$retryfile"
+  if [ "$emailsendrc" -eq 0 ] || ! grep -qv "^simulated$tab" "$sendfile"; then
+    rm -f "$sendfile"
+    [ "$emailsendrc" -eq 0 ] && rm -f "$retryfile"
   elif [ "$((tries + 1))" -ge 6 ]; then
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Gave up emailing $count alert(s) after $((tries + 1)) attempts; see the IOC match lines in this log." >> "$logfile"
     rm -f "$sendfile" "$retryfile"
@@ -6221,7 +6222,8 @@ dnslogtimes()
         if ($i ~ /^query\[[A-Za-z]+\]$/) name = $(i + 1)
         if ($i == "from" && (i + 1) <= NF) src = $(i + 1)
       }
-      if (name == "" || src == "") next
+      if (name == "" || src !~ /^[0-9A-Fa-f.:]+$/) next
+      name = tolower(name); gsub(/[^a-z0-9._-]/, "_", name)
       a = src; sub(/^::ffff:/, "", a)
       if (index(r, " " a " ") == 0) next
       e = 0
@@ -6429,12 +6431,14 @@ checkdns()
 
     querypairs="$(tail -n "$newlines" "$synclog" | grep -F 'dnsmasq' | awk '
       {
-        q=0
-        for (i=1; i<=NF; i++) if ($i ~ /^query\[[^]]+\]$/) { q=i; break }
-        if (!q || NF < q+3 || $(NF-1)!="from" || $NF !~ /^[0-9a-fA-F.:]+$/) next
-        domain=$(q+1); for (i=q+2; i<=NF-2; i++) domain=domain"_"$i
+        domain=""; src=""
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^query\[[A-Za-z]+\]$/) { domain=$(i+1) }
+          if ($i=="from" && (i+1)<=NF) { src=$(i+1) }
+        }
+        if (domain=="" || src !~ /^[0-9A-Fa-f.:]+$/) next
         domain=tolower(domain); gsub(/[^a-z0-9._-]/, "_", domain)
-        print domain"|"$NF
+        print domain"|"src
       }
     ' | sort -u)"
 
@@ -6626,7 +6630,7 @@ checkauth()
   [ -f "$httpdseenfile" ] || hdfirst=1
 
   dropbearlines="$(grep -F 'dropbear' "$synclog" | grep -E 'Bad password attempt|Login attempt for nonexistent user' | authnewlines "$dropbearseenfile")"
-  httpdlines="$(grep -E ' HTTPD(\[[0-9]+\])?: \[LOGIN\]\[[a-z]+\]\[[A-Za-z]+\] failed \(' "$synclog" | authnewlines "$httpdseenfile")"
+  httpdlines="$(grep -E ' (HTTPD|httpd)(\[[0-9]+\])?: ' "$synclog" | grep -iE '\[LOGIN\]\[[a-z]+\]\[[a-z]+\] failed \(|login.?fail|invalid.?password|authentication.?fail' | authnewlines "$httpdseenfile")"
 
   if [ "$dbfirst" -eq 1 ]; then
     dropbearlines=""
@@ -7463,7 +7467,7 @@ fsintegritylock()
   local lockfile="$addonsdir/fsintegrity.lock" lockpid
   if [ -f "$lockfile" ]; then
     lockpid="$(cat "$lockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && { tr '\0' ' ' < "/proc/$lockpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
+    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && iocmonpid "$lockpid"; then
       return 1
     fi
   fi
@@ -8823,6 +8827,14 @@ webjobwrite()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# iocmonpid succeeds when pid $1 is a live IOCMON process, so a stale pid reused by another program never holds a lock
+
+iocmonpid()
+{
+  { tr '\0' ' ' < "/proc/$1/cmdline"; } 2>/dev/null | grep -q iocmon
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # webjoblock takes the one-job lock atomically, replacing a lock whose owner has died
 
 webjoblock()
@@ -8936,11 +8948,12 @@ webjobupdate()
   if [ "$(vercompare "$remoteversion" "$version")" != "gt" ]; then webjobmsg="IOCMON v$version is already current."; return 0; fi
   echo > "$updatingfile"
   cp -f "$apppath" "$backup"
-  if ! downloadiocmonupdate "$remoteurl" "$remotelabel"; then
-    rm -f "$updatingfile" "$backup"
-    webjobmsg="The download failed. IOCMON v$version was left in place."
-    return 1
-  fi
+  downloadiocmonupdate "$remoteurl" "$remotelabel"
+  case "$?" in
+    0) ;;
+    2) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed validation. IOCMON v$version was left in place."; return 1 ;;
+    *) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed. IOCMON v$version was left in place."; return 1 ;;
+  esac
   if ! scriptfilevalid "$apppath"; then
     cp -f "$backup" "$apppath"
     chmod 755 "$apppath"
@@ -8995,13 +9008,13 @@ webjobstart()
 {
   local pidfile="$addonsdir/iocmon.pid" monpid waited=0
   monpid="$(cat "$pidfile" 2>/dev/null)"
-  if [ -n "$monpid" ] && kill -0 "$monpid" 2>/dev/null; then webjobmsg="The monitor is already running. It may be paused or open in a menu."; return 0; fi
+  if [ -n "$monpid" ] && iocmonpid "$monpid"; then webjobmsg="The monitor is already running. It may be paused or open in a menu."; return 0; fi
   if [ ! -x /opt/sbin/screen ]; then webjobmsg="The Entware screen package is required to start the monitor from here."; return 1; fi
   TERM="${TERM:-xterm}"; export TERM
   sh "$apppath" -screen -now
   while [ "$waited" -lt 15 ]; do
     monpid="$(cat "$pidfile" 2>/dev/null)"
-    if [ -n "$monpid" ] && kill -0 "$monpid" 2>/dev/null; then webjobmsg="Monitor started. Data updates after its first cycle."; return 0; fi
+    if [ -n "$monpid" ] && iocmonpid "$monpid"; then webjobmsg="Monitor started. Data updates after its first cycle."; return 0; fi
     sleep 1
     waited=$((waited + 1))
   done
@@ -9888,7 +9901,7 @@ pidfile="$addonsdir/iocmon.pid"
 mkdir -m 755 -p "$addonsdir"
 if [ -f "$pidfile" ]; then
   oldpid="$(cat "$pidfile" 2>/dev/null)"
-  if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && { tr '\0' ' ' < "/proc/$oldpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
+  if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && iocmonpid "$oldpid"; then
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Another IOCMON instance (PID $oldpid) is already running - exiting to avoid state corruption." >> "$logfile"
     clear
     echo -e "${CRed}ERROR: IOCMON is already running (PID $oldpid) - a second instance was not started, to avoid two${CClear}"
