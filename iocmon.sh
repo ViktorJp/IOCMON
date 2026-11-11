@@ -1005,7 +1005,7 @@ saveconfig()
     echo 'fsmaxhashsize='$fsmaxhashsize
     echo 'enablequarantine='$enablequarantine
     echo 'enablecrondiff='$enablecrondiff
-    echo 'cronexceptions="'"$cronexceptions"'"'
+    printf "cronexceptions='%s'\n" "$(printf '%s' "$cronexceptions" | sed "s/'/'\\\\''/g")"
     echo 'enablenvramwatch='$enablenvramwatch
     echo 'enablefwrulediff='$enablefwrulediff
     echo 'enablefsdeletionwatch='$enablefsdeletionwatch
@@ -4187,7 +4187,7 @@ feedslock()
   local lockpid
   if [ -f "$feedslockfile" ]; then
     lockpid="$(cat "$feedslockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && kill -0 "$lockpid" 2>/dev/null; then
+    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && { tr '\0' ' ' < "/proc/$lockpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
       return 1
     fi
   fi
@@ -7397,7 +7397,7 @@ fsintegritylock()
   local lockfile="$addonsdir/fsintegrity.lock" lockpid
   if [ -f "$lockfile" ]; then
     lockpid="$(cat "$lockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && kill -0 "$lockpid" 2>/dev/null; then
+    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && { tr '\0' ' ' < "/proc/$lockpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
       return 1
     fi
   fi
@@ -9816,7 +9816,7 @@ pidfile="$addonsdir/iocmon.pid"
 mkdir -m 755 -p "$addonsdir"
 if [ -f "$pidfile" ]; then
   oldpid="$(cat "$pidfile" 2>/dev/null)"
-  if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && kill -0 "$oldpid" 2>/dev/null; then
+  if [ -n "$oldpid" ] && [ "$oldpid" != "$$" ] && { tr '\0' ' ' < "/proc/$oldpid/cmdline"; } 2>/dev/null | grep -q iocmon; then
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Another IOCMON instance (PID $oldpid) is already running - exiting to avoid state corruption." >> "$logfile"
     clear
     echo -e "${CRed}ERROR: IOCMON is already running (PID $oldpid) - a second instance was not started, to avoid two${CClear}"
@@ -9834,7 +9834,7 @@ fi
 echo "$$" > "$pidfile"
 rm -f "$restartpendingfile" >/dev/null 2>&1
 rm -f "$updatingfile" >/dev/null 2>&1
-trap 'rm -f "$pidfile"' EXIT INT TERM
+trap 'rm -f "$pidfile"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 trap 'winchpending=1' WINCH
 
 # Check for and add/refresh the alias for IOCMON, only touching the file if it's actually missing/stale
