@@ -1,4 +1,4 @@
-# IOCMON v2.0.5
+# IOCMON v2.0.6
 Asus-Merlin IDS/IPS Security Intelligence Monitor
 
 Modified: Nov-09-2026
