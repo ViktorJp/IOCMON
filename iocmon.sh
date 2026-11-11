@@ -3984,7 +3984,7 @@ removeskynetimports()
 {
   local id removed=0
   skynetremovedcount=0
-  for id in $(skynetimportids); do
+  for id in ${1-$(skynetimportids)}; do
     if sh /jffs/scripts/firewall rules remove "$id" >/dev/null 2>&1; then
       removed=$((removed + 1))
     else
@@ -4077,16 +4077,18 @@ syncskynetimport()
     return 1
   fi
 
-  skynetprogress 5 6 "Removing previous IOCMON-tagged rule(s)"
-  removeskynetimports
-
   if [ "$entrycount" -eq 0 ]; then
+    skynetprogress 5 6 "Removing previous IOCMON-tagged rule(s)"
+    removeskynetimports
     rm -f "$importfile"
     echo "$newhash" > "$hashfile"
     return 1
   fi
 
-  skynetprogress 6 6 "Importing $entrycount entries into Skynet"
+  local previmports
+  previmports="$(skynetimportids)"
+
+  skynetprogress 5 6 "Importing $entrycount entries into Skynet"
   local importattempt=0 importrc=1 importoutput=""
   while [ "$importattempt" -lt 3 ]; do
     [ "$importattempt" -gt 0 ] && sleep $((importattempt * 3))
@@ -4099,6 +4101,11 @@ syncskynetimport()
   if [ "$importrc" -eq 0 ]; then
     echo "$newhash" > "$hashfile"
     rm -f "$importfile"
+    # Only once a new rule exists: a failed import keeps the old bans in force.
+    if [ "$(skynetimportids)" != "$previmports" ]; then
+      skynetprogress 6 6 "Removing superseded IOCMON-tagged rule(s)"
+      removeskynetimports "$previmports"
+    fi
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Imported $entrycount IPv4 indicator(s) into Skynet's ban list, tagged IOCMON." >> "$logfile"
     skynetimportcount="$entrycount"
     return 0
