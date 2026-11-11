@@ -48,7 +48,7 @@ v2.0.6    - (BETA)
               - An excepted address inside a feed range sent to Skynet is cut out of that range, and the rest
                 of the range stays banned.
           - PATCH: Keep Skynet bans in force during feed import (@andrewfader #25):
-              - Feeds being imported to Skynet are immported first, and once completed successfully, will
+              - Feeds being imported to Skynet are imported first, and once completed successfully, will
                 remove the old previous ipset to cut down on risk exposure during transfer or failed ingests.
 
 v2.0.0    - (November 7, 2026)
