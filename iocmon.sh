@@ -4365,6 +4365,8 @@ _DownloadCEMLibraryFile_()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+emailfallbacksubject="ALERT: IOCMON could not deliver a security alert"
+
 # _SendEMailNotification_ - ARG1 FROM_NAME alias, ARG2 subject, ARG3 body-text file path, ARG4 body title (optional).
 
 _SendEMailNotification_()
@@ -4375,6 +4377,7 @@ _SendEMailNotification_()
        printf "${CRed}\r[ERROR: Email library script ($CUSTOM_EMAIL_LIBFile) *NOT* FOUND.]${CClear}"
        sleep 5
        echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Email library script [$CUSTOM_EMAIL_LIBFile] *NOT* FOUND." >> "$logfile"
+       emailsendrc=1
        return 1
    fi
 
@@ -4384,6 +4387,7 @@ _SendEMailNotification_()
        printf "${CRed}\r[ERROR: INSUFFICIENT email parameters]${CClear}"
        sleep 5
        echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: INSUFFICIENT email parameters." >> "$logfile"
+       emailsendrc=1
        return 1
    fi
    local retCode  emailBodyTitleStr=""
@@ -4408,8 +4412,20 @@ _SendEMailNotification_()
      printf "${CRed}\r[ERROR: Failure to send email notification (Error Code: $retCode - $statustext).]${CClear}"
      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Failure to send email notification [$2]" >> "$logfile"
      sleep 5
+     case "$2" in
+       TEST:*|"$emailfallbacksubject") ;;
+       *)
+         {
+           emailrow "" "IOCMON raised a security alert, but the email with its details could not be delivered. Your mail provider may have rejected it for naming a flagged domain or address."
+           printf "\n"
+           emailrow "" "Please review the 'IOC match' lines in $logfile on the router."
+         } > "$3"
+         _SendEMailNotification_ "$1" "$emailfallbacksubject" "$3" "$emailfallbacksubject"
+         retCode="$?" ;;
+     esac
    fi
 
+   emailsendrc="$retCode"
    return "$retCode"
 }
 
@@ -4743,8 +4759,14 @@ flushemailbatch()
   [ -n "$stateroot" ] || return
 
   local batchfile="$stateroot/email_batch.pending" sendfile="$stateroot/email_batch.sending" count tab
+  local retryfile="$stateroot/email_batch.retry" tries=0 nextretry=0
 
   [ -s "$batchfile" ] || return
+  [ -f "$retryfile" ] && read -r tries nextretry < "$retryfile"
+  case "$tries" in ""|*[!0-9]*) tries=0 ;; esac
+  case "$nextretry" in ""|*[!0-9]*) nextretry=0 ;; esac
+  [ "$(date +%s)" -lt "$nextretry" ] && return
+  emailsendrc=0
   mv "$batchfile" "$sendfile"
 
   count="$(wc -l < "$sendfile" | tr -d ' ')"
@@ -4760,7 +4782,16 @@ flushemailbatch()
     sendbatchmessage "$sendfile" "$count"
   fi
 
-  rm -f "$sendfile"
+  if [ "$emailsendrc" -eq 0 ]; then
+    rm -f "$sendfile" "$retryfile"
+  elif [ "$((tries + 1))" -ge 6 ]; then
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - **ERROR**: Gave up emailing $count alert(s) after $((tries + 1)) attempts; see the IOC match lines in this log." >> "$logfile"
+    rm -f "$sendfile" "$retryfile"
+  else
+    echo "$((tries + 1)) $(($(date +%s) + 600))" > "$retryfile"
+    { cat "$sendfile"; cat "$batchfile" 2>/dev/null; } | tail -n 100 > "$batchfile.tmp" && mv -f "$batchfile.tmp" "$batchfile"
+    rm -f "$sendfile"
+  fi
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
