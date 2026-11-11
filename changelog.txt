@@ -1,4 +1,4 @@
-v2.0.5    - (BETA)
+v2.0.6    - (BETA)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as informational
@@ -25,6 +25,31 @@ v2.0.5    - (BETA)
             giving you the ability to search across the downloaded feed lists for a specific domain or IP
             address. This helps quickly determine what feed is responsible for reporting a particular host.
             This also optionally gives you the ability to do an AbuseIPDB lookup on that host as well.
+          - PATCH: Feed, log and download data handled as untrusted (@andrewfader #27, partial):
+              - Feed downloads that return an HTTP error are rejected instead of saved.
+              - Feodo and Spamhaus lines must be valid addresses.
+              - DNS query names are lowercased and cleaned of unexpected characters, so mixed-case lookups
+                now match the feeds.
+              - Log text is no longer interpreted as formatting codes.
+              - A downloaded update is installed only after it validates.
+          - PATCH: Lock and config hardening (@andrewfader #28):
+              - Ctrl-C and TERM now stop the monitor cleanly.
+              - A stale process ID left over from a reboot no longer blocks IOCMON from starting.
+              - Cron exceptions containing quotes or $(...) are saved as plain text, so they can no longer
+                break the config or run when it loads.
+          - PATCH: More failed logins detected (@andrewfader #29):
+              - Failed router web logins in the current firmware's log format are now counted, as are SSH
+                attempts for user names that don't exist. The older log wording is still recognized.
+          - PATCH: Alerts are no longer lost when email fails ( @andrewfader #30):
+              - If a provider rejects an alert email, IOCMON sends a short notice without the indicators
+                instead. If mail can't be sent at all, alerts are kept and retried every 10 minutes, up to
+                6 attempts.
+          - PATCH: IP exceptions honored inside banned ranges (@andrewfader #31):
+              - An excepted address inside a feed range sent to Skynet is cut out of that range, and the rest
+                of the range stays banned.
+          - PATCH: Keep Skynet bans in force during feed import (@andrewfader #25):
+              - Feeds being imported to Skynet are immported first, and once completed successfully, will
+                remove the old previous ipset to cut down on risk exposure during transfer or failed ingests.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
