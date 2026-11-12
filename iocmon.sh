@@ -6771,7 +6771,7 @@ fscontenthashchanged()
   awk -F'\t' -v p="$path" '$1!=p' "$hashdb" 2>/dev/null > "$tmpfile"
   printf '%s\t%s\n' "$path" "$newhash" >> "$tmpfile"
   mv "$tmpfile" "$hashdb"
-  [ -z "$oldhash" ] && return 1
+  [ -z "$oldhash" ] && return 0
   [ "$oldhash" != "$newhash" ]
 }
 
@@ -6912,7 +6912,7 @@ fspathexcluded()
   local path="$1" ex extpattern
 
   case "$path" in
-    "$iocmonroot"|"$iocmonroot"/*) return 0 ;;
+    "${iocmonroot:-/nonexistent}"|"${iocmonroot:-/nonexistent}"/*) return 0 ;;
     "$addonsdir"|"$addonsdir"/*) return 0 ;;
     "$CUSTOM_EMAIL_LIBDir"|"$CUSTOM_EMAIL_LIBDir"/*) return 0 ;;
     *.iocmon-quarantine) return 0 ;;
@@ -7351,7 +7351,7 @@ checkentwarecron()
 
   cat $srcfiles 2>/dev/null | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | sort > "$newtab"
 
-  if [ ! -s "$oldtab" ]; then
+  if [ ! -f "$oldtab" ]; then
     mv "$newtab" "$oldtab"
     return
   fi
@@ -7383,7 +7383,7 @@ checkfirewallrules()
 
   iptables-save -t nat 2>/dev/null | grep -E '^-A (VSERVER|GAME_VSERVER|VUPNP) ' | sort > "$newtab"
 
-  if [ ! -s "$oldtab" ]; then
+  if [ ! -f "$oldtab" ]; then
     mv "$newtab" "$oldtab"
     return
   fi
