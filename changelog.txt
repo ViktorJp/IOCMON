@@ -1,4 +1,4 @@
-v2.0.6    - (BETA)
+v2.0.7    - (BETA)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as informational
@@ -50,6 +50,17 @@ v2.0.6    - (BETA)
           - PATCH: Keep Skynet bans in force during feed import (@andrewfader #25):
               - Feeds being imported to Skynet are imported first, and once completed successfully, will
                 remove the old previous ipset to cut down on risk exposure during transfer or failed ingests.
+          - PATCH: First-time alerts no longer missed (@andrewfader #32):
+              - The first Entware cron entry and the first port-forward or UPnP rule now alert, even on a router
+                that had none before.
+              - In hash mode, the first edit to a critical file now alerts.
+              - Without a USB drive, the filesystem watch checked nothing; it now covers the JFFS folders.
+              - A related fix: edits that don't change a file's size are now detected.
+          - PATCH: DNS watch reads every log line (@andrewfader #33):
+              - Lookups logged during a check, or just before a syslog rotation, are no longer skipped.
+              - ThreatFox domains now match regardless of letter case.
+              - The alert-dedup file no longer grows forever.
+              - A feed refresh that produces no domains keeps the previous domain list.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
