@@ -1,4 +1,75 @@
-v2.0.0   - (November 7, 2026)
+v2.0.8    - (November 14, 2026)
+          - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
+            add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
+            no longer raise false "router infected" or DNS tunneling alerts, but logs them as informational
+            instead. A device looking up the same site still raises an alert as before. When IOCMON raises an
+            alert for a domain or IP, it now also shows Astraea's verdict on that site (clear, confirm,
+            unknown or contained), with its reason, in the log, the alert email and the web page. The verdict
+            is for information only and never changes how an alert is handled.
+          - PATCH: Enhanced the way that IOCMON trims log files through log rotation, ie. iocmon.log is moved
+            to iocmon.log.1 -> iocmon.log.2 etc. as limits are met. This is now automatically being done when
+            feed lists are updated every 4 hours, or every 6 hours if a feed didn't run, whichever comes
+            first. It will also continue to trim logs after viewing the (L)og but won't any longer produce
+            any log entries saying it trimmed the log down to N lines. Thanks goes out to @scootertramp!
+          - PATCH: Reintroduced the need for the "coreutils-timeout" command to ensure stuck processes do not
+            occur when executing "nvram get" or "cru l" types of commands. Stuck commands are common on our
+            older routers, and still see these creep up on the newer models. We are awaiting an imminent fix
+            from Asus to be implemented in some future firmware update that will fix this for good, with much
+            thanks to @ExtremeFiretop for his efforts nipping this bug and working with Asus on a patch.
+          - PATCH: NVRAM variables now use previously known-good values should a stuck process wipe them out.
+            This was a great idea introduced by @Mason, and may help alleviate some of you who saw certain
+            variables like wan0_dns losing their value from one tick cycle to the next. 
+          - PATCH: Updates to the logic of the (8) Update menu, showing clearer language around the track
+            that you're currently enrolled in.
+          - PATCH: Added new functionality to the (2) Select Feed Sources, Reputation, API Keys & Lookups,
+            giving you the ability to search across the downloaded feed lists for a specific domain or IP
+            address. This helps quickly determine what feed is responsible for reporting a particular host.
+            This also optionally gives you the ability to do an AbuseIPDB lookup on that host as well.
+          - PATCH: Feed, log and download data handled as untrusted (@andrewfader #27, partial):
+              - Feed downloads that return an HTTP error are rejected instead of saved.
+              - Feodo and Spamhaus lines must be valid addresses.
+              - DNS query names are lowercased and cleaned of unexpected characters, so mixed-case lookups
+                now match the feeds.
+              - Log text is no longer interpreted as formatting codes.
+              - A downloaded update is installed only after it validates.
+          - PATCH: Lock and config hardening (@andrewfader #28):
+              - Ctrl-C and TERM now stop the monitor cleanly.
+              - A stale process ID left over from a reboot no longer blocks IOCMON from starting.
+              - Cron exceptions containing quotes or $(...) are saved as plain text, so they can no longer
+                break the config or run when it loads.
+          - PATCH: More failed logins detected (@andrewfader #29):
+              - Failed router web logins in the current firmware's log format are now counted, as are SSH
+                attempts for user names that don't exist. The older log wording is still recognized.
+          - PATCH: Alerts are no longer lost when email fails ( @andrewfader #30):
+              - If a provider rejects an alert email, IOCMON sends a short notice without the indicators
+                instead. If mail can't be sent at all, alerts are kept and retried every 10 minutes, up to
+                6 attempts.
+          - PATCH: IP exceptions honored inside banned ranges (@andrewfader #31):
+              - An excepted address inside a feed range sent to Skynet is cut out of that range, and the rest
+                of the range stays banned.
+          - PATCH: Keep Skynet bans in force during feed import (@andrewfader #25):
+              - Feeds being imported to Skynet are imported first, and once completed successfully, will
+                remove the old previous ipset to cut down on risk exposure during transfer or failed ingests.
+          - PATCH: First-time alerts no longer missed (@andrewfader #32):
+              - The first Entware cron entry and the first port-forward or UPnP rule now alert, even on a router
+                that had none before.
+              - In hash mode, the first edit to a critical file now alerts.
+              - Without a USB drive, the filesystem watch checked nothing; it now covers the JFFS folders.
+              - A related fix: edits that don't change a file's size are now detected.
+          - PATCH: DNS watch reads every log line (@andrewfader #33):
+              - Lookups logged during a check, or just before a syslog rotation, are no longer skipped.
+              - ThreatFox domains now match regardless of letter case.
+              - The alert-dedup file no longer grows forever.
+              - A feed refresh that produces no domains keeps the previous domain list.
+          - PATCH: IOCMON now jumps to where it left off in the DNS log and reads only new lines, instead of
+            rereading the whole file every cycle. This matters most with Diversion's large logs or a USB 2.0
+            drive. After a log rotation it reads the unread end of the old copy first, so no lookups are missed.
+          - PATCH: IOCMON retries Skynet import failures after 30 and 60 seconds and keeps the previous bans
+            meanwhile. Skynet's output from each failed attempt is saved to state/skynet_import.log.
+          - PATCH: An IOCMON update that can't replace the current script is now reported as failed, and the
+            current version is kept.
+
+v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
             menu 10.6.9), this page becomes accessible from the router's "Addins" tab at the bottom left of
             your screen. The IOCMON web UI requires a fully functional script to be running in the background

@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.4.0 -->
+<!-- IOCMON-WebUI v1.4.1 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -126,7 +126,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.4.0", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.4.1", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 25;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var full = {}, pendingfull = null, routerdate = "", recentdays = 14, recentrows = 2000, fullrows = 20000;
@@ -361,13 +361,14 @@ function poll() {
 function parts(line) { return line.split(" | "); }
 function trim(s) { return s.replace(/^\s+|\s+$/g, ""); }
 function parseioc(line) {
-  var p = parts(line), rep = "", sev = "", n;
+  var p = parts(line), rep = "", intel = "", sev = "", n;
   if (/^sev:(critical|warning|info)$/.test(p[p.length - 1])) sev = p.pop().slice(4);
   if (p.length < 5) return { raw: line };
   n = p.length;
+  if (/^Astraea (clear|confirm|unknown|contained): /.test(p[n - 1])) { intel = p[n - 1]; n--; }
   if (/^(TEST )?AbuseIPDB /.test(p[n - 1])) { rep = p[n - 1]; n--; }
   if (n < 5) return { raw: line };
-  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1], sev: sev };
+  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, intel: intel, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1], sev: sev };
 }
 function parserep(line) {
   var p = parts(line), m;
@@ -526,7 +527,7 @@ function loghits() {
   var q = byid("l_find").value.toLowerCase(), kind = byid("l_kind").value, sev = curlog === "ioc" ? byid("l_sev").value : "", a = logs[curlog], hits = [], i, r, txt;
   for (i = 0; i < a.length; i++) {
     r = a[i];
-    txt = (r.raw || [r.when, r.sev, r.tag, r.main, r.sub, r.rep].join(" ")).toLowerCase();
+    txt = (r.raw || [r.when, r.sev, r.tag, r.main, r.sub, r.rep, r.intel].join(" ")).toLowerCase();
     if (kind && r.tag !== kind) continue;
     if (sev === "critical" && r.sev !== "critical") continue;
     if (sev === "warning" && r.sev !== "critical" && r.sev !== "warning") continue;
@@ -548,10 +549,11 @@ function csvcell(v) {
 function csvblank(v) { return /^(n\/a|\?\?|never|no flags|no categories)$/.test(v) ? "" : v; }
 var csvlogs = {
   ioc: {
-    head: ["timestamp_local", "type", "severity", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail"],
+    head: ["timestamp_local", "type", "severity", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail", "astraea_verdict", "astraea_reason"],
     row: function (r) {
       var c = /^([0-9A-Fa-f:.]+)->(.+)$/.exec(r.indicator), m = /^(?:TEST )?AbuseIPDB (\S+) (\d+)% (\d+)r\/(\d+)u ?(.*)$/.exec(r.rep);
-      return [csvtime(r.when), r.tag, r.sev, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""]);
+      var v = /^Astraea (\w+): (.*)$/.exec(r.intel || "");
+      return [csvtime(r.when), r.tag, r.sev, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""], v ? [v[1], v[2]] : ["", ""]);
     }
   },
   dropbear: {
@@ -622,6 +624,7 @@ function drawlog() {
     row.appendChild(make("div", "main mono", r.main));
     if (r.sub) row.appendChild(make("div", "sub", r.sub));
     if (r.rep) row.appendChild(make("div", "sub", r.rep));
+    if (r.intel) row.appendChild(make("div", "sub", r.intel));
     lk = make("div", "links");
     addlinks(lk, r.indicator);
     if (lk.firstChild) row.appendChild(lk);
