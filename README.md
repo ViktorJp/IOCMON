@@ -301,7 +301,7 @@ Turn alert emails on/off, and cap how many can send per hour (0 = unlimited), us
 a noisy detection flooding your inbox. Choose whether the on-screen SECURITY ALERT banner appears at the top
 of the dashboard (default) or just above the timer/hotkey line at the bottom.
 
-**Alert severity and the alert level.** Every alert has a severity, shown as its colour in the dashboard's
+**Alert severity and the alert level.** Every alert has a severity, shown as its color in the dashboard's
 "Recent IoC Detections" panel and on the web page:
 
 | Severity | What gets it |
