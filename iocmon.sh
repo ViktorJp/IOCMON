@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.6
+# Version: 2.0.7
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-10
+# Last Updated: 2026-Nov-13
 # ============================================================================================================================
 #
 # Description:
@@ -107,7 +107,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.6"
+version="2.0.7"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -3936,8 +3936,9 @@ normalizefeeds()
     mv "$tmpdomains" "$feedsroot/domains.txt"
   else
     rm -f "$tmpdomains"
-    if [ "${enablenetapi:-0}" -eq 1 ] || [ "${enableurlhaus:-0}" -eq 1 ] || [ "${enablethreatfox:-0}" -eq 1 ]; then
+    if [ "$feedsdegraded" -eq 0 ] && { [ "${enablenetapi:-0}" -eq 1 ] || [ "${enableurlhaus:-0}" -eq 1 ] || [ "${enablethreatfox:-0}" -eq 1 ]; }; then
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Feed normalization produced zero domain indicators; leaving the previous domains.txt in place." >> "$logfile"
+      [ -f "$feedsroot/domains.txt" ] || : > "$feedsroot/domains.txt"
     else
       : > "$feedsroot/domains.txt"
     fi
@@ -6402,7 +6403,7 @@ checkdns()
     fi
     [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
 
-    local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor=""
+    local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor="" rotatedat dnsrangefile="/tmp/iocmon_dns_range.$$"
     linecount="$(wc -l < "$synclog" | tr -d ' ')"
 
     if [ -n "$stateroot" ]; then
@@ -6420,15 +6421,16 @@ checkdns()
     lastcount="$(syslogresumepoint "$synclog" "$lastcount" "$anchor" "$linecount")"
     newlines=$((linecount - lastcount))
 
-    dnsrangefile="/tmp/iocmon_dns_range.$$"
     if [ "$newlines" -gt 0 ]; then
       : > "$dnsrangefile"
-      [ "$lastcount" -eq 0 ] && [ -n "$anchor" ] && [ -f "$synclog-1" ] && ANCHOR="$anchor" awk 'f {print} $0 == ENVIRON["ANCHOR"] {f=1}' "$synclog-1" > "$dnsrangefile"
+      if [ "$lastcount" -eq 0 ] && [ -n "$anchor" ] && [ -f "$synclog-1" ]; then
+        rotatedat="$(grep -nxF -- "$anchor" "$synclog-1" | tail -n 1 | cut -d: -f1)"
+        [ -n "$rotatedat" ] && tail -n +"$((rotatedat + 1))" "$synclog-1" > "$dnsrangefile"
+      fi
       tail -n +"$((lastcount + 1))" "$synclog" | head -n "$newlines" >> "$dnsrangefile"
       anchor="$(tail -n 1 "$dnsrangefile")"
-    else
-      : > "$dnsrangefile"
-      anchor="$(tail -n 1 "$synclog")"
+    elif [ "$linecount" -gt 0 ]; then
+      anchor="$(sed -n "${linecount}p" "$synclog")"
     fi
     [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
     [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
@@ -6437,7 +6439,7 @@ checkdns()
 
     [ "$newlines" -le 0 ] && return
 
-    dnschecked="$newlines"
+    dnschecked="$(wc -l < "$dnsrangefile" | tr -d ' ')"
     dnslastcheck=$(date +'%H:%M')
 
     local dnsmasqlines
@@ -6921,14 +6923,35 @@ processfsdeletion()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# fswatchlist echoes $fswatchdirs, minus the bare /tmp/mnt entry when no drive is set, so JFFS-only mode never scans other drives
+
+fswatchlist()
+{
+  local d
+  for d in $fswatchdirs; do
+    if [ -z "$extdrivelabel" ]; then
+      case "$d" in
+        /tmp/mnt|/tmp/mnt/) continue ;;
+      esac
+    fi
+    printf '%s\n' "$d"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # fspathexcluded is the single shared exclusion rule set (self-paths, quarantine suffix, fswatchexclude, fsexcludeext, fsexcludefiles) for every filesystem-integrity path.
 
 fspathexcluded()
 {
   local path="$1" ex extpattern
 
+  if [ -n "$iocmonroot" ]; then
+    case "$path" in
+      "$iocmonroot"|"$iocmonroot"/*) return 0 ;;
+    esac
+  fi
+
   case "$path" in
-    "${iocmonroot:-/nonexistent}"|"${iocmonroot:-/nonexistent}"/*) return 0 ;;
     "$addonsdir"|"$addonsdir"/*) return 0 ;;
     "$CUSTOM_EMAIL_LIBDir"|"$CUSTOM_EMAIL_LIBDir"/*) return 0 ;;
     *.iocmon-quarantine) return 0 ;;
@@ -7041,7 +7064,7 @@ buildsizebaseline()
   : > "$outfile"
 
   if [ "$findsupportsprintf" -eq 1 ]; then
-    for d in $fswatchdirs; do
+    for d in $(fswatchlist); do
       [ -d "$d" ] || continue
       realdir="$(realdirpath "$d")"
       "$findbin" "$realdir" -type f -printf '%p\t%s\n' 2>/dev/null | while IFS="$tab" read -r path sz; do
@@ -7089,9 +7112,9 @@ checkfsintegrity()
   : > "$scanerrors"
   touch "$newmarker"
 
-  totaldirs="$(echo "$fswatchdirs" | wc -w | tr -d ' ')"
+  totaldirs="$(fswatchlist | wc -w | tr -d ' ')"
   scancounter=0
-  for d in $fswatchdirs; do
+  for d in $(fswatchlist); do
     scancounter=$((scancounter+1))
     if [ ! -d "$d" ]; then
       watcheddirs="${watcheddirs}${d}: not found\n"
@@ -7148,7 +7171,7 @@ checkfsintegrity()
     return
   fi
 
-  awk 'FNR==NR{old[$0]=1; next} !($0 in old)' "$oldmanifest" "$newmanifest" > "$newpathsfile"
+  awk 'FILENAME==ARGV[1]{old[$0]=1; next} !($0 in old)' "$oldmanifest" "$newmanifest" > "$newpathsfile"
 
   if [ "$enablefsdeletionwatch" -eq 1 ]; then
     if [ -s "$newmanifest" ]; then
@@ -7163,7 +7186,7 @@ checkfsintegrity()
   : > "$modpathsfile"
   if [ -f "$marker" ]; then
     scancounter=0
-    for d in $fswatchdirs; do
+    for d in $(fswatchlist); do
       scancounter=$((scancounter+1))
       [ -d "$d" ] || continue
       realdir="$(realdirpath "$d")"
@@ -7172,7 +7195,7 @@ checkfsintegrity()
     done
   fi
   sort -u "$modpathsfile" -o "$modpathsfile"
-  awk 'FNR==NR{new[$0]=1; next} !($0 in new)' "$newpathsfile" "$modpathsfile" > "${modpathsfile}.tmp"
+  awk 'FILENAME==ARGV[1]{new[$0]=1; next} !($0 in new)' "$newpathsfile" "$modpathsfile" > "${modpathsfile}.tmp"
   mv "${modpathsfile}.tmp" "$modpathsfile"
 
   mv "$newmanifest" "$oldmanifest"
@@ -7371,8 +7394,12 @@ checkentwarecron()
     mv "$newtab" "$oldtab"
     return
   fi
+  if [ ! -s "$newtab" ] && [ -s "$oldtab" ]; then
+    rm -f "$newtab"
+    return
+  fi
 
-  newentries="$(awk 'FNR==NR{old[$0]=1; next} !($0 in old)' "$oldtab" "$newtab")"
+  newentries="$(awk 'FILENAME==ARGV[1]{old[$0]=1; next} !($0 in old)' "$oldtab" "$newtab")"
   mv "$newtab" "$oldtab"
 
   [ -z "$newentries" ] && return
@@ -7403,8 +7430,12 @@ checkfirewallrules()
     mv "$newtab" "$oldtab"
     return
   fi
+  if [ ! -s "$newtab" ] && [ -s "$oldtab" ]; then
+    rm -f "$newtab"
+    return
+  fi
 
-  newentries="$(awk 'FNR==NR{old[$0]=1; next} !($0 in old)' "$oldtab" "$newtab")"
+  newentries="$(awk 'FILENAME==ARGV[1]{old[$0]=1; next} !($0 in old)' "$oldtab" "$newtab")"
   mv "$newtab" "$oldtab"
 
   [ -z "$newentries" ] && return
@@ -7448,7 +7479,7 @@ checketccritical()
     return
   fi
 
-  awk -F'\t' 'FNR==NR{old[$1]=1; next} !($1 in old)' "$hashdb" "$curlist" | while IFS= read -r path; do
+  awk -F'\t' 'FILENAME==ARGV[1]{old[$1]=1; next} !($1 in old)' "$hashdb" "$curlist" | while IFS= read -r path; do
     [ -z "$path" ] && continue
     raisealert "fsintegrity" "$path" "etc-critical-new" "a new file appeared under a watched critical /etc path - review immediately"
   done
