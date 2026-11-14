@@ -1,4 +1,4 @@
-v2.0.7    - (BETA)
+v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they
             no longer raise false "router infected" or DNS tunneling alerts, but logs them as informational
@@ -61,6 +61,13 @@ v2.0.7    - (BETA)
               - ThreatFox domains now match regardless of letter case.
               - The alert-dedup file no longer grows forever.
               - A feed refresh that produces no domains keeps the previous domain list.
+          - PATCH: IOCMON now jumps to where it left off in the DNS log and reads only new lines, instead of
+            rereading the whole file every cycle. This matters most with Diversion's large logs or a USB 2.0
+            drive. After a log rotation it reads the unread end of the old copy first, so no lookups are missed.
+          - PATCH: IOCMON retries Skynet import failures after 30 and 60 seconds and keeps the previous bans
+            meanwhile. Skynet's output from each failed attempt is saved to state/skynet_import.log.
+          - PATCH: An IOCMON update that can't replace the current script is now reported as failed, and the
+            current version is kept.
 
 v2.0.0    - (November 7, 2026)
           - MAJOR: Now introducing the first release of the IOCMON Web UI! Upon enabling this feature (under
