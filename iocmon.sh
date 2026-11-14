@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.7
+# Version: 2.0.8
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-13
+# Last Updated: 2026-Nov-14
 # ============================================================================================================================
 #
 # Description:
@@ -31,7 +31,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/                       : per-source conditional-GET timestamp markers
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/meta/skynet_import.hash     : last-imported Skynet IP list hash, so an unchanged list skips the re-push
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
-#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_checkpoint              : syslog line-count cursor for checkdns (+ dns_anchor, its last-line anchor)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_offset                  : byte offset and last-line length for checkdns (+ dns_anchor, that last line)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /tmp/astraea/selfq, /tmp/kairos/selfq                               : read only - the router's own lookups for Astraea/Kairos, set aside by DNS watch
@@ -107,7 +107,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.7"
+version="2.0.8"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -144,6 +144,7 @@ webuitab="IOCMON"  # tab name in the Addons menu
 webuitag="# iocmon-webui"  # tag on our boot hook line
 webuimarker="<!-- IOCMON-WebUI"  # identifies our page in a slot and in a download
 dnslogknownpaths="/opt/var/log/dnsmasq.log /var/log/dnsmasq.log /tmp/dnsmasq.log"  # dnsmasq-only log files tried when auto-detecting the DNS query log
+dnsmaxcatchup=4194304             # at most this many bytes of a DNS log are read when IOCMON has no place in it (first run, place lost)
 
 # Repo used for self-update checks.
 iocmonrepostable="https://raw.githubusercontent.com/ViktorJp/IOCMON/main"
@@ -560,7 +561,11 @@ downloadiocmonupdate()
   [ "$dlrc" -eq 0 ] && ! scriptfilevalid "${apppath}.new" && dlrc=255
 
   if [ "$dlrc" -eq 0 ]; then
-    mv "${apppath}.new" "$apppath"
+    if ! mv "${apppath}.new" "$apppath"; then
+      rm -f "${apppath}.new"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The downloaded IOCMON $label script could not replace $apppath and was not installed." >> "$logfile"
+      return 3
+    fi
     chmod 755 "$apppath"
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
     return 0
@@ -4058,6 +4063,33 @@ buildskynetimportfile()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# skynetcleanoutput strips screen codes, Skynet's #-framed banner and lines without text from firewall output on stdin
+
+skynetcleanoutput()
+{
+  local esc
+  esc="$(printf '\033')"
+  tr -d '\r' | sed -e "s/${esc}\[[0-9;?]*[A-Za-z]//g" -e "s/${esc}[()][A-Za-z0-9]//g" -e "s/${esc}//g" | grep -v '^[[:space:]]*#.*#[[:space:]]*$' | grep '[A-Za-z0-9]'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# skynetimportfailure appends one failed import attempt ($1 attempt, $2 exit code, $3 output) to state/skynet_import.log
+
+skynetimportfailure()
+{
+  local file cleaned
+  [ -n "$stateroot" ] || resolvestateroot
+  { [ -n "$stateroot" ] && [ -d "$stateroot" ]; } || return
+  file="$stateroot/skynet_import.log"
+  rotatelogfile "$file" "$logsize"
+  cleaned="$(printf '%s\n' "$3" | skynetcleanoutput | tail -n 40)"
+  {
+    printf '%s Import attempt %s of 3 failed (exit %s):\n' "$(date +'%b %d %Y %X')" "$1" "$2"
+    if [ -n "$cleaned" ]; then printf '%s\n' "$cleaned" | sed 's/^/    /'; else echo "    (no output)"; fi
+  } >> "$file"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # syncskynetimport pushes the current IPv4 feed set into Skynet's ban list, tagged "IOCMON" - only when it actually changed since last time.
 
 syncskynetimport()
@@ -4103,11 +4135,16 @@ syncskynetimport()
   skynetprogress 5 6 "Importing $entrycount entries into Skynet"
   local importattempt=0 importrc=1 importoutput=""
   while [ "$importattempt" -lt 3 ]; do
-    [ "$importattempt" -gt 0 ] && sleep $((importattempt * 3))
+    if [ "$importattempt" -gt 0 ]; then
+      skynetprogress 5 6 "Import failed, retrying in $((importattempt * 30))s (attempt $((importattempt + 1)) of 3)"
+      sleep $((importattempt * 30))
+      skynetprogress 5 6 "Importing $entrycount entries into Skynet (attempt $((importattempt + 1)) of 3)"
+    fi
     importoutput="$(sh /jffs/scripts/firewall import blacklist "$importfile" "IOCMON Threat Feed Import ($entrycount entries)" 2>&1)"
     importrc=$?
     [ "$importrc" -eq 0 ] && break
     importattempt=$((importattempt + 1))
+    skynetimportfailure "$importattempt" "$importrc" "$importoutput"
   done
 
   if [ "$importrc" -eq 0 ]; then
@@ -4123,7 +4160,10 @@ syncskynetimport()
     return 0
   else
     rm -f "$importfile"
-    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Skynet import failed after 3 attempt(s) - will retry next refresh cycle. firewall output: $(echo "$importoutput" | tr '\n' ' ' | cut -c1-300)" >> "$logfile"
+    local lastmsg failfile=""
+    lastmsg="$(printf '%s\n' "$importoutput" | skynetcleanoutput | tail -n 1 | cut -c1-200)"
+    [ -n "$stateroot" ] && [ -f "$stateroot/skynet_import.log" ] && failfile=" Full output: $stateroot/skynet_import.log"
+    printf '%s %s IOCMON[%s] - WARNING: Skynet import failed after 3 attempt(s) - will retry next refresh cycle. Last Skynet message: %s.%s\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "${lastmsg:-(none)}" "$failfile" >> "$logfile"
     return 3
   fi
 }
@@ -6102,28 +6142,40 @@ rotatednsfilelog()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# syslogresumepoint echoes the line number to resume after in $1, using the saved count and last-line anchor so pruning/rotation can't trigger a full replay.
+# filesizebytes echoes the size in bytes of $1 (following a symlink) from ls, without reading the file
 
-syslogresumepoint()
+filesizebytes()
 {
-  local file="$1" lastcount="$2" anchor="$3" linecount="$4" found
+  ls -lnL "$1" 2>/dev/null | awk 'NR==1 {print $5+0}'
+}
 
-  if [ "$lastcount" -gt 0 ] && [ "$lastcount" -le "$linecount" ]; then
-    if [ -z "$anchor" ] || [ "$(sed -n "${lastcount}p" "$file")" = "$anchor" ]; then
-      echo "$lastcount"
-      return
-    fi
-  fi
+# -------------------------------------------------------------------------------------------------------------------------
+# filebytesfrom prints $1 from byte offset $2 to its end; dd seeks to the offset rather than reading the bytes before it
 
-  if [ -n "$anchor" ]; then
-    found="$(grep -nxF -- "$anchor" "$file" | tail -n 1 | cut -d: -f1)"
-    if [ -n "$found" ]; then
-      echo "$found"
-      return
-    fi
-  fi
+filebytesfrom()
+{
+  local lead
+  lead=$(( (4096 - $2 % 4096) % 4096 ))
+  [ "$lead" -gt 0 ] && dd if="$1" bs=1 skip="$2" count="$lead" 2>/dev/null
+  dd if="$1" bs=4096 skip=$(( ($2 + lead) / 4096 )) 2>/dev/null
+}
 
-  echo 0
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsanchorat tests that the line ending at byte offset $2 of $1 is $3 ($4 = its length in bytes, newline included)
+
+dnsanchorat()
+{
+  [ -f "$1" ] && [ "$4" -gt 0 ] && [ "$2" -ge "$4" ] || return 1
+  [ "$(filebytesfrom "$1" $(( $2 - $4 )) | head -n 1)" = "$3" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnslogsiblings lists the rotated copies of DNS log $1 that exist: syslog's -1, Diversion's 1 and IOCMON's own .1
+
+dnslogsiblings()
+{
+  local s
+  for s in "$1-1" "${1}1" "$1.1"; do [ -f "$s" ] && echo "$s"; done
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -6207,7 +6259,7 @@ kairosactive()
 
 dnslogtimes()
 {
-  set -- "$1" $(date +'%Y %m %d %H %M %S') "$(date +%s)"
+  set -- "$1" $(date +'%Y %m %d %H %M %S %s')
   awk -v r=" $(echo $1) " -v Y="$2" -v M="$3" -v D="$4" -v h="$5" -v mi="$6" -v s="$7" -v now="$8" '
     function dn(y, m, d,   era, yoe, doy, doe) {
       if (m <= 2) y -= 1
@@ -6403,43 +6455,80 @@ checkdns()
     fi
     [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
 
-    local linecount lastcount=0 newlines checkpointfile="" anchorfile="" anchor="" rotatedat dnsrangefile="/tmp/iocmon_dns_range.$$"
-    linecount="$(wc -l < "$synclog" | tr -d ' ')"
+    local size offset=0 anchorbytes=0 anchor="" readfrom="" found sib newbytes=0 newcount offsetfile="" anchorfile="" dnsrangefile="/tmp/iocmon_dns_range.$$"
+    size="$(filesizebytes "$synclog")"
+    validateint "$size" 0 || size=0
 
     if [ -n "$stateroot" ]; then
       mkdir -m 755 -p "$stateroot"
-      checkpointfile="$stateroot/dns_checkpoint"
+      offsetfile="$stateroot/dns_offset"
       anchorfile="$stateroot/dns_anchor"
-      [ -f "$checkpointfile" ] && lastcount="$(cat "$checkpointfile" 2>/dev/null)"
-      [ -z "$lastcount" ] && lastcount=0
+      [ -f "$offsetfile" ] && read -r offset anchorbytes < "$offsetfile"
       [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
-    elif [ -n "$dnscheckpointcache" ]; then
-      lastcount="$dnscheckpointcache"
+    elif [ -n "$dnsoffsetcache" ]; then
+      offset="${dnsoffsetcache%% *}"; anchorbytes="${dnsoffsetcache##* }"
       anchor="$dnsanchorcache"
     fi
+    validateint "$offset" 0 || offset=0
+    validateint "$anchorbytes" 0 || anchorbytes=0
 
-    lastcount="$(syslogresumepoint "$synclog" "$lastcount" "$anchor" "$linecount")"
-    newlines=$((linecount - lastcount))
-
-    if [ "$newlines" -gt 0 ]; then
-      : > "$dnsrangefile"
-      if [ "$lastcount" -eq 0 ] && [ -n "$anchor" ] && [ -f "$synclog-1" ]; then
-        rotatedat="$(grep -nxF -- "$anchor" "$synclog-1" | tail -n 1 | cut -d: -f1)"
-        [ -n "$rotatedat" ] && tail -n +"$((rotatedat + 1))" "$synclog-1" > "$dnsrangefile"
+    : > "$dnsrangefile"
+    if [ -z "$anchor" ]; then
+      readfrom=0
+    elif [ "$offset" -le "$size" ] && dnsanchorat "$synclog" "$offset" "$anchor" "$anchorbytes"; then
+      readfrom="$offset"
+    else
+      for sib in $(dnslogsiblings "$synclog"); do
+        if dnsanchorat "$sib" "$offset" "$anchor" "$anchorbytes"; then
+          filebytesfrom "$sib" "$offset" | awk '{print}' >> "$dnsrangefile"
+          readfrom=0
+          break
+        fi
+      done
+      if [ -z "$readfrom" ]; then
+        found="$(grep -nxF -- "$anchor" "$synclog" | tail -n 1 | cut -d: -f1)"
+        if [ -n "$found" ]; then
+          readfrom="$(head -n "$found" "$synclog" | wc -c | tr -d ' ')"
+        else
+          for sib in $(dnslogsiblings "$synclog"); do
+            found="$(grep -nxF -- "$anchor" "$sib" | tail -n 1 | cut -d: -f1)"
+            [ -n "$found" ] && { tail -n +"$((found + 1))" "$sib" | awk '{print}' >> "$dnsrangefile"; break; }
+          done
+          readfrom=0
+        fi
       fi
-      tail -n +"$((lastcount + 1))" "$synclog" | head -n "$newlines" >> "$dnsrangefile"
-      anchor="$(tail -n 1 "$dnsrangefile")"
-    elif [ "$linecount" -gt 0 ]; then
-      anchor="$(sed -n "${linecount}p" "$synclog")"
     fi
-    [ -n "$checkpointfile" ] && echo "$linecount" > "$checkpointfile"
+
+    if [ "$readfrom" -eq 0 ] && [ "$size" -gt "$dnsmaxcatchup" ]; then
+      readfrom=$((size - dnsmaxcatchup))
+      readfrom=$((readfrom + $(filebytesfrom "$synclog" "$readfrom" | head -n 1 | wc -c)))
+    fi
+
+    filebytesfrom "$synclog" "$readfrom" > "$dnsrangefile.new"
+    if [ -s "$dnsrangefile.new" ]; then
+      newcount="$(wc -l < "$dnsrangefile.new" | tr -d ' ')"
+      # a last line dnsmasq is still writing has no newline yet; head -n leaves it for the next cycle
+      head -n "$newcount" "$dnsrangefile.new" > "$dnsrangefile.cur"
+      newbytes="$(wc -c < "$dnsrangefile.cur" | tr -d ' ')"
+      if [ "$newbytes" -gt 0 ]; then
+        cat "$dnsrangefile.cur" >> "$dnsrangefile"
+        anchor="$(tail -n 1 "$dnsrangefile.cur")"
+        anchorbytes="$(tail -n 1 "$dnsrangefile.cur" | wc -c | tr -d ' ')"
+      fi
+    fi
+    rm -f "$dnsrangefile.new" "$dnsrangefile.cur"
+    offset=$((readfrom + newbytes))
+    [ "$offset" -eq 0 ] && { anchor=""; anchorbytes=0; }
+
+    [ -n "$offsetfile" ] && echo "$offset $anchorbytes" > "$offsetfile"
     [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
-    dnscheckpointcache="$linecount"
+    [ -n "$stateroot" ] && rm -f "$stateroot/dns_checkpoint"
+    dnsoffsetcache="$offset $anchorbytes"
     dnsanchorcache="$anchor"
 
-    [ "$newlines" -le 0 ] && return
-
-    dnschecked="$(wc -l < "$dnsrangefile" | tr -d ' ')"
+    newcount="$(wc -l < "$dnsrangefile" | tr -d ' ')"
+    [ "$newcount" -gt 0 ] || { rm -f "$dnsrangefile"; return; }
+    dnschecked="$newcount"
     dnslastcheck=$(date +'%H:%M')
 
     local dnsmasqlines
@@ -8999,6 +9088,7 @@ webjobupdate()
   case "$?" in
     0) ;;
     2) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed validation. IOCMON v$version was left in place."; return 1 ;;
+    3) rm -f "$updatingfile" "$backup"; webjobmsg="The new script could not be put in place. IOCMON v$version was left in place."; return 1 ;;
     *) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed. IOCMON v$version was left in place."; return 1 ;;
   esac
   if ! scriptfilevalid "$apppath"; then
@@ -9383,6 +9473,10 @@ vupdate()
           echo ""
           read -rsp $'Press any key to restart IOCMON...\n' -n1 key
           exec sh "$apppath" -noswitch
+        elif [ "$?" -eq 3 ]; then
+          echo -e "${CRed}ERROR: The new script could not replace $apppath - IOCMON v$version was left in place. See the log.${CClear}"
+          echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key
         else
           echo -e "${CRed}ERROR: Download failed - check network connectivity and try again.${CClear}"
           echo ""
@@ -9689,7 +9783,7 @@ authchecked=0; authlastcheck=""
 alertviewmode="ioc"
 dnsnummapfile="/tmp/iocmon_dns_nummap.$$"
 abuseipdbcyclefile="/tmp/iocmon_aipdb_cycle.$$"
-dnscheckpointcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
+dnsoffsetcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblocked=0
 aghslot=1; aghfailover=0; aghapiwarned2=""; aghcursorcache2=""
