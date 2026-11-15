@@ -2,6 +2,15 @@ v2.x BETA - (TBA)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
             same naming convention and functionality from tainting possible results. This also helps keeps
             IOCMON more stable and secure by not relying on other similar forks that may break functionality.
+          - MINOR: Pi-hole v6 as a DNS watch source (Configuration Menu 10.2, item 11, option 4) is now
+            supported, reading it either through its API (an app password is recommended) or from its
+            pihole.log, which also gives AbuseIPDB the IP each domain was answered with. A Pi-hole on the
+            router itself (the Entware port) is found automatically. A second Pi-hole can be added and is read
+            every cycle alongside the first, and blocked queries can optionally be checked too. IOCMON gives
+            clear warnings for a wrong password, two-factor login, too many API sessions, an unreachable or
+            unsupported (v5) Pi-hole, or a Pi-hole that only sees the router, so the device behind each lookup
+            can't be identified. Passwords are stored encoded, never placed on a command line, and left out of
+            exports unless you choose to include them.
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
