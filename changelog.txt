@@ -11,12 +11,12 @@ v2.x BETA - (TBA)
             unsupported (v5) Pi-hole, or a Pi-hole that only sees the router, so the device behind each lookup
             can't be identified. Passwords are stored encoded, never placed on a command line, and left out of
             exports unless you choose to include them.
-          - PATCH: The IOCMON web interface (v1.4.3) can now clear logs and manage exceptions without the main
+          - PATCH: The IOCMON web UI can now clear logs and manage exceptions without needing to use the main
             terminal. A Clear Log button at the bottom of each log page, just above Prev/Next, erases the log
             you're viewing and its rotated copies after a confirmation, exactly like the (R) hotkey. IoC 
             Detections rows now have an Exception switch that adds the item to its exception list: the base
             domain for DNS alerts, the destination IP for connection alerts, the file for filesystem alerts,
-            and the entry for cron alerts. Startup scripts, .ssh and  .conf.add files get a clear warning
+            and the entry for cron alerts. Startup scripts, .ssh and .conf.add files get a clear warning
             first, since IOCMON will stop watching them for tampering. A new Exceptions panel lists every DNS,
             IP, file and cron exception, including ones added in the menus, each with a switch to remove it.
             The page never sends the item itself to the router, only a short code that IOCMON checks against
