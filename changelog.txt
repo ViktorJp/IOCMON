@@ -22,6 +22,23 @@ v2.x BETA - (TBA)
             The page never sends the item itself to the router, only a short code that IOCMON checks against
             its own log, so nothing in a log entry can be turned into a command and only items IOCMON actually
             logged can be added.
+          - MINOR: The web interface (v1.5.3) has a new Threat View button that opens a live world map of your
+            router's traffic: inbound connections and blocked attempts, outbound connections, DNS lookups and
+            addresses Skynet blocked. Countries come from DB-IP's free country database, which IOCMON downloads
+            and then refreshes monthly along with the feeds. Addresses that raised an alert are drawn as red
+            (Critical) or yellow (Warning) arcs until you acknowledge them. Live counters, filters, a Live Feed,
+            Top Countries and a 15-minute Replay sit alongside the map, and clicking a country, row or address
+            shows its details and lookup links. Expand and Fullscreen give a full-width map, with the feed in a
+            drawer you open from the left edge. Sampling only runs while the page is open and stops 2 minutes
+            after it closes.
+          - PATCH: Fixes and improvements: Exception switches now appear on existing IoC rows right after an
+            upgrade, and no longer flip back on their own while the monitor is running. The Exceptions panel
+            has a tab for each list, starts hidden behind a Show/Hide button and shows the total item count in
+            its heading. Log pages show 10 rows instead of 25, so the page is shorter. Google and YouTube
+            domains are now on the shared-hosting list, so a feed listing for them (such as malware using
+            YouTube for its settings) is logged as Info instead of raising a Critical alert. A DNS match whose
+            address AbuseIPDB marks as whitelisted is also logged as Info. On the main screen, (E) now detaches
+            from SCREEN and leaves IOCMON running, and (X) exits after asking first.
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
