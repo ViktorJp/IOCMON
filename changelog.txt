@@ -1,4 +1,4 @@
-v2.x BETA - (TBA)
+v2.0.21   - (BETA)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
             same naming convention and functionality from tainting possible results. This also helps keeps
             IOCMON more stable and secure by not relying on other similar forks that may break functionality.
@@ -39,7 +39,6 @@ v2.x BETA - (TBA)
             YouTube for its settings) is logged as Info instead of raising a Critical alert. A DNS match whose
             address AbuseIPDB marks as whitelisted is also logged as Info. On the main screen, (E) now detaches
             from SCREEN and leaves IOCMON running, and (X) exits after asking first. @Mutzli @Ripshod @jksmurf
-            
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
