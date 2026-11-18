@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.8
+# Version: 2.0.21
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-14
+# Last Updated: 2026-Nov-17
 # ============================================================================================================================
 #
 # Description:
@@ -33,10 +33,17 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/seen_alerts.db              : "kind|indicator<TAB>epoch" alert dedup records
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dns_offset                  : byte offset and last-line length for checkdns (+ dns_anchor, that last line)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/agh_cursor                  : newest AdGuard Home query-log entry already checked (AdGuard Home DNS source)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/pihole_cursor(2)            : newest query id (and its address) already read from each Pi-hole API (Pi-hole DNS source)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/pihole(2)_offset, _anchor   : byte offset and last line read from each Pi-hole log file (Pi-hole DNS source)
+#   /tmp/iocmon_pihole_sid.1, .2                                        : Pi-hole API session ids, reused until Pi-hole ends them (RAM only, root only)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
 #   /tmp/astraea/selfq, /tmp/kairos/selfq                               : read only - the router's own lookups for Astraea/Kairos, set aside by DNS watch
 #   /tmp/kairos/status                                                  : read only - Kairos's state; its selfq is used only while this was written in the last 3 minutes
 #   /tmp/iocmon_selfq_seen, /tmp/iocmon_astraea_intel                   : set-aside lookups already logged, and recent Astraea verdicts for emails (RAM)
+#   /jffs/scripts/kairos.sh(.sig), /jffs/scripts/astraea.sh(.sig)       : read only - each add-on is used only while its script passes the author's release signature
+#   /tmp/iocmon_tv/                                                     : Threat View sampler lock, heartbeat and last sample (RAM)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/geoip.txt                   : Threat View IPv4 country table built monthly from IPLocate.io (CC BY-SA 4.0)
+#   /tmp/iocmon_addonsig                                                : last Kairos/Astraea signature check results, re-checked when either file changes (RAM)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
@@ -53,6 +60,7 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_last_permchanged.txt     : timestamped log of permission-only changes
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/ioc_alerts.log              : every real detection ever made, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_pending               : pending-count + latest summary; presence = red banner up
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/alert_ips                   : sev|kind|ip|date of each unacknowledged alert with an IP, for Threat View
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/hash_check.log              : every NEW/MOD file checked against feeds/hashes.txt, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/reputation.log              : every AbuseIPDB reputation lookup (or skip reason) for a raised alert, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/abuseipdb_cache.db          : "ip|epoch|score|..." AbuseIPDB results reused for abuseipdbcachehrs (+ abuseipdb_usage/_block quota state)
@@ -67,9 +75,10 @@
 #   iocmon.sh -fsintegrity                                              : cron-callable one-shot filesystem-integrity + cron-baseline check
 #   iocmon.sh -webmount                                                 : services-start boot hook that rebuilds the web interface tab
 #   iocmon.sh -webaction <name>                                         : service-event hook that runs a web interface button's job
+#   iocmon.sh -tvsample                                                 : Threat View sampler, started by the page and stopped when it closes
 #   iocmon.sh -h | -help                                                : this output
 #
-# Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs/(e)xit):
+# Main-screen hotkeys (in addition to (c)onfig/(f)eeds/(i)ntegrity/(l)ogs and (x) exit IOCMON):
 #   (v) view the full log behind whichever "Recent..." panel is showing   (t) simulate a detection from a real,
 #   (a) acknowledge the persistent red alert banner                            currently loaded feed indicator
 #   (d)/(o)/(h)/(u) switch the "Recent..." panel to Dropbear/IoC Detections/Hash-Check/Reputation
@@ -77,7 +86,7 @@
 #   (z) add a numbered "dns" entry's base domain (IoC Detections panel only) to the DNS Exceptions list
 #   (n) show a last-7-days, date-sorted OTX AlienVault Threat Report (IoC Detections panel only)
 #   (p) pause/resume the countdown timer without triggering a rescan
-#   (x) detach from the background SCREEN session without stopping IOCMON
+#   (e) exit the SCREEN window (detach), leaving IOCMON running in the background
 #
 # ============================================================================================================================
 
@@ -107,7 +116,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.8"
+version="2.0.21"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -119,7 +128,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.4.1"  # web interface page version this script expects
+webuiversion="1.5.6"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -139,6 +148,16 @@ webuiredirectmark="IOCMON-WEBUI-REDIRECT"  # marks a redirect.htm that IOCMON wr
 webuiservicesstart="/jffs/scripts/services-start"  # boot hook file
 webuiserviceevent="/jffs/scripts/service-event"  # hook file the page's buttons reach IOCMON through
 webuijoblock="/tmp/iocmon_webjob.lock"  # held while a web job runs, so only one runs at a time
+webexclockdir="/tmp/iocmon_webexc.lock"  # held while a web exception change saves iocmon.cfg
+tvdir="/tmp/iocmon_tv"  # Threat View sampler's RAM folder: lock, heartbeat, last sample's connections
+tvset="iocmon_tv"  # ipset that records new inbound WAN attempts while Threat View is open
+tvinterval=5  # seconds between Threat View samples
+tvidle=120  # Threat View sampling stops this many seconds after the page's last heartbeat
+tvmaxevents=400  # most connections listed in one Threat View sample
+tvconntrack="/proc/net/nf_conntrack"  # connection table Threat View samples
+tvleases="/var/lib/misc/dnsmasq.leases"  # DHCP leases, for Threat View device names
+tvsyslog="/tmp/syslog.log"  # syslog, where Skynet writes its [BLOCKED - INBOUND/OUTBOUND] lines
+geoipurl="https://media.githubusercontent.com/media/iplocate/ip-address-databases/main/ip-to-country/ip-to-country.csv.zip"  # IPLocate.io IP to Country, daily (CC BY-SA 4.0)
 feedslockfile="/tmp/iocmon_feeds.lock"  # held during a feed refresh, in RAM so a reboot can't leave it stale
 webuitab="IOCMON"  # tab name in the Addons menu
 webuitag="# iocmon-webui"  # tag on our boot hook line
@@ -194,7 +213,7 @@ dnsquerylogkeep=2               # how many rotated generations (dnsmasq_queries.
 enablednstunnel=0               # behavioral DNS-tunneling/exfiltration heuristic (query volume/name-length patterns, not feed-based) - off by default
 dnstunnelsubthreshold=20        # distinct subdomains under one base domain from one source IP, within a single check tick, to flag as possible tunneling
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
-dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome
+dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome | pihole
 aghurl=""                       # AdGuard Home web/API base URL - blank = read from AdGuardHome.yaml (http.address)
 aghurl2=""                      # backup AdGuard Home base URL, read only when the first one fails - blank = no backup
 aghcred2=""                     # backup AdGuard Home "user:password" login, encoded the same way as aghcred
@@ -204,10 +223,7 @@ aghmaxpages=20                  # most API pages read per cycle before giving up
 aghcred=""                      # AdGuard Home "user:password" login, base64-encoded with openssl (encoded, not encrypted)
 aghauthfile="/jffs/addons/iocmon.d/agh.auth"  # legacy login file, moved into aghcred at startup
 aghreplyfile="/tmp/iocmon_agh_replies"  # "domain|ip" answers seen recently, RAM only, for dnsreplyip
-selfqpaths="/tmp/astraea/selfq /tmp/kairos/selfq"  # Astraea's and Kairos's own router lookups ("name|type|epoch", RAM, 2 hours), read only
-kairosstatusfile="/tmp/kairos/status"  # Kairos's key=value state (time, dns, updated, version), read only
 emailfallbacksubject="ALERT: IOCMON could not deliver a security alert"  # notice sent when an alert email is rejected
-selfqseenfile="/tmp/iocmon_selfq_seen"  # "name epoch" of set-aside lookups already logged, so each is logged once per 6 hours
 logtrimstamp="/tmp/iocmon_logtrim.last"  # time of the last 6-hourly activity log rotation check
 logkeep=2                       # rotated copies kept per log (.1 newest, .2 oldest)
 timeoutcmd=""                   # "timeout " once Entware's /opt/bin/timeout is found, for nvram and cru calls
@@ -215,10 +231,33 @@ timeoutsec=""                   # seconds before a hung nvram or cru call is kil
 timeoutlng=""                   # longer limit for slower commands
 timeoutpkg="coreutils-timeout"  # Entware package that provides /opt/bin/timeout
 LAN_HostName=""                 # router's lan_hostname, read once and reused by every log line
+# Kairos/Astraea integration settings; the functions are in the marked "Kairos/Astraea integration" section
+enableaddonintegration=1        # 1 = use Kairos/Astraea (selfq set-aside, Astraea intel), each only while its script passes the signature check
+kairosscript="/jffs/scripts/kairos.sh"  # Kairos, verified against kairos.sh.sig before its selfq is trusted
 astraeascript="/jffs/scripts/astraea.sh"  # Astraea, asked for its certificate verdict on an alerted name or address
-astraealogmark="# Astraea: site names for certificate checks"  # marker line Astraea writes above its own log-queries in dnsmasq.conf.add
+selfqpaths="/tmp/astraea/selfq /tmp/kairos/selfq"  # Astraea's and Kairos's own router lookups ("name|type|epoch", RAM, 2 hours), read only
+kairosstatusfile="/tmp/kairos/status"  # Kairos's key=value state (time, dns, updated, version), read only
+selfqseenfile="/tmp/iocmon_selfq_seen"  # "name epoch" of set-aside lookups already logged, so each is logged once per 6 hours
 astraeaintelfile="/tmp/iocmon_astraea_intel"  # "target<TAB>verdict<TAB>reason" of recent Astraea verdicts, RAM only, for alert emails
+addonsignkey="MCowBQYDK2VwAyEAnVDrNhELRjzx0WqOEvgPyzBU3SQXQCjYUW0czBEwqlg="  # Kairos/Astraea author's Ed25519 release key (SHA-256 64c3886c...454059)
+addonsigstate="/tmp/iocmon_addonsig"  # "name|md5 of script+sig|ok/bad/nosig/noossl|reason" of the last signature checks, RAM only
+addonopensslpaths="/opt/bin/openssl /usr/sbin/openssl /usr/bin/openssl"  # where an OpenSSL 3 able to check Ed25519 signatures is looked for
+astraealogmark="# Astraea: site names for certificate checks"  # marker line Astraea writes above its own log-queries in dnsmasq.conf.add
 aghyamlpaths="/opt/etc/AdGuardHome/AdGuardHome.yaml /opt/etc/AdGuardHome.yaml /jffs/addons/AdGuardHome.d/AdGuardHome.yaml"
+phmethod="api"                  # primary Pi-hole: api = read its v6 query API, log = read its pihole.log
+phurl=""                        # primary Pi-hole API base URL - blank = read webserver.port from this router's pihole.toml
+phcred=""                       # primary Pi-hole password (app password recommended), base64-encoded with openssl (encoded, not encrypted)
+phlogpath=""                    # primary Pi-hole log file - blank = the first of phlogpaths that exists
+phmethod2=""                    # backup Pi-hole: blank = none, api or log; read every cycle alongside the primary
+phurl2=""                       # backup Pi-hole API base URL
+phcred2=""                      # backup Pi-hole password, encoded the same way as phcred
+phlogpath2=""                   # backup Pi-hole log file
+phincludeblocked=0              # 1 = also check queries Pi-hole already blocked (they never left the network)
+phtomlpaths="/opt/etc/pihole/pihole.toml /etc/pihole/pihole.toml"  # pihole.toml of a Pi-hole on this router (Entware port first)
+phlogpaths="/opt/var/log/pihole/pihole.log /var/log/pihole/pihole.log"  # pihole.log paths auto-detected for the primary Pi-hole
+phsidfile="/tmp/iocmon_pihole_sid"  # Pi-hole API session id, .1/.2 per Pi-hole, RAM only, root only
+phpagesize=500                  # queries fetched per Pi-hole API call
+phmaxpages=20                   # most Pi-hole API pages read per cycle before warning about a gap
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
 enableskynetimport=0            # push current IPv4 feed indicators into Skynet Firewall's own ban list, tagged IOCMON - see syncskynetimport()
@@ -253,7 +292,8 @@ alertbanneratbottom=0           # 0 = SECURITY ALERT banner at top of screen (de
 alertlevel=""                   # "all" = banner/email for every alert, "critical" = only Critical ones; blank = migrate from alertfeedonly
 alertfeedonly=0                 # legacy key from before alertlevel, read once by migratealertlevel and no longer saved
 dnsescalatescore=75             # a DNS feed match becomes Critical when AbuseIPDB scores its reply IP at or above this (1-100)
-dnssharedhosts="github.com githubusercontent.com microsoft.com windows.net live.com office.com amazonaws.com cloudfront.net googleapis.com googleusercontent.com gstatic.com apple.com icloud.com steamcommunity.com steampowered.com roblox.com discord.com discordapp.com dropbox.com dropboxusercontent.com akamaized.net in-addr.arpa ip6.arpa"  # shared-hosting domains (and subdomains) whose DNS feed matches are logged as Info
+dnssharedhosts="github.com githubusercontent.com microsoft.com windows.net live.com office.com amazonaws.com cloudfront.net googleapis.com googleusercontent.com gstatic.com apple.com icloud.com steamcommunity.com steampowered.com roblox.com discord.com discordapp.com dropbox.com dropboxusercontent.com akamaized.net in-addr.arpa ip6.arpa google.com youtube.com googlevideo.com ytimg.com youtu.be ggpht.com"  # shared-hosting domains (and subdomains) whose DNS feed matches are logged as Info
+dnssharedhostsrev=1             # 2 once migratesharedhosts has added the Google/YouTube domains to an older list
 ratelimit=0                     # max emails/hour, 0 = unlimited
 logsize=2000                    # lines at which $logfile and the other logs rotate to .1 (0 = never)
 logfilepath="$jffslogfile"      # configured activity log location: JFFS default, or $iocmonroot/state/iocmon.log on the external drive
@@ -730,7 +770,7 @@ progressbaroverride()
       AltNumPadded=$(printf "%0${tlwidth}d" "$AltNum")
       progrPadded=$(printf "%03d" "$progr")
       if [ "$timerpaused" -eq 1 ]; then timerinv="$InvRed"; else timerinv="$InvDkGray"; fi
-      drawprogressprompt "${InvGreen} ${CClear} ${CWhite}${timerinv}${AltNumPadded}${4} / ${progrPadded}%${CClear} [${CGreen}c${CClear}=Config] [${CGreen}f${CClear}=Feeds] [${CGreen}i${CClear}=FS Integrity] [${CGreen}t${CClear}=Test] [${CGreen}a${CClear}=Ack] [${CGreen}l${CClear}=Logs] [${CGreen}p${CClear}=Pause] [${CGreen}x${CClear}=Detach/Screen] [${CGreen}e${CClear}=Exit]${CClear}" "[Key+Enter?  ]"
+      drawprogressprompt "${InvGreen} ${CClear} ${CWhite}${timerinv}${AltNumPadded}${4} / ${progrPadded}%${CClear} [${CGreen}c${CClear}=Config] [${CGreen}f${CClear}=Feeds] [${CGreen}i${CClear}=FS Integrity] [${CGreen}t${CClear}=Test] [${CGreen}a${CClear}=Ack] [${CGreen}l${CClear}=Logs] [${CGreen}p${CClear}=Pause] [${CGreen}e${CClear}=Detach/Screen] [${CGreen}x${CClear}=Exit]${CClear}" "[Key+Enter?  ]"
     fi
   fi
 
@@ -757,8 +797,8 @@ progressbaroverride()
           [Aa]) acknowledgealert;;
           [Ll]) vlogs;;
           [Pp]) if [ "$timerpaused" -eq 1 ]; then timerpaused=0; else timerpaused=1; fi; renderdashboard;;
-          [Xx]) timerpaused=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
-          [Ee])
+          [Ee]) timerpaused=0; renderdashboard; [ -x /opt/sbin/screen ] && /opt/sbin/screen -S iocmon -X detach;;
+          [Xx])
             clear
             echo -e "${CGreen}[Exit IOCMON]${CClear}"
             echo ""
@@ -956,10 +996,48 @@ migratealertlevel()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# migratesharedhosts adds the Google and YouTube domains to a shared-hosting list saved before round 168, once
+
+migratesharedhosts()
+{
+  [ "$dnssharedhostsrev" = "2" ] && return
+  local d added=""
+  for d in google.com youtube.com googlevideo.com ytimg.com youtu.be ggpht.com; do
+    case " $dnssharedhosts " in *" $d "*) ;; *) dnssharedhosts="${dnssharedhosts:+$dnssharedhosts }$d"; added="${added:+$added }$d" ;; esac
+  done
+  dnssharedhostsrev=2
+  saveconfig
+  [ -n "$added" ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Added $added to the shared-hosting domains list (DNS feed matches on these are logged as Info)." >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# excsnapshot records the four exception lists as last loaded, so excmergedisk can tell which ones this process changed
+
+excsnapshot()
+{
+  excsnapdns="$dnsexceptions"; excsnapip="$ipexceptions"; excsnapfile="$fsexcludefiles"; excsnapcron="$cronexceptions"; excsnapped=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# excmergedisk takes iocmon.cfg's copy of each exception list this process left unchanged, so a stale copy never undoes a web change
+
+excmergedisk()
+{
+  [ "$excsnapped" = "1" ] && [ -f "$config" ] || return
+  local d
+  if [ "$dnsexceptions" = "$excsnapdns" ]; then d="$(. "$config"; printf '%s.' "$dnsexceptions")"; dnsexceptions="${d%.}"; fi
+  if [ "$ipexceptions" = "$excsnapip" ]; then d="$(. "$config"; printf '%s.' "$ipexceptions")"; ipexceptions="${d%.}"; fi
+  if [ "$fsexcludefiles" = "$excsnapfile" ]; then d="$(. "$config"; printf '%s.' "$fsexcludefiles")"; fsexcludefiles="${d%.}"; fi
+  if [ "$cronexceptions" = "$excsnapcron" ]; then d="$(. "$config"; printf '%s.' "$cronexceptions")"; cronexceptions="${d%.}"; fi
+  excsnapshot
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # saveconfig writes the current in-memory config out to iocmon.cfg, then sources it back immediately
 
 saveconfig()
 {
+  excmergedisk
   migratealertlevel
   { echo 'timerloop='$timerloop
     echo 'feedupdatehrs='$feedupdatehrs
@@ -999,6 +1077,15 @@ saveconfig()
     echo 'aghincludeblocked='$aghincludeblocked
     echo 'aghpagesize='$aghpagesize
     echo 'aghmaxpages='$aghmaxpages
+    echo 'phmethod="'"$phmethod"'"'
+    echo 'phurl="'"$phurl"'"'
+    echo 'phcred="'"$phcred"'"'
+    echo 'phlogpath="'"$phlogpath"'"'
+    echo 'phmethod2="'"$phmethod2"'"'
+    echo 'phurl2="'"$phurl2"'"'
+    echo 'phcred2="'"$phcred2"'"'
+    echo 'phlogpath2="'"$phlogpath2"'"'
+    echo 'phincludeblocked='$phincludeblocked
     echo 'enableconntrackwatch='$enableconntrackwatch
     echo 'ipexceptions="'"$ipexceptions"'"'
     echo 'enableskynetimport='$enableskynetimport
@@ -1033,6 +1120,7 @@ saveconfig()
     echo 'alertlevel="'"$alertlevel"'"'
     echo 'dnsescalatescore='$dnsescalatescore
     echo 'dnssharedhosts="'"$dnssharedhosts"'"'
+    echo 'dnssharedhostsrev='$dnssharedhostsrev
     echo 'ratelimit='$ratelimit
     echo 'logsize='$logsize
     echo 'logfilepath="'"$logfilepath"'"'
@@ -1044,6 +1132,7 @@ saveconfig()
     echo 'track='$track
     echo 'otxreportsort="'"$otxreportsort"'"'
     echo 'enablewebui='$enablewebui
+    echo 'enableaddonintegration='$enableaddonintegration
   } > "$config"
   chmod 600 "$config"
 
@@ -1052,6 +1141,7 @@ saveconfig()
   if [ -f "$config" ]; then
     . "$config"
   fi
+  excsnapshot
   resolvelogfile
 
   schedulecron
@@ -1534,6 +1624,7 @@ veditlist()
 {
   local varname="$1" title="$2" hint="${3:-absolute path}" desc1="$4" desc2="$5" list count entry idx sel newval delnum newlist overlapmsg
 
+  excmergedisk
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     eval "list=\"\$$varname\""
@@ -1668,6 +1759,7 @@ vcronexceptions()
 {
   local count entry idx sel delnum newlist
 
+  excmergedisk
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     clear
@@ -1821,6 +1913,7 @@ vdnsexceptions()
   local totalpages pagestart r leftidx rightidx leftentry rightentry leftdisp rightdisp leftbadge rightbadge leftplain leftpad rightout
   local sel pendingeditnum newval idx entry newlist delnum pattern fcount hp hpad editnum faction fdel
 
+  excmergedisk
   while true; do
     [ "$exitallmenus" -eq 1 ] && break
     pendingeditnum=""
@@ -2102,6 +2195,160 @@ vadvancedalerting()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# phstatustag $1=phstatus text prints it as a short coloured tag for a 10.2 menu row
+
+phstatustag()
+{
+  case "$1" in
+    ok) if [ "$(phcur method)" = "log" ]; then echo -e "${CGreen}<ok>${CClear}"; else echo -e "${CGreen}<connected>${CClear}"; fi ;;
+    *"v5"*) echo -e "${CYellow}<Pi-hole v5 - unsupported>${CClear}" ;;
+    *"query logging is off"*) echo -e "${CYellow}<query logging off>${CClear}" ;;
+    *"jq is not"*) echo -e "${CYellow}<jq missing>${CClear}" ;;
+    *password*|*login*|*"API seats"*) echo -e "${CYellow}<login failed>${CClear}" ;;
+    "no "*) echo -e "${CYellow}<not found>${CClear}" ;;
+    *"can't be read"*) echo -e "${CYellow}<can't be read>${CClear}" ;;
+    *) echo -e "${CYellow}<not connected>${CClear}" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phshort $1=text $2=width prints the text cut to that width with a closing >
+
+phshort()
+{
+  if [ "${#1}" -gt "$2" ]; then printf "%.$(($2 - 1))s>" "$1"; else printf '%s' "$1"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phmenurows $1=1|2 $2=1 while Pi-hole is the DNS source prints that Pi-hole's method, address or log, and password rows in 10.2
+
+phmenurows()
+{
+  local n=17 m v a st="" tag="" on="$2" rowon pwon=0
+  phslot="$1"
+  [ "$1" = "2" ] && n=20
+  m="$(phcur method)"
+  if [ "$1" = "2" ]; then
+    case "$m" in api) v="${CGreen}API${CClear}" ;; log) v="${CGreen}log file${CClear}" ;; *) v="<none>" ;; esac
+    menurow "($n)" "  Backup Pi-hole, read every cycle (none / API / log file)" "$v" 68 "$on"
+  else
+    case "$m" in log) v="${CGreen}log file${CClear}" ;; *) v="${CGreen}API${CClear}" ;; esac
+    menurow "($n)" "  Pi-hole read method (API / log file)" "$v" 68 "$on"
+  fi
+  rowon="$on"; [ -z "$m" ] && rowon=0
+  [ "$rowon" -eq 1 ] && { st="$(phstatus)"; tag="$(phstatustag "$st")"; }
+  if [ "$m" = "log" ]; then
+    a="$(phcur logpath)"
+    if [ -n "$a" ]; then a="$(phshort "$a" 44)"; elif [ "$1" = "2" ]; then a="<none>"; else a="auto ($(phshort "$(phlogfile)" 34))"; [ -z "$(phlogfile)" ] && a="auto (none found)"; fi
+    if [ "$1" = "2" ]; then menurow "($((n + 1)))" "  Backup Pi-hole log file" "${CGreen}${a}${CClear}${tag:+ | $tag}" 68 "$rowon"
+    else menurow "($((n + 1)))" "  Pi-hole log file (auto = detect)" "${CGreen}${a}${CClear}${tag:+ | $tag}" 68 "$rowon"; fi
+    if [ "$1" = "2" ]; then menurow "($((n + 2)))" "  Backup Pi-hole password (API only)" "n/a (log file)" 68 0
+    else menurow "($((n + 2)))" "  Pi-hole password (API only, app password recommended)" "n/a (log file)" 68 0; fi
+  else
+    a="$(phcur url)"
+    if [ -n "$a" ]; then a="$(phshort "$a" 56)"; elif [ "$1" = "2" ]; then a="<none>"; else a="auto ($(phshort "$(phapiurl)" 46))"; [ -z "$(phapiurl)" ] && a="auto (no pihole.toml)"; fi
+    [ "$rowon" -eq 1 ] && pwon=1
+    if [ "$1" = "2" ]; then menurow "($((n + 1)))" "  Backup Pi-hole API address" "${CGreen}${a}${CClear}" 68 "$rowon"
+    else menurow "($((n + 1)))" "  Pi-hole API address (auto = read from pihole.toml)" "${CGreen}${a}${CClear}" 68 "$rowon"; fi
+    v="<none>"; [ -n "$(phcur cred)" ] && v="${CGreen}<set>${CClear}"
+    if [ "$1" = "2" ]; then menurow "($((n + 2)))" "  Backup Pi-hole password (API only)" "$v${tag:+ | $tag}" 68 "$pwon"
+    else menurow "($((n + 2)))" "  Pi-hole password (API only, app password recommended)" "$v${tag:+ | $tag}" 68 "$pwon"; fi
+  fi
+  phslot=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phmenuedit $1=1|2 asks for that Pi-hole's API address or log file, depending on its read method, then tests it
+
+phmenuedit()
+{
+  local val cur
+  phslot="$1"
+  echo ""
+  if [ "$(phcur method)" = "log" ]; then
+    cur="$(phcur logpath)"
+    if [ "$1" = "2" ]; then echo -e "Current: ${CGreen}${cur:-none}${CClear}"
+    else echo -e "Current: ${CGreen}${cur:-auto}${CClear} (in use: $(phlogfile)) - auto looks for: $phlogpaths"; fi
+    echo ""
+    if [ "$1" = "2" ]; then read -p "Full path to the backup Pi-hole's pihole.log (blank keeps current): " val
+    else read -p "Full path to Pi-hole's pihole.log (blank keeps current, 'auto' detects it): " val; fi
+    if [ "$val" = "auto" ] && [ "$1" = "1" ]; then
+      phlogpath=""
+    elif [ "$val" = "auto" ]; then
+      echo -e "${CRed}The backup Pi-hole needs its own log file path.${CClear}"; sleep 3; val=""
+    elif [ -n "$val" ]; then
+      case "$val" in
+        /*) case "$val" in *[!A-Za-z0-9._/-]*) echo -e "${CRed}Please use letters, digits and . _ / - only.${CClear}"; sleep 3; val="" ;; esac ;;
+        *) echo -e "${CRed}Please enter an absolute path (starting with /).${CClear}"; sleep 3; val="" ;;
+      esac
+      if [ -n "$val" ]; then
+        [ -f "$val" ] || echo -e "${CYellow}Note: $val does not exist yet.${CClear}"
+        if [ "$1" = "2" ]; then phlogpath2="$val"; else phlogpath="$val"; fi
+      fi
+    fi
+  else
+    cur="$(phcur url)"
+    if [ "$1" = "2" ]; then echo -e "Current: ${CGreen}${cur:-none}${CClear}"
+    else echo -e "Current: ${CGreen}${cur:-auto}${CClear} (in use: $(phapiurl)) - auto reads webserver.port from this router's pihole.toml"; fi
+    echo ""
+    if [ "$1" = "2" ]; then read -p "Backup Pi-hole address, e.g. https://192.168.50.6 (blank keeps current): " val
+    else read -p "Pi-hole address, e.g. https://192.168.50.5 or http://192.168.50.1:5080 (blank keeps current, 'auto' reads pihole.toml): " val; fi
+    if [ "$val" = "auto" ] && [ "$1" = "1" ]; then
+      phurl=""
+    elif [ "$val" = "auto" ]; then
+      echo -e "${CRed}The backup Pi-hole needs its own address: 'auto' only works for a Pi-hole on this router.${CClear}"; sleep 3; val=""
+    elif [ -n "$val" ]; then
+      if val="$(aghnormurl "$val")"; then
+        if [ "$1" = "2" ]; then phurl2="$val"; else phurl="$val"; fi
+      else
+        echo -e "${CRed}Please enter an address like https://192.168.50.5 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""
+      fi
+    fi
+  fi
+  if [ -n "$val" ]; then
+    rm -f "$(phsidpath)"
+    dnslogannounced=""; saveconfig
+    phslot="$1"
+    echo ""; echo -e "Testing: $(phstatus)"; echo ""
+    read -rsp $'Press any key to continue...\n' -n1 key
+  fi
+  phslot=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phmenupassword $1=1|2 asks for that Pi-hole's API password, stores it base64-encoded, and tests it
+
+phmenupassword()
+{
+  local p new
+  phslot="$1"
+  echo ""
+  echo -e "Pi-hole v6 has no username: IOCMON logs in with a password only. An app password is recommended - create one in Pi-hole's"
+  echo -e "web interface under Settings - Web interface / API (Expert mode). It skips two-factor login and can be revoked on its own."
+  echo -e "It is stored base64-encoded in ${CGreen}${config}${CClear} (readable by root only) and never passed on a command line."
+  echo ""
+  read -rsp "$(phname) password (blank keeps the current one, 'none' removes it): " p; echo ""
+  if [ "$p" = "none" ]; then
+    if [ "$1" = "2" ]; then phcred2=""; else phcred=""; fi
+    saveconfig; phslot="$1"
+    aghlog "INFO" "$(phname) API password removed."
+  elif [ -n "$p" ]; then
+    new="$(aghencode "$p")"; p=""
+    if [ -n "$new" ]; then
+      if [ "$1" = "2" ]; then phcred2="$new"; else phcred="$new"; fi
+      new=""; saveconfig; phslot="$1"
+      aghlog "INFO" "$(phname) API password updated."
+    else
+      echo -e "${CRed}The password could not be encoded with openssl, so it was not saved.${CClear}"
+    fi
+  fi
+  rm -f "$(phsidpath)"
+  echo ""; echo -e "Testing: $(phstatus)"; echo ""
+  read -rsp $'Press any key to continue...\n' -n1 key
+  phslot=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # vadvanceddns: feed-based DNS matching (checkdns) plus the behavioral DNS-tunneling/exfiltration heuristic.
 
 vadvanceddns()
@@ -2112,15 +2359,17 @@ vadvanceddns()
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.2 Advanced Settings - DNS Watch & Tunneling Detection" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
-    echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, or from AdGuard Home's query log through its API when AdGuard Home${CClear}"
-    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 11). A second AdGuard Home can be a backup (items 14 and 15), read only when the first fails.${CClear}"
+    echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, from AdGuard Home's query log through its API when AdGuard Home${CClear}"
+    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 11; a backup in items 14 and 15 is read only when the first fails), or from Pi-hole v6 through its API${CClear}"
+    echo -e "${InvGreen} ${CClear} or its pihole.log (items 17-23), where a backup Pi-hole is read every cycle alongside the primary.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
-    if [ "$enablednswatch" -eq 1 ] && ! dnsusesagh && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
+    if [ "$enablednswatch" -eq 1 ] && ! dnsusesagh && ! dnsusesph && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
     case "$dnssource" in
       adguardhome) dnssrcdisp="${CGreen}AdGuard Home${CClear}" ;;
       dnsmasq) dnssrcdisp="${CGreen}dnsmasq${CClear}" ;;
+      pihole) dnssrcdisp="${CGreen}Pi-hole${CClear}" ;;
       *) if dnsusesagh; then dnssrcdisp="${CGreen}auto${CClear} (AdGuard Home detected)"; else dnssrcdisp="${CGreen}auto${CClear} (dnsmasq)"; fi ;;
     esac
     aghon=0; [ "$enablednswatch" -eq 1 ] && dnsusesagh && aghon=1
@@ -2135,6 +2384,7 @@ vadvanceddns()
     elif (aghslot=2; aghstatus >/dev/null); then aghdisp2="${CGreen}<set> | <connected>${CClear}"
     else aghdisp2="${CYellow}<set> | <not connected>${CClear}"; fi
     aghurl2disp="<none>"; [ -n "$aghurl2" ] && aghurl2disp="${CGreen}${aghurl2}${CClear}"
+    phon=0; [ "$enablednswatch" -eq 1 ] && dnsusesph && phon=1
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
     menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
@@ -2147,18 +2397,21 @@ vadvanceddns()
     menurow "( 8)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
     menurow "( 9)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
     menurow "(10)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
-    menurow "(11)" "DNS query source (auto / dnsmasq / AdGuard Home)" "$dnssrcdisp" 68 "$enablednswatch"
+    menurow "(11)" "DNS query source (auto / dnsmasq / AdGuard Home / Pi-hole)" "$dnssrcdisp" 68 "$enablednswatch"
     menurow "(12)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
     menurow "(13)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
     menurow "(14)" "  Backup AdGuard Home API login (optional)" "$aghdisp2" 68 "$aghon"
     menurow "(15)" "  Backup AdGuard Home API address (optional)" "$aghurl2disp" 68 "$aghon"
     menurow "(16)" "  Also check queries AdGuard Home already blocked" "$(booleantoyesno "$aghincludeblocked")" 68 "$aghon"
+    phmenurows 1 "$phon"
+    phmenurows 2 "$phon"
+    menurow "(23)" "  Also check queries Pi-hole already blocked" "$(booleantoyesno "$phincludeblocked")" 68 "$phon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-16, e=Exit): " sel
+    read -p "Please select? (1-23, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -2171,7 +2424,13 @@ vadvanceddns()
          else
            enablednswatch=1
            saveconfig
-           if dnsusesagh; then
+           if dnsusesph; then
+             echo ""
+             echo -e "Pi-hole is the DNS query source, so DNS watch reads Pi-hole (items 17-23) rather than dnsmasq's query log."
+             phslot=1; echo -e "Pi-hole: ${CGreen}$(phstatus)${CClear}"
+             echo ""
+             read -rsp $'Press any key to continue...\n' -n1 key
+           elif dnsusesagh; then
              echo ""
              echo -e "AdGuard Home answers DNS on this router, so DNS watch reads AdGuard Home's query log through its API."
              echo -e "AdGuard Home: ${CGreen}$(aghstatus)${CClear}"
@@ -2245,14 +2504,16 @@ vadvanceddns()
           echo -e "  1 : auto         - AdGuard Home's query log when AdGuard Home answers on port 53, otherwise dnsmasq's (default)"
           echo -e "  2 : dnsmasq      - always dnsmasq's query log (log-queries)"
           echo -e "  3 : AdGuard Home - always AdGuard Home's query log, through its API"
+          echo -e "  4 : Pi-hole      - Pi-hole v6's queries, through its API or its pihole.log (items 17-23); never chosen by auto"
           echo ""
-          read -p "New DNS query source (1-3, blank to keep current): " val
+          read -p "New DNS query source (1-4, blank to keep current): " val
           case "$val" in
             1) dnssource="auto" ;;
             2) dnssource="dnsmasq" ;;
             3) dnssource="adguardhome" ;;
+            4) dnssource="pihole" ;;
             "") ;;
-            *) echo -e "${CRed}Please enter 1, 2 or 3.${CClear}"; sleep 2; val="" ;;
+            *) echo -e "${CRed}Please enter 1, 2, 3 or 4.${CClear}"; sleep 2; val="" ;;
           esac
           [ -n "$val" ] && { dnslogannounced=""; saveconfig; }; } ;;
       12) [ "$aghon" -eq 1 ] && { echo ""
@@ -2313,6 +2574,38 @@ vadvanceddns()
           fi
           [ -n "$val" ] && { saveconfig; [ -n "$aghurl2" ] && { echo ""; echo -e "Testing: $(aghslot=2; aghstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; }; } ;;
       16) [ "$aghon" -eq 1 ] && togglesetting aghincludeblocked ;;
+      17) [ "$phon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${phmethod}${CClear}"; echo ""
+          echo -e "  1 : API      - read Pi-hole v6's query API (needs jq; an app password if Pi-hole has a password)"
+          echo -e "  2 : log file - read its pihole.log (a Pi-hole on this router with dns.queryLogging on, or a log mounted here)"
+          echo ""
+          read -p "Read method for Pi-hole (1-2, blank to keep current): " val
+          case "$val" in
+            1) phmethod="api" ;;
+            2) phmethod="log" ;;
+            "") ;;
+            *) echo -e "${CRed}Please enter 1 or 2.${CClear}"; sleep 2; val="" ;;
+          esac
+          [ -n "$val" ] && { dnslogannounced=""; saveconfig; phslot=1; echo ""; echo -e "Testing: $(phstatus)"; echo ""; read -rsp $'Press any key to continue...\n' -n1 key; }; } ;;
+      18) [ "$phon" -eq 1 ] && phmenuedit 1 ;;
+      19) [ "$phon" -eq 1 ] && [ "$phmethod" != "log" ] && phmenupassword 1 ;;
+      20) [ "$phon" -eq 1 ] && { echo ""; echo -e "Current: ${CGreen}${phmethod2:-none}${CClear}"; echo ""
+          echo -e "A backup Pi-hole is read every cycle alongside the primary, since devices usually send lookups to both."
+          echo -e "  1 : none"
+          echo -e "  2 : API      - read its query API (address and password in items 21 and 22)"
+          echo -e "  3 : log file - read its pihole.log mounted on this router (path in item 21)"
+          echo ""
+          read -p "Backup Pi-hole (1-3, blank to keep current): " val
+          case "$val" in
+            1) phmethod2=""; rm -f "$phsidfile.2" ;;
+            2) phmethod2="api" ;;
+            3) phmethod2="log" ;;
+            "") ;;
+            *) echo -e "${CRed}Please enter 1, 2 or 3.${CClear}"; sleep 2; val="" ;;
+          esac
+          [ -n "$val" ] && { dnslogannounced=""; saveconfig; }; } ;;
+      21) [ "$phon" -eq 1 ] && [ -n "$phmethod2" ] && phmenuedit 2 ;;
+      22) [ "$phon" -eq 1 ] && [ "$phmethod2" = "api" ] && phmenupassword 2 ;;
+      23) [ "$phon" -eq 1 ] && togglesetting phincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -2626,27 +2919,31 @@ vadvancedgeneral()
     clear
     echo -en "${InvGreen} ${InvDkGray}${CWhite} "; padright "${advsettingsmenunum}.6 Advanced Settings - General / Script Behavior" 136; echo -e "${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size and location, autostart, IOCMON's self-update schedule/track and the optional router${CClear}"
-    echo -e "${InvGreen} ${CClear} web interface tab - not specific to any one detection watch.${CClear}"
+    echo -e "${InvGreen} ${CClear} Controls the main loop's own cadence, log size and location, autostart, IOCMON's self-update schedule/track, the optional router web${CClear}"
+    echo -e "${InvGreen} ${CClear} interface tab and the Kairos/Astraea integration, which uses each add-on only while its script passes the author's release signature${CClear}"
+    echo -e "${InvGreen} ${CClear} check (a fork or changed copy is ignored and alerted) - not specific to any one detection watch.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(1)${CClear} : "; padright "Main loop / detection refresh interval, in seconds" 68; echo -e ": ${CGreen}$timerloop${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(2)${CClear} : "; padright "Rows before each log is rotated to .1 and .2 (0 = never)" 68; echo -e ": ${CGreen}$logsize${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Main loop / detection refresh interval, in seconds" 68; echo -e ": ${CGreen}$timerloop${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 2)${CClear} : "; padright "Rows before each log is rotated to .1 and .2 (0 = never)" 68; echo -e ": ${CGreen}$logsize${CClear}"
     logloconly=0; [ -n "$extdrivelabel" ] && logloconly=1
-    menurow "(3)" "IOCMON Activity Log folder location" "${CGreen}${logfilepath:-$jffslogfile}${CClear}" 68 "$logloconly"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(4)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(5)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
-    menurow "(6)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
-    menurow "(7)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
+    menurow "( 3)" "IOCMON Activity Log folder location" "${CGreen}${logfilepath:-$jffslogfile}${CClear}" 68 "$logloconly"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 4)${CClear} : "; padright "Launch IOCMON automatically in the background after a reboot" 68; echo -e ": $(booleantoyesno "$autostart")"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 5)${CClear} : "; padright "Check for IOCMON script updates on a daily schedule" 68; echo -e ": $(booleantoyesno "$schedule")"
+    menurow "( 6)" "  Time of day for that update check (24-hour clock)" "${CGreen}$(printf '%02d' "$schedulehrs"):$(printf '%02d' "$schedulemin")${CClear}" 68 "$schedule"
+    menurow "( 7)" "Automatically install IOCMON script updates when found" "$(booleantoyesno "$updateiocm")" 68 "$schedule"
     if [ "$track" = "0" ]; then trackdisp="Stable"; tracklabel="STABLE"; else trackdisp="Beta"; tracklabel="BETA"; fi
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(8)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
-    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(9)${CClear} : "; padright "Router web interface tab (Addons > IOCMON)" 68; echo -e ": $(booleantoyesno "$enablewebui")"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite} | ${CClear}"
-    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}(e)${CClear} : Return to Advanced Settings${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 8)${CClear} : "; padright "Update track" 68; echo -e ": ${CGreen}${trackdisp}${CClear}"
+    echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 9)${CClear} : "; padright "Router web interface tab (Addons > IOCMON)" 68; echo -e ": $(booleantoyesno "$enablewebui")"
+    [ "$enableaddonintegration" = "1" ] && addoncheckall
+    menurow "(10)" "Kairos/Astraea integration (signature-checked)" "$(booleantoyesno "$enableaddonintegration")" 68
+    menurow "  |-" "  Signature check: Kairos | Astraea" "$(addonstatus kairos) | $(addonstatus astraea)" 68 "$enableaddonintegration"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
+    echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-9, e=Exit): " sel
+    read -p "Please select? (1-10, e=Exit): " sel
     case "$sel" in
       1) echo -e "Current: ${CGreen}${timerloop}${CClear}"
          read -p "New main loop interval in seconds (>=5, blank to keep current): " val
@@ -2668,6 +2965,7 @@ vadvancedgeneral()
       7) [ "$schedule" -eq 1 ] && togglesetting updateiocm ;;
       8) togglesetting track ;;
       9) vwebuitoggle ;;
+      10) togglesetting enableaddonintegration ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -4272,6 +4570,7 @@ updatefeeds()
       *) failcount=$((failcount+1)); echo -e "\33[2K\r  ${CRed}*${CClear} Skynet import: failed (see log)" ;;
     esac
   fi
+  geoipfeedline
 
   local ipscount domainscount hashescount qfeedstotal
   ipscount="$(wc -l < "$feedsroot/ips.txt" 2>/dev/null | tr -d ' ')"; ipscount="${ipscount:-0}"
@@ -4953,6 +5252,16 @@ dnsreplyip()
 {
   local dom="$1" logf="${dnslogresolved:-/tmp/syslog.log}"
   if dnsusesagh; then aghreplyip "$dom"; return; fi
+  if dnsusesph; then phreplyip "$dom"; return; fi
+  dnsreplyipfrom "$logf" "$dom"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsreplyipfrom $1=dnsmasq-format log $2=domain echoes the last public IP its reply/cached lines gave for $2 or a subdomain
+
+dnsreplyipfrom()
+{
+  local logf="$1" dom="$2"
   [ -n "$dom" ] && [ -f "$logf" ] || return
   tail -n 20000 "$logf" | grep -F 'dnsmasq' | grep -E ' (reply|cached) ' | awk -v d="$dom" '
     function usable(v) {
@@ -5110,7 +5419,7 @@ reputationlookup()
 {
   local kind="$1" indicator="$2" source="$3" ip="" target="" rec="" reason="" cachednote="" cyclefile="${abuseipdbcyclefile:-/tmp/iocmon_aipdb_cycle.$$}" cyclecount=0 now
   local rip epoch score total users last cc cname usage isp domain tor wl hostnames cats flags="" catnames testmark="" testtag="" manualnote=""
-  reptag=""; repip=""; repreason=""; repscore=""
+  reptag=""; repip=""; repreason=""; repscore=""; repwl=""
   [ "$enableabuseipdb" = "1" ] && [ -n "$abuseipdbapikey" ] && [ -n "$stateroot" ] || return
   [ "$kind" = "simulated" ] && { testmark=" [SIMULATED TEST]"; testtag="TEST "; }
   [ "$kind" = "lookup" ] && { testmark=" [MANUAL LOOKUP]"; manualnote="MANUAL LOOKUP - "; }
@@ -5122,7 +5431,11 @@ reputationlookup()
     dns)
       target="${indicator#*->}"
       ip="$(dnsreplyip "$target")"
-      if [ -z "$ip" ]; then
+      if [ -z "$ip" ] && dnsusesph && [ "$phmethod" != "log" ] && [ "$phmethod2" != "log" ]; then
+        reason="Pi-hole's API does not report the IP it answered with, so there is no IP to check"
+      elif [ -z "$ip" ] && dnsusesph; then
+        reason="no public IP for this domain in Pi-hole's reply log"
+      elif [ -z "$ip" ]; then
         reason="no public IP for this domain in dnsmasq's reply log"
       elif ! ispublicip "$ip"; then
         reason="dnsmasq answered with non-public $ip"; ip=""
@@ -5185,7 +5498,7 @@ EOF
   catnames="$(echo "$cats" | sed 's/([0-9]*)//g')"
 
   repip="$ip"
-  repscore="$score"
+  repscore="$score"; repwl="$wl"
   reptag="${testtag}AbuseIPDB $ip ${score}% ${total}r/${users}u ${cc:-??} $(shortusagetype "$usage")"
   [ "$tor" = "true" ] && reptag="$reptag Tor"
   [ "$wl" = "true" ] && reptag="$reptag Whitelisted"
@@ -5227,6 +5540,130 @@ EOF
   emaildivider
 }
 
+# ===== Kairos/Astraea integration: begin (hooks listed in CLAUDE.md round 158) =====
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addonopenssl prints an OpenSSL that can check Ed25519 signatures (pkeyutl -rawin, OpenSSL 3)
+
+addonopenssl()
+{
+  local b
+  for b in $addonopensslpaths; do
+    [ -x "$b" ] && "$b" pkeyutl -help 2>&1 | grep -q -- '-rawin' && { echo "$b"; return 0; }
+  done
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addonsigverify $1=script $2=signature returns 0 valid, 1 not valid, 2 no OpenSSL 3, 3 no signature file, with the reason in addonsigerr
+
+addonsigverify()
+{
+  local p="/tmp/iocmon_addonsig.pub.$$" g="/tmp/iocmon_addonsig.bin.$$" rc=1
+  addonsigerr=""
+  [ -s "$2" ] || { addonsigerr="no signature file ($2)"; return 3; }
+  [ -n "$addonossl" ] || addonossl="$(addonopenssl)" || { addonsigerr="no OpenSSL 3 on this router can check signatures (fix: opkg install openssl-util)"; return 2; }
+  printf '%s\n' "-----BEGIN PUBLIC KEY-----" "$addonsignkey" "-----END PUBLIC KEY-----" > "$p"
+  if ! "$addonossl" base64 -d -A -in "$2" -out "$g" 2>/dev/null || [ "$(wc -c < "$g" 2>/dev/null | tr -d ' ')" != "64" ]; then
+    addonsigerr="$2 is not a valid signature file (damaged or the wrong file)"
+  elif "$addonossl" pkeyutl -verify -pubin -inkey "$p" -rawin -in "$1" -sigfile "$g" >/dev/null 2>&1; then
+    rc=0
+  else
+    addonsigerr="the signature does not match: the script was changed after signing, or was not signed with the original author's release key"
+  fi
+  rm -f "$p" "$g"
+  return $rc
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addonsigsave $1=name $2=hash $3=result $4=reason replaces that add-on's line in the signature state file ($3 empty removes it)
+
+addonsigsave()
+{
+  { grep -v "^$1|" "$addonsigstate" 2>/dev/null; [ -n "$3" ] && printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4"; } > "$addonsigstate.$$"
+  mv -f "$addonsigstate.$$" "$addonsigstate"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addoncheck $1=kairos|astraea [$2=cycle] verifies the installed script against its .sig once per change, logging and alerting when that changes
+
+addoncheck()
+{
+  local name="$1" script label sig h h2 rec oldh oldr r rc ver
+  case "$name" in
+    kairos) script="$kairosscript"; label="Kairos" ;;
+    astraea) script="$astraeascript"; label="Astraea" ;;
+    *) return 1 ;;
+  esac
+  sig="$script.sig"
+  if [ ! -f "$script" ]; then
+    grep -q "^$name|" "$addonsigstate" 2>/dev/null && addonsigsave "$name"
+    return 1
+  fi
+  h="$(cat "$script" "$sig" 2>/dev/null | md5sum | cut -d' ' -f1)"
+  rec="$(grep "^$name|" "$addonsigstate" 2>/dev/null | tail -n 1)"
+  oldh="$(echo "$rec" | cut -d'|' -f2)"; oldr="$(echo "$rec" | cut -d'|' -f3)"
+  if [ -n "$rec" ] && [ "$oldh" = "$h" ] && { [ "$oldr" != "noossl" ] || [ "$2" != "cycle" ]; }; then
+    [ "$oldr" = "ok" ]; return
+  fi
+  addonsigverify "$script" "$sig"; rc=$?
+  if [ "$rc" -eq 1 ]; then
+    sleep 5
+    h2="$(cat "$script" "$sig" 2>/dev/null | md5sum | cut -d' ' -f1)"
+    [ "$h2" = "$h" ] || return 1
+    addonsigverify "$script" "$sig"; rc=$?
+  fi
+  case "$rc" in 0) r="ok" ;; 1) r="bad" ;; 2) r="noossl" ;; *) r="nosig" ;; esac
+  addonsigsave "$name" "$h" "$r" "$addonsigerr"
+  [ "$oldh" = "$h" ] && [ "$oldr" = "$r" ] && { [ "$r" = "ok" ]; return; }
+  ver="$(sed -n 's/^version=\([0-9][0-9.]*\)$/\1/p' "$script" 2>/dev/null | head -n 1)"
+  case "$r" in
+    ok) echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $label ${ver:+v$ver }at $script passed its release signature check - $label integration is in use." >> "$logfile" ;;
+    bad) printf '%s %s IOCMON[%s] - WARNING: %s\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "Possible compromised or forked version of $label found at $script and ignored: $addonsigerr. Reinstall $name.sh and $name.sh.sig from the original release." >> "$logfile"
+         raisealert "fsintegrity" "$script" "addon-signature" "$label script failed its release signature check (possible compromised or forked version) - $label integration ignored" "$script-$h" ;;
+    nosig) echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $label at $script has no signature file ($sig), so it can't be verified as the original release (possible fork or unsigned copy) - $label integration ignored. Reinstall $name.sh and $name.sh.sig from the original release." >> "$logfile" ;;
+    noossl) echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: $label integration ignored: no OpenSSL 3 on this router can check its release signature. Fix: opkg install openssl-util" >> "$logfile" ;;
+  esac
+  [ "$r" = "ok" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addonok $1=kairos|astraea succeeds only while the integration is on and that add-on's script is verified as the original release
+
+addonok()
+{
+  [ "${enableaddonintegration:-1}" = "1" ] || return 1
+  addoncheck "$1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addoncheckall re-checks both add-ons once per main-loop cycle, so a changed script or a newly installed OpenSSL 3 is picked up
+
+addoncheckall()
+{
+  [ "${enableaddonintegration:-1}" = "1" ] || return 0
+  addoncheck kairos cycle
+  addoncheck astraea cycle
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# addonstatus $1=kairos|astraea prints that add-on's last signature check result in words, coloured
+
+addonstatus()
+{
+  local s r
+  case "$1" in kairos) s="$kairosscript" ;; *) s="$astraeascript" ;; esac
+  [ -f "$s" ] || { echo -e "${CDkGray}not installed${CClear}"; return; }
+  r="$(grep "^$1|" "$addonsigstate" 2>/dev/null | tail -n 1 | cut -d'|' -f3)"
+  case "$r" in
+    ok) echo -e "${CGreen}verified${CClear}" ;;
+    bad) echo -e "${CRed}NOT the original - ignored${CClear}" ;;
+    nosig) echo -e "${CYellow}no .sig file - ignored${CClear}" ;;
+    noossl) echo -e "${CYellow}no OpenSSL 3 - ignored${CClear}" ;;
+    *) echo -e "${CDkGray}not checked yet${CClear}" ;;
+  esac
+}
+
 # -------------------------------------------------------------------------------------------------------------------------
 # astraeatarget $1=kind $2=indicator prints the name or address Astraea can be asked about, or nothing
 
@@ -5248,7 +5685,7 @@ astraeaintel()
 {
   local target="$1" out v reason short
   inteltag=""; inteltarget=""
-  [ -n "$target" ] && [ -x "$astraeascript" ] || return 0
+  [ -n "$target" ] && addonok astraea >/dev/null 2>&1 || return 0
   if which timeout >/dev/null 2>&1; then
     out="$(timeout 10 "$astraeascript" intel "$target" 2>/dev/null)"
   else
@@ -5284,6 +5721,181 @@ astraeaemailblock()
   emailrow "reason" "${reason:-no detail}"
   emaildivider
 }
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqfiles prints the Kairos/Astraea files listing the router's own lookups that exist, are not empty and (Kairos) whose add-on is running
+
+selfqfiles()
+{
+  local f
+  for f in $selfqpaths; do
+    [ -s "$f" ] || continue
+    case "$f" in
+      */kairos/*) addonok kairos >/dev/null 2>&1 && kairosactive || continue ;;
+      */astraea/*) addonok astraea >/dev/null 2>&1 || continue ;;
+      *) continue ;;
+    esac
+    echo "$f"
+  done
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# kairosactive succeeds while Kairos's state is known: its status file written in the last 3 minutes, or for an older Kairos, kairos_time in nvram
+
+kairosactive()
+{
+  local k v t="" updated=""
+  if [ -f "$kairosstatusfile" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in
+        time) t="$v" ;;
+        updated) updated="$v" ;;
+      esac
+    done < "$kairosstatusfile"
+    validateint "$updated" 0 || return 1
+    [ $(( $(date +%s) - updated )) -le 180 ] || return 1
+  else
+    nvramget kairos_time || return 1
+    t="$nvramval"
+  fi
+  case "$t" in booting|synced|degraded) return 0 ;; esac
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnslogtimes reads dnsmasq log lines on stdin and prints name|src|epoch for router-sourced queries ($1 = router addresses)
+
+dnslogtimes()
+{
+  set -- "$1" $(date +'%Y %m %d %H %M %S %s')
+  awk -v r=" $(echo $1) " -v Y="$2" -v M="$3" -v D="$4" -v h="$5" -v mi="$6" -v s="$7" -v now="$8" '
+    function dn(y, m, d,   era, yoe, doy, doe) {
+      if (m <= 2) y -= 1
+      era = (y >= 0 ? y : y - 399); era = int(era / 400)
+      yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    function hms(t,   a) { if (split(t, a, ":") < 3) return -1; return a[1] * 3600 + a[2] * 60 + int(a[3]) }
+    BEGIN {
+      n = split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " "); for (i = 1; i <= n; i++) mon[names[i]] = i
+      off = dn(Y + 0, M + 0, D + 0) * 86400 + h * 3600 + mi * 60 + s - now
+    }
+    {
+      name = ""; src = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^query\[[A-Za-z]+\]$/) name = $(i + 1)
+        if ($i == "from" && (i + 1) <= NF) src = $(i + 1)
+      }
+      if (name == "" || src !~ /^[0-9A-Fa-f.:]+$/) next
+      name = tolower(name); gsub(/[^a-z0-9._-]/, "_", name)
+      a = src; sub(/^::ffff:/, "", a)
+      if (index(r, " " a " ") == 0) next
+      e = 0
+      if (($1 in mon) && $2 ~ /^[0-9]+$/ && (t = hms($3)) >= 0) {
+        y = Y + 0
+        if (mon[$1] > M + 0 || (mon[$1] == M + 0 && $2 + 0 > D + 0)) y--
+        e = dn(y, mon[$1], $2 + 0) * 86400 + t - off
+      } else if ($1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) {
+        t = hms(substr($1, 12, 8)); z = substr($1, 20); sub(/^\.[0-9]+/, "", z)
+        e = dn(substr($1, 1, 4) + 0, substr($1, 6, 2) + 0, substr($1, 9, 2) + 0) * 86400 + t
+        if (z == "Z") e = e
+        else if (z ~ /^[+-][0-9][0-9]:?[0-9][0-9]$/) { gsub(/:/, "", z); e -= (substr(z, 1, 1) == "-" ? -1 : 1) * (substr(z, 2, 2) * 3600 + substr(z, 4, 2) * 60) }
+        else e -= off
+      }
+      print name "|" src "|" e
+    }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqmatch $1=name|src|epoch file prints domain|src|tool for router lookups that were Kairos's or Astraea's own, and RECENT if one under 10s old was not
+
+selfqmatch()
+{
+  local tf="$1" files
+  files="$(selfqfiles)"
+  awk -F'|' -v r=" $(routeraddrs | tr '\n' ' ') " -v now="$(date +%s)" -v lo="$dnsselfqfloor" -v tf="$tf" '
+    FILENAME != tf {
+      n = tolower($1); c[n]++; ep[n, c[n]] = $3 + 0; tl[n, c[n]] = (FILENAME ~ /astraea/ ? "Astraea" : "Kairos")
+      next
+    }
+    {
+      a = $2; sub(/^::ffff:/, "", a)
+      if (index(r, " " a " ") == 0) next
+      n = tolower($1); sub(/\.$/, "", n); e = $3 + 0; k = $1 "|" $2; seen[k] = 1; hit = ""
+      for (i = 1; i <= c[n]; i++) {
+        d = ep[n, i]
+        if (e > 0 ? (d - e <= 60 && e - d <= 60) : (d >= lo)) { hit = tl[n, i]; break }
+      }
+      if (hit == "") { bad[k] = 1; if (e > 0 && now - e < 10) recent = 1 }
+      else if (!(k in who)) who[k] = hit
+    }
+    END {
+      for (k in seen) if (!(k in bad)) print k "|" who[k]
+      if (recent) print "RECENT"
+    }' $files "$tf"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqfilter $1=pairs file $2=name|src|epoch file splits off the router's Kairos/Astraea lookups into $1.self, keeping device pairs in $1
+
+selfqfilter()
+{
+  local pairs="$1" times="$2" out
+  : > "$pairs.self"
+  dnsselfcount=0
+  [ -n "$(selfqfiles)" ] && [ -s "$times" ] || return 0
+  [ -n "$dnsselfqfloor" ] || dnsselfqfloor=$(( $(date +%s) - 7200 ))
+  out="$(selfqmatch "$times")"
+  case "$out" in
+    *RECENT*) sleep 3; out="$(selfqmatch "$times")" ;;
+  esac
+  dnsselfqfloor=$(( $(date +%s) - 60 ))
+  echo "$out" | grep -v '^RECENT$' | grep . > "$pairs.self"
+  [ -s "$pairs.self" ] || return 0
+  dnsselfcount="$(wc -l < "$pairs.self" | tr -d ' ')"
+  awk -F'|' 'NR == FNR { s[$1 "|" $2] = 1; next } !(($1 "|" $2) in s)' "$pairs.self" "$pairs" > "$pairs.dev"
+  mv -f "$pairs.dev" "$pairs"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqinfo $1=name $2=message logs one INFO line about a router lookup set aside, at most once per name every 6 hours
+
+selfqinfo()
+{
+  local now last
+  now=$(date +%s)
+  last="$(awk -v n="$1" '$1 == n { print $2 }' "$selfqseenfile" 2>/dev/null | tail -n 1)"
+  [ -n "$last" ] && [ $((now - last)) -lt 21600 ] && return 0
+  { awk -v n="$1" -v c=$((now - 21600)) '$1 != n && $2 >= c' "$selfqseenfile" 2>/dev/null; echo "$1 $now"; } > "$selfqseenfile.t"
+  mv -f "$selfqseenfile.t" "$selfqseenfile"
+  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $2" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqtool $1=self file $2=src $3=name prints which add-on made that router lookup ($4=base: any name under $3), "Kairos and Astraea" if both
+
+selfqtool()
+{
+  awk -F'|' -v s="$2" -v d="$3" -v b="$4" '
+    $2 == s && ($1 == d || (b != "" && substr("." $1, length($1) - length(d) + 1) == "." d)) { t[$3] = 1 }
+    END { if (("Kairos" in t) && ("Astraea" in t)) print "Kairos and Astraea"; else for (k in t) print k }' "$1"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# selfqwhat $1=add-on name prints how a set-aside router lookup is described in the log
+
+selfqwhat()
+{
+  case "$1" in
+    Astraea) echo "Astraea's own certificate check" ;;
+    Kairos) echo "Kairos's own lookup (time servers and DNS checks)" ;;
+    *) echo "Kairos's and Astraea's own lookups" ;;
+  esac
+}
+
+# ===== Kairos/Astraea integration: end =====
 
 # -------------------------------------------------------------------------------------------------------------------------
 # reputationstatus echoes the dashboard's compact AbuseIPDB slot, fitted to $1 visible characters
@@ -5327,21 +5939,21 @@ reputationstatus()
 isfeedmatchsource()
 {
   case "$1" in
-    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule|etc-critical-new|etc-critical-modified|etc-critical-deleted) return 1 ;;
+    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule|etc-critical-new|etc-critical-modified|etc-critical-deleted|addon-signature) return 1 ;;
     *) return 0 ;;
   esac
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# alertseverity sets $alertsev to critical/warning/info for kind $1, indicator $2, source $3, detail $4, AbuseIPDB score $5
+# alertseverity sets $alertsev to critical/warning/info for kind $1, indicator $2, source $3, detail $4, AbuseIPDB score $5 and whitelisted flag $6
 
 alertseverity()
 {
-  local kind="$1" indicator="$2" source="$3" detail="$4" score="$5"
+  local kind="$1" indicator="$2" source="$3" detail="$4" score="$5" wl="$6"
   alertsev="critical"
   case "$kind" in
     dns)
-      if [ "$source" = "dns-tunnel-heuristic" ] || indomainlist "${indicator#*->}" "$dnssharedhosts"; then
+      if [ "$source" = "dns-tunnel-heuristic" ] || [ "$wl" = "true" ] || indomainlist "${indicator#*->}" "$dnssharedhosts"; then
         alertsev="info"
       else
         case "$detail" in *botnet_cc*) return ;; esac
@@ -5360,7 +5972,7 @@ raisealert()
 {
   local kind="$1" indicator="$2" source="$3" detail="$4" dedupkey="${5:-$2}"
   local key="${kind}|${dedupkey}" nowepoch cooldownsec=21600 lastepoch=0 sevtag
-  reptag=""; repip=""; repscore=""; inteltag=""; inteltarget=""
+  reptag=""; repip=""; repscore=""; repwl=""; inteltag=""; inteltarget=""
   migratealertlevel
 
   resolvestateroot
@@ -5385,7 +5997,7 @@ raisealert()
   [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
   astraeaintel "$(astraeatarget "$kind" "$indicator")"
 
-  alertseverity "$kind" "$indicator" "$source" "$detail" "$repscore"
+  alertseverity "$kind" "$indicator" "$source" "$detail" "$repscore" "$repwl"
   sevtag="$(echo "$alertsev" | tr 'a-z' 'A-Z')"
   printf '%s %s IOCMON[%s] - WARNING: IOC match (%s): %s matched %s (%s) [%s].\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "$kind" "$indicator" "$source" "$detail" "$sevtag" >> "$logfile"
 
@@ -5406,6 +6018,13 @@ raisealert()
       validateint "$pendingcount" 0 || pendingcount=0
       pendingcount=$((pendingcount + 1))
       { echo "$pendingcount"; echo "$alertline"; } > "$pendingfile"
+      local alertip
+      alertip="$(alertipof "$indicator")"
+      [ -z "$alertip" ] && [ -n "$repip" ] && ispublicip "$repip" && alertip="$repip"
+      if [ -n "$alertip" ]; then
+        echo "$alertsev|$kind|$alertip|$(date +'%b %d %Y %X')" >> "$stateroot/alert_ips"
+        tail -n 200 "$stateroot/alert_ips" > "$stateroot/alert_ips.tmp" && mv -f "$stateroot/alert_ips.tmp" "$stateroot/alert_ips"
+      fi
     fi
   fi
 
@@ -5572,7 +6191,7 @@ dnsusesagh()
 {
   case "$dnssource" in
     adguardhome) return 0 ;;
-    dnsmasq) return 1 ;;
+    dnsmasq|pihole) return 1 ;;
   esac
   aghrunning || return 1
   netstat -lnup 2>/dev/null | awk '$4 ~ /:53$/ { print $NF }' | grep -q 'AdGuardHome' && return 0
@@ -5871,6 +6490,489 @@ aghreplyip()
     }
     ($1 == d || substr($1, length($1) - length(d)) == "." d) && usable($2) { ip = $2 }
     END { if (ip != "") print ip }' "$aghreplyfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# routeraddrs prints loopback and every address on the router's own interfaces, as Astraea defines them
+
+routeraddrs()
+{
+  echo "127.0.0.1"; echo "::1"
+  ip -o addr show 2>/dev/null | awk '{ a = $4; sub(/\/.*/, "", a); print a }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsusesph succeeds when Pi-hole is the chosen DNS query source (10.2 item 11 = 4); auto never picks it
+
+dnsusesph()
+{
+  [ "$dnssource" = "pihole" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phcur $1=method|url|cred|logpath echoes that setting for the Pi-hole in phslot (1 = primary, 2 = backup)
+
+phcur()
+{
+  local s=""
+  [ "$phslot" = "2" ] && s="2"
+  eval "printf '%s' \"\$ph$1$s\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phname echoes how the Pi-hole in phslot is named in messages
+
+phname()
+{
+  if [ "$phslot" = "2" ]; then echo "the backup Pi-hole"
+  elif [ -n "$phmethod2" ]; then echo "the primary Pi-hole"
+  else echo "Pi-hole"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phtoml echoes the pihole.toml of a Pi-hole installed on this router, if there is one
+
+phtoml()
+{
+  local f
+  for f in $phtomlpaths; do [ -f "$f" ] && { echo "$f"; return 0; }; done
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phtomlget $1=section $2=key echoes that key's value from this router's pihole.toml, without quotes or comments
+
+phtomlget()
+{
+  local f
+  f="$(phtoml)" || return 1
+  awk -v s="[$1]" -v k="$2" '
+    /^[[:space:]]*\[/ { h = $0; sub(/#.*/, "", h); gsub(/[[:space:]]/, "", h); sec = h; next }
+    sec == s {
+      l = $0; sub(/^[[:space:]]*/, "", l)
+      if (index(l, k) != 1) next
+      r = substr(l, length(k) + 1)
+      if (r !~ /^[[:space:]]*=/) next
+      sub(/^[[:space:]]*=[[:space:]]*/, "", r)
+      if (r ~ /^"/) { r = substr(r, 2); sub(/".*$/, "", r) } else { sub(/[[:space:]]*#.*$/, "", r); sub(/[[:space:]]*$/, "", r) }
+      print r; exit
+    }' "$f"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phtomlurl echoes the local API address from pihole.toml's webserver.port: the first plain HTTP port, else the first HTTPS one
+
+phtomlurl()
+{
+  local p
+  p="$(phtomlget webserver port)"
+  [ -n "$p" ] || return 1
+  echo "$p" | tr ',' '\n' | awk '
+    /^\[/ { next }
+    { e = $0; sub(/^.*:/, "", e); n = e; sub(/[^0-9].*$/, "", n)
+      if (n == "") next
+      f = substr(e, length(n) + 1)
+      if (f ~ /s/) { if (s == "") s = n } else if (f !~ /r/) { if (h == "") h = n } }
+    END { if (h != "") print "http://127.0.0.1:" h; else if (s != "") print "https://127.0.0.1:" s; else exit 1 }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phapiurl echoes the API base URL of the Pi-hole in phslot: its address setting, else (primary only) this router's pihole.toml
+
+phapiurl()
+{
+  local u
+  u="$(phcur url)"
+  [ -z "$u" ] && [ "$phslot" != "2" ] && u="$(phtomlurl)"
+  echo "${u%/}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phlogfile echoes the pihole.log of the Pi-hole in phslot: its path setting, else (primary only) the first known path that exists
+
+phlogfile()
+{
+  local f
+  f="$(phcur logpath)"
+  if [ -z "$f" ] && [ "$phslot" != "2" ]; then
+    for f in $phlogpaths; do [ -f "$f" ] && break; f=""; done
+  fi
+  echo "$f"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phlocallogoff $1=log file succeeds when it is this router's own Pi-hole log and pihole.toml has dns.queryLogging = false
+
+phlocallogoff()
+{
+  case " $phlogpaths " in *" $1 "*) ;; *) return 1 ;; esac
+  [ "$(phtomlget dns queryLogging)" = "false" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phdecode echoes the plain password of the Pi-hole in phslot
+
+phdecode()
+{
+  local c
+  c="$(phcur cred)"
+  [ -n "$c" ] && printf '%s\n' "$c" | openssl base64 -d -A 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phsidpath echoes the RAM file holding the API session id of the Pi-hole in phslot
+
+phsidpath()
+{
+  echo "$phsidfile.${phslot:-1}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phcurl $1=API path $2=output file [curl args] echoes the HTTP code, sending the saved session id as a header through stdin
+
+phcurl()
+{
+  local p="$1" o="$2" sid=""
+  shift 2
+  [ -f "$(phsidpath)" ] && sid="$(cat "$(phsidpath)" 2>/dev/null)"
+  case "$sid" in *[!A-Za-z0-9+/=_.-]*) sid="" ;; esac
+  { [ -n "$sid" ] && printf 'header = "X-FTL-SID: %s"\n' "$sid"; } | curl -s -L -k --max-time 15 --connect-timeout 5 -K - -o "$o" -w '%{http_code}' "$(phapiurl)$p" "$@" 2>/dev/null
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phv5 succeeds when the Pi-hole in phslot answers the old v5 API, which IOCMON does not support
+
+phv5()
+{
+  [ "$(curl -s -L -k --max-time 10 --connect-timeout 5 -o /dev/null -w '%{http_code}' "$(phapiurl)/admin/api.php?versions" 2>/dev/null)" = "200" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phlogin logs in to the Pi-hole in phslot (password sent on stdin) and saves the session id; a failure's reason is in phautherr
+
+phlogin()
+{
+  local b="/tmp/iocmon_phauth.$$" code jq pw valid sid sf
+  phautherr=""
+  jq="$(aghjqbin)" || { phautherr="jq is not installed (Entware: opkg install jq)"; return 1; }
+  sf="$(phsidpath)"
+  rm -f "$sf"
+  pw="$(phdecode)"
+  if [ -z "$pw" ]; then
+    code="$(phcurl /api/auth "$b")"
+  else
+    code="$(printf '{"password":"%s"}' "$(printf '%s' "$pw" | sed 's/[\\"]/\\&/g')" | curl -s -L -k --max-time 15 --connect-timeout 5 -o "$b" -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$(phapiurl)/api/auth" 2>/dev/null)"
+  fi
+  pw=""
+  case "$code" in
+    200) ;;
+    401) if [ -z "$(phcur cred)" ]; then phautherr="$(phname) needs a password (an app password is recommended)"; else phautherr="$(phname) rejected the password"; fi ;;
+    400) if grep -qi '2fa' "$b" 2>/dev/null; then phautherr="$(phname) has two-factor login on - use an app password instead"; else phautherr="$(phname) refused the login (HTTP 400)"; fi ;;
+    429) phautherr="$(phname) has no free API sessions (API seats exceeded) - raise webserver.api.max_sessions or log out other sessions" ;;
+    404) if phv5; then phautherr="$(phname) runs Pi-hole v5, which IOCMON does not support - IOCMON needs Pi-hole v6"; else phautherr="no Pi-hole v6 API at $(phapiurl)"; fi ;;
+    000|"") phautherr="$(phname) API not reachable at $(phapiurl)" ;;
+    *) phautherr="$(phname) API error (HTTP $code)" ;;
+  esac
+  if [ -z "$phautherr" ]; then
+    valid="$("$jq" -r '.session.valid // false' "$b" 2>/dev/null)"
+    sid="$("$jq" -r '.session.sid // ""' "$b" 2>/dev/null)"
+    if [ "$valid" != "true" ]; then
+      phautherr="$(phname) did not accept the login"
+    elif [ -n "$sid" ]; then
+      ( umask 077; printf '%s\n' "$sid" > "$sf" )
+    fi
+  fi
+  rm -f "$b"
+  [ -z "$phautherr" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phapi $1=API path $2=output file [curl args] calls the Pi-hole in phslot, logging in again once after a 401; sets phcode
+
+phapi()
+{
+  phautherr=""
+  phcode="$(phcurl "$@")"
+  [ "$phcode" = "401" ] || return 0
+  phlogin || { phcode="401"; return 0; }
+  phcode="$(phcurl "$@")"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phfailreason echoes why the last API call to the Pi-hole in phslot failed, from phcode and phautherr
+
+phfailreason()
+{
+  [ -n "$phautherr" ] && { echo "$phautherr"; return; }
+  case "$phcode" in
+    404) if phv5; then echo "$(phname) runs Pi-hole v5, which IOCMON does not support - IOCMON needs Pi-hole v6"; else echo "no Pi-hole v6 API at $(phapiurl)"; fi ;;
+    000|"") echo "$(phname) API not reachable at $(phapiurl)" ;;
+    *) echo "$(phname) API error (HTTP $phcode)" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phstatus echoes "ok" or a one-line reason for the Pi-hole in phslot, for the menu
+
+phstatus()
+{
+  local b="/tmp/iocmon_phst.$$" jq f
+  if [ "$(phcur method)" = "log" ]; then
+    f="$(phlogfile)"
+    if [ -z "$f" ]; then
+      if [ "$phslot" = "2" ]; then echo "no log file set"; else echo "no Pi-hole log found ($phlogpaths)"; fi
+      return 1
+    fi
+    [ -r "$f" ] || { echo "$f can't be read"; return 1; }
+    phlocallogoff "$f" && { echo "query logging is off in pihole.toml (dns.queryLogging = false) - use the API method"; return 1; }
+    echo "ok"; return 0
+  fi
+  jq="$(aghjqbin)" || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
+  if [ -z "$(phapiurl)" ]; then
+    if [ "$phslot" = "2" ]; then echo "no address set"; else echo "no address set, and no pihole.toml on this router"; fi
+    return 1
+  fi
+  phapi /api/queries "$b" -G --data-urlencode "length=1"
+  if [ "$phcode" != "200" ]; then rm -f "$b"; phfailreason; return 1; fi
+  if ! "$jq" -e '.queries | type == "array"' "$b" >/dev/null 2>&1; then rm -f "$b"; echo "$(phname) answered, but not with a Pi-hole v6 query list"; return 1; fi
+  rm -f "$b"; echo "ok"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phwarn $1=message logs a WARNING for the Pi-hole in phslot once, until phok clears it
+
+phwarn()
+{
+  local w
+  eval "w=\"\$phwarned${phslot:-1}\""
+  [ "$w" = "$1" ] || aghlog "WARNING" "$1"
+  eval "phwarned${phslot:-1}=\"\$1\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phok logs that the Pi-hole in phslot can be read again after a phwarn
+
+phok()
+{
+  local w
+  eval "w=\"\$phwarned${phslot:-1}\""
+  [ -n "$w" ] && aghlog "INFO" "DNS watch can read $(phname) again."
+  eval "phwarned${phslot:-1}=\"\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phjq turns one /api/queries reply into M|count|cursor|lowest id and Q|name|client|epoch|blocked lines newer than $cur
+
+phjq='
+def blocked: (.status // "") as $s | ($s | startswith("GRAVITY") or startswith("REGEX") or startswith("DENYLIST") or startswith("EXTERNAL_BLOCKED")) or $s == "SPECIAL_DOMAIN" or $s == "DBBUSY";
+(.queries // []) as $q
+| "M|\($q | length)|\(.cursor // "")|\($q | map(.id) | min // "")",
+  ($q[] | select(.id > $cur)
+   | ((.domain // "") | ascii_downcase | rtrimstr(".")) as $n
+   | select($n != "")
+   | "Q|\($n)|\(.client.ip // "")|\(.time | floor)|\(if blocked then 1 else 0 end)")
+'
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phquerypairs $1=output file writes domain|client pairs from the Pi-hole API in phslot since its saved query id; 1 = error, 2 = first run
+
+phquerypairs()
+{
+  local outfile="$1" tmp="/tmp/iocmon_ph.$$" jq url saved="" cur="" curfile="" snap="" pages=0 meta n low done=0
+  phqueries=0; phskippedblocked=0
+  : > "$outfile"; : > "$outfile.times"
+  if ! jq="$(aghjqbin)"; then
+    phwarn "DNS watch needs jq to read Pi-hole's query API - install it from the Entware components menu (opkg install jq)."
+    return 1
+  fi
+  url="$(phapiurl)"
+  if [ -z "$url" ]; then
+    phwarn "DNS watch has no address for $(phname) - set it under Configuration Menu ${advsettingsmenunum}.2, item $( [ "$phslot" = "2" ] && echo 21 || echo 18)."
+    return 1
+  fi
+  if [ -n "$stateroot" ]; then
+    curfile="$stateroot/pihole_cursor"
+    [ "$phslot" = "2" ] && curfile="$stateroot/pihole_cursor2"
+    [ -f "$curfile" ] && saved="$(head -n 1 "$curfile" 2>/dev/null)"
+  else
+    eval "saved=\"\$phcursorcache${phslot:-1}\""
+  fi
+  [ "${saved#* }" = "$url" ] && cur="${saved%% *}"
+  validateint "$cur" 0 || cur=""
+  mkdir -p "$tmp"; : > "$tmp/all"
+
+  while [ "$pages" -lt "$phmaxpages" ]; do
+    if [ -n "$snap" ]; then
+      phapi /api/queries "$tmp/resp" -G --data-urlencode "length=$phpagesize" --data-urlencode "cursor=$snap" --data-urlencode "start=$((pages * phpagesize))"
+    else
+      phapi /api/queries "$tmp/resp" -G --data-urlencode "length=$phpagesize"
+    fi
+    if [ "$phcode" != "200" ]; then
+      phwarn "DNS watch could not read $(phname)'s query API: $(phfailreason)."
+      rm -rf "$tmp"; return 1
+    fi
+    "$jq" -r --argjson cur "${cur:-0}" "$phjq" "$tmp/resp" > "$tmp/page" 2>/dev/null
+    meta="$(head -n 1 "$tmp/page")"
+    case "$meta" in
+      M\|*) ;;
+      *) phwarn "DNS watch could not parse $(phname)'s query API reply ($(head -c 200 "$tmp/resp" 2>/dev/null | tr '\n' ' '))."
+         rm -rf "$tmp"; return 1 ;;
+    esac
+    n="$(echo "$meta" | cut -d'|' -f2)"; low="$(echo "$meta" | cut -d'|' -f4)"
+    if [ "$pages" -eq 0 ]; then snap="$(echo "$meta" | cut -d'|' -f3)"; validateint "$snap" 0 || snap=""; fi
+    sed 1d "$tmp/page" >> "$tmp/all"
+    pages=$((pages + 1))
+    if [ -z "$cur" ] || [ -z "$snap" ] || [ "${n:-0}" -lt "$phpagesize" ]; then done=1; break; fi
+    validateint "$low" 0 && [ "$low" -le "$cur" ] && { done=1; break; }
+  done
+  phok
+  [ "$done" -eq 0 ] && aghlog "WARNING" "DNS watch read $pages pages ($((pages * phpagesize)) queries) of $(phname)'s query log this cycle and stopped; older queries since the last cycle were not checked. Lower timerloop if this repeats."
+
+  [ -n "$snap" ] || snap="${cur:-0}"
+  if [ -n "$cur" ] && [ "$snap" -lt "$cur" ]; then
+    aghlog "INFO" "$(phname)'s query ids restarted (its query database was reset) - DNS watch continues from its newest query."
+    : > "$tmp/all"
+  fi
+  if [ -n "$curfile" ]; then echo "$snap $url" > "$curfile"; else eval "phcursorcache${phslot:-1}=\"\$snap \$url\""; fi
+  if [ -z "$cur" ]; then
+    aghlog "INFO" "DNS watch is reading $(phname)'s query API ($url), starting from now."
+    rm -rf "$tmp"; return 2
+  fi
+
+  phqueries="$(grep -c '^Q|' "$tmp/all")"
+  phskippedblocked="$(grep -c '^Q|.*|1$' "$tmp/all")"
+  if [ "$phincludeblocked" = "1" ]; then grep '^Q|' "$tmp/all"; else grep '^Q|.*|0$' "$tmp/all"; fi | cut -d'|' -f2,3,4 > "$outfile.times"
+  [ "$phincludeblocked" = "1" ] && phskippedblocked=0
+  cut -d'|' -f1,2 "$outfile.times" | sort -u > "$outfile"
+  rm -rf "$tmp"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phlogpairs $1=output file writes domain|client pairs added to the pihole.log of the Pi-hole in phslot since its saved byte offset; 1 = error
+
+phlogpairs()
+{
+  local outfile="$1" f range="/tmp/iocmon_phrange.$$" sname="pihole"
+  phqueries=0; phskippedblocked=0
+  : > "$outfile"; : > "$outfile.times"
+  [ "$phslot" = "2" ] && sname="pihole2"
+  f="$(phlogfile)"
+  if [ -z "$f" ]; then
+    if [ "$phslot" = "2" ]; then phwarn "DNS watch has no log file for the backup Pi-hole - set it under Configuration Menu ${advsettingsmenunum}.2, item 21."
+    else phwarn "DNS watch found no Pi-hole log ($phlogpaths) - set its path under Configuration Menu ${advsettingsmenunum}.2, item 18, or use the API method."; fi
+    return 1
+  fi
+  [ -r "$f" ] || { phwarn "DNS watch cannot read $(phname)'s log $f."; return 1; }
+  if phlocallogoff "$f"; then
+    phwarn "DNS watch can't use $f: Pi-hole's query logging is off in pihole.toml (dns.queryLogging = false), so it holds no queries. Use the API method (Configuration Menu ${advsettingsmenunum}.2, item 17)."
+    return 1
+  fi
+  phok
+  dnsreadrange "$f" "$sname" "$range"
+  grep -F 'dnsmasq' "$range" | awk '
+    function clean(n) { n = tolower(n); sub(/\.$/, "", n); gsub(/[^a-z0-9._-]/, "_", n); return n }
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^query\[/ && (i + 3) <= NF && $(i + 2) == "from") { if ($(i + 3) ~ /^[0-9A-Fa-f.:]+$/) print "Q|" clean($(i + 1)) "|" $(i + 3); break }
+        if (($i == "blocked" || $i == "blacklisted" || $i == "denied") && (i + 2) <= NF && $(i + 2) == "is") { print "B|" clean($(i + 1)); break }
+      }
+    }' > "$range.p"
+  phqueries="$(grep -c '^Q|' "$range.p")"
+  grep '^B|' "$range.p" > "$range.b"
+  awk -F'|' -v inc="$phincludeblocked" 'FILENAME == ARGV[1] { b[$2] = 1; next } $1 == "Q" && (inc == "1" || !($2 in b)) { print $2 "|" $3 }' "$range.b" "$range.p" > "$range.k"
+  phskippedblocked=$((phqueries - $(wc -l < "$range.k" | tr -d ' ')))
+  sort -u "$range.k" > "$outfile"
+  [ -n "$(selfqfiles)" ] && grep -F 'dnsmasq' "$range" | dnslogtimes "$(routeraddrs)" > "$outfile.times"
+  rm -f "$range" "$range.p" "$range.b" "$range.k"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phrouteronlycheck $1=pairs file warns once when nearly all of the queries of the Pi-hole in phslot come from this router itself
+
+phrouteronlycheck()
+{
+  local total own w top r
+  total="$(wc -l < "$1" | tr -d ' ')"
+  [ "$total" -ge 20 ] || return 0
+  r=" $(routeraddrs | tr '\n' ' ') "
+  own="$(awk -F'|' -v r="$r" 'index(r, " " $2 " ") { c++ } END { print c + 0 }' "$1")"
+  eval "w=\"\$phrouterwarned${phslot:-1}\""
+  if [ $((own * 100)) -ge $((total * 95)) ]; then
+    top="$(awk -F'|' -v r="$r" 'index(r, " " $2 " ") { print $2 }' "$1" | sort | uniq -c | sort -rn | head -n 1 | awk '{ print $2 }')"
+    [ "$w" = "1" ] || aghlog "WARNING" "Nearly all of $(phname)'s queries come from this router itself ($top), so the precise origination source - the device that made each lookup - could not be identified: this router's dnsmasq forwards devices' lookups to Pi-hole, and alerts will name the router. To see device addresses, set the DNS query source to dnsmasq (Configuration Menu ${advsettingsmenunum}.2, item 11), or have DHCP hand devices the Pi-hole's own address."
+    eval "phrouterwarned${phslot:-1}=1"
+  else
+    eval "phrouterwarned${phslot:-1}=0"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phreadall $1=output file reads every configured Pi-hole into one domain|client list plus $1.times; 0 = read, 1 = none could be, 2 = first run
+
+phreadall()
+{
+  local out="$1" s rc any=0 fails=0 n=1
+  : > "$out"; : > "$out.times"
+  phchecked=0; phblockedskipped=0; phstate=""; phfailslot=""
+  [ -n "$phmethod2" ] && n=2
+  for s in 1 2; do
+    [ "$s" -gt "$n" ] && break
+    phslot="$s"
+    if [ "$(phcur method)" = "log" ]; then phlogpairs "$out.$s"; rc=$?; else phquerypairs "$out.$s"; rc=$?; fi
+    case "$rc" in
+      0) any=1
+         phrouteronlycheck "$out.$s"
+         phchecked=$((phchecked + phqueries)); phblockedskipped=$((phblockedskipped + phskippedblocked))
+         cat "$out.$s" >> "$out"; cat "$out.$s.times" >> "$out.times" ;;
+      2) ;;
+      *) fails=$((fails + 1)); phfailslot="$s" ;;
+    esac
+    rm -f "$out.$s" "$out.$s.times"
+  done
+  phslot=1
+  sort -u "$out" > "$out.t"; mv -f "$out.t" "$out"
+  if [ "$fails" -eq "$n" ]; then phstate="none"; return 1; fi
+  if [ "$fails" -gt 0 ]; then phstate="partial"; else phstate="ok"; fi
+  [ "$any" -eq 1 ] && return 0
+  return 2
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phdesc [short] echoes what DNS watch reads in Pi-hole mode, e.g. "Pi-hole API http://127.0.0.1:5080 + Pi-hole log /mnt/x/pihole.log"
+
+phdesc()
+{
+  local s d="" one
+  for s in 1 2; do
+    [ "$s" = "2" ] && [ -z "$phmethod2" ] && break
+    phslot="$s"
+    if [ "$(phcur method)" = "log" ]; then one="Pi-hole log $(phlogfile)"; else one="Pi-hole API $(phapiurl)"; fi
+    d="${d:+$d + }$one"
+  done
+  phslot=1
+  if [ "$1" = "short" ] && [ "${#d}" -gt 60 ]; then d="$(printf '%.59s' "$d")>"; fi
+  echo "$d"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# phreplyip $1=domain echoes the last public IP a Pi-hole log answered for it; the API reports no answer IPs
+
+phreplyip()
+{
+  local s f ip
+  for s in 1 2; do
+    [ "$s" = "2" ] && [ -z "$phmethod2" ] && break
+    phslot="$s"
+    [ "$(phcur method)" = "log" ] || continue
+    f="$(phlogfile)"
+    [ -n "$f" ] && ip="$(dnsreplyipfrom "$f" "$1")"
+    [ -n "$ip" ] && break
+  done
+  phslot=1
+  [ -n "$ip" ] && echo "$ip"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -6210,159 +7312,83 @@ authnewlines()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# routeraddrs prints loopback and every address on the router's own interfaces, as Astraea defines them
+# dnsreadrange $1=log file $2=state name (dns, pihole, pihole2) $3=range file copies the lines added since the saved byte offset into $3
 
-routeraddrs()
+dnsreadrange()
 {
-  echo "127.0.0.1"; echo "::1"
-  ip -o addr show 2>/dev/null | awk '{ a = $4; sub(/\/.*/, "", a); print a }'
-}
+  local synclog="$1" sname="$2" dnsrangefile="$3" size offset=0 anchorbytes=0 anchor="" readfrom="" found sib newbytes=0 newcount offsetfile="" anchorfile="" cache=""
+  size="$(filesizebytes "$synclog")"
+  validateint "$size" 0 || size=0
 
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqfiles prints the Kairos/Astraea files listing the router's own lookups that exist, are not empty and (Kairos) whose add-on is running
-
-selfqfiles()
-{
-  local f
-  for f in $selfqpaths; do
-    [ -s "$f" ] || continue
-    case "$f" in "${kairosstatusfile%/*}"/*) kairosactive || continue ;; esac
-    echo "$f"
-  done
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# kairosactive succeeds while Kairos's state is known: its status file written in the last 3 minutes, or for an older Kairos, kairos_time in nvram
-
-kairosactive()
-{
-  local k v t="" updated=""
-  if [ -f "$kairosstatusfile" ]; then
-    while IFS='=' read -r k v; do
-      case "$k" in
-        time) t="$v" ;;
-        updated) updated="$v" ;;
-      esac
-    done < "$kairosstatusfile"
-    validateint "$updated" 0 || return 1
-    [ $(( $(date +%s) - updated )) -le 180 ] || return 1
+  if [ -n "$stateroot" ]; then
+    mkdir -m 755 -p "$stateroot"
+    offsetfile="$stateroot/${sname}_offset"
+    anchorfile="$stateroot/${sname}_anchor"
+    [ -f "$offsetfile" ] && read -r offset anchorbytes < "$offsetfile"
+    [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
   else
-    nvramget kairos_time || return 1
-    t="$nvramval"
+    eval "cache=\"\$${sname}offsetcache\""
+    if [ -n "$cache" ]; then
+      offset="${cache%% *}"; anchorbytes="${cache##* }"
+      eval "anchor=\"\$${sname}anchorcache\""
+    fi
   fi
-  case "$t" in booting|synced|degraded) return 0 ;; esac
-  return 1
-}
+  validateint "$offset" 0 || offset=0
+  validateint "$anchorbytes" 0 || anchorbytes=0
 
-# -------------------------------------------------------------------------------------------------------------------------
-# dnslogtimes reads dnsmasq log lines on stdin and prints name|src|epoch for router-sourced queries ($1 = router addresses)
+  : > "$dnsrangefile"
+  if [ -z "$anchor" ]; then
+    readfrom=0
+  elif [ "$offset" -le "$size" ] && dnsanchorat "$synclog" "$offset" "$anchor" "$anchorbytes"; then
+    readfrom="$offset"
+  else
+    for sib in $(dnslogsiblings "$synclog"); do
+      if dnsanchorat "$sib" "$offset" "$anchor" "$anchorbytes"; then
+        filebytesfrom "$sib" "$offset" | awk '{print}' >> "$dnsrangefile"
+        readfrom=0
+        break
+      fi
+    done
+    if [ -z "$readfrom" ]; then
+      found="$(grep -nxF -- "$anchor" "$synclog" | tail -n 1 | cut -d: -f1)"
+      if [ -n "$found" ]; then
+        readfrom="$(head -n "$found" "$synclog" | wc -c | tr -d ' ')"
+      else
+        for sib in $(dnslogsiblings "$synclog"); do
+          found="$(grep -nxF -- "$anchor" "$sib" | tail -n 1 | cut -d: -f1)"
+          [ -n "$found" ] && { tail -n +"$((found + 1))" "$sib" | awk '{print}' >> "$dnsrangefile"; break; }
+        done
+        readfrom=0
+      fi
+    fi
+  fi
 
-dnslogtimes()
-{
-  set -- "$1" $(date +'%Y %m %d %H %M %S %s')
-  awk -v r=" $(echo $1) " -v Y="$2" -v M="$3" -v D="$4" -v h="$5" -v mi="$6" -v s="$7" -v now="$8" '
-    function dn(y, m, d,   era, yoe, doy, doe) {
-      if (m <= 2) y -= 1
-      era = (y >= 0 ? y : y - 399); era = int(era / 400)
-      yoe = y - era * 400
-      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
-      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-      return era * 146097 + doe - 719468
-    }
-    function hms(t,   a) { if (split(t, a, ":") < 3) return -1; return a[1] * 3600 + a[2] * 60 + int(a[3]) }
-    BEGIN {
-      n = split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", names, " "); for (i = 1; i <= n; i++) mon[names[i]] = i
-      off = dn(Y + 0, M + 0, D + 0) * 86400 + h * 3600 + mi * 60 + s - now
-    }
-    {
-      name = ""; src = ""
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^query\[[A-Za-z]+\]$/) name = $(i + 1)
-        if ($i == "from" && (i + 1) <= NF) src = $(i + 1)
-      }
-      if (name == "" || src !~ /^[0-9A-Fa-f.:]+$/) next
-      name = tolower(name); gsub(/[^a-z0-9._-]/, "_", name)
-      a = src; sub(/^::ffff:/, "", a)
-      if (index(r, " " a " ") == 0) next
-      e = 0
-      if (($1 in mon) && $2 ~ /^[0-9]+$/ && (t = hms($3)) >= 0) {
-        y = Y + 0
-        if (mon[$1] > M + 0 || (mon[$1] == M + 0 && $2 + 0 > D + 0)) y--
-        e = dn(y, mon[$1], $2 + 0) * 86400 + t - off
-      } else if ($1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/) {
-        t = hms(substr($1, 12, 8)); z = substr($1, 20); sub(/^\.[0-9]+/, "", z)
-        e = dn(substr($1, 1, 4) + 0, substr($1, 6, 2) + 0, substr($1, 9, 2) + 0) * 86400 + t
-        if (z == "Z") e = e
-        else if (z ~ /^[+-][0-9][0-9]:?[0-9][0-9]$/) { gsub(/:/, "", z); e -= (substr(z, 1, 1) == "-" ? -1 : 1) * (substr(z, 2, 2) * 3600 + substr(z, 4, 2) * 60) }
-        else e -= off
-      }
-      print name "|" src "|" e
-    }'
-}
+  if [ "$readfrom" -eq 0 ] && [ "$size" -gt "$dnsmaxcatchup" ]; then
+    readfrom=$((size - dnsmaxcatchup))
+    readfrom=$((readfrom + $(filebytesfrom "$synclog" "$readfrom" | head -n 1 | wc -c)))
+  fi
 
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqmatch $1=name|src|epoch file prints domain|src|tool for router lookups that were Kairos's or Astraea's own, and RECENT if one under 10s old was not
+  filebytesfrom "$synclog" "$readfrom" > "$dnsrangefile.new"
+  if [ -s "$dnsrangefile.new" ]; then
+    newcount="$(wc -l < "$dnsrangefile.new" | tr -d ' ')"
+    # a last line still being written has no newline yet; head -n leaves it for the next cycle
+    head -n "$newcount" "$dnsrangefile.new" > "$dnsrangefile.cur"
+    newbytes="$(wc -c < "$dnsrangefile.cur" | tr -d ' ')"
+    if [ "$newbytes" -gt 0 ]; then
+      cat "$dnsrangefile.cur" >> "$dnsrangefile"
+      anchor="$(tail -n 1 "$dnsrangefile.cur")"
+      anchorbytes="$(tail -n 1 "$dnsrangefile.cur" | wc -c | tr -d ' ')"
+    fi
+  fi
+  rm -f "$dnsrangefile.new" "$dnsrangefile.cur"
+  offset=$((readfrom + newbytes))
+  [ "$offset" -eq 0 ] && { anchor=""; anchorbytes=0; }
 
-selfqmatch()
-{
-  local tf="$1" files
-  files="$(selfqfiles)"
-  awk -F'|' -v r=" $(routeraddrs | tr '\n' ' ') " -v now="$(date +%s)" -v lo="$dnsselfqfloor" -v tf="$tf" '
-    FILENAME != tf {
-      n = tolower($1); c[n]++; ep[n, c[n]] = $3 + 0; tl[n, c[n]] = (FILENAME ~ /astraea/ ? "Astraea" : "Kairos")
-      next
-    }
-    {
-      a = $2; sub(/^::ffff:/, "", a)
-      if (index(r, " " a " ") == 0) next
-      n = tolower($1); sub(/\.$/, "", n); e = $3 + 0; k = $1 "|" $2; seen[k] = 1; hit = ""
-      for (i = 1; i <= c[n]; i++) {
-        d = ep[n, i]
-        if (e > 0 ? (d - e <= 60 && e - d <= 60) : (d >= lo)) { hit = tl[n, i]; break }
-      }
-      if (hit == "") { bad[k] = 1; if (e > 0 && now - e < 10) recent = 1 }
-      else if (!(k in who)) who[k] = hit
-    }
-    END {
-      for (k in seen) if (!(k in bad)) print k "|" who[k]
-      if (recent) print "RECENT"
-    }' $files "$tf"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqfilter $1=pairs file $2=name|src|epoch file splits off the router's Kairos/Astraea lookups into $1.self, keeping device pairs in $1
-
-selfqfilter()
-{
-  local pairs="$1" times="$2" out
-  : > "$pairs.self"
-  dnsselfcount=0
-  [ -n "$(selfqfiles)" ] && [ -s "$times" ] || return 0
-  [ -n "$dnsselfqfloor" ] || dnsselfqfloor=$(( $(date +%s) - 7200 ))
-  out="$(selfqmatch "$times")"
-  case "$out" in
-    *RECENT*) sleep 3; out="$(selfqmatch "$times")" ;;
-  esac
-  dnsselfqfloor=$(( $(date +%s) - 60 ))
-  echo "$out" | grep -v '^RECENT$' | grep . > "$pairs.self"
-  [ -s "$pairs.self" ] || return 0
-  dnsselfcount="$(wc -l < "$pairs.self" | tr -d ' ')"
-  awk -F'|' 'NR == FNR { s[$1 "|" $2] = 1; next } !(($1 "|" $2) in s)' "$pairs.self" "$pairs" > "$pairs.dev"
-  mv -f "$pairs.dev" "$pairs"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqinfo $1=name $2=message logs one INFO line about a router lookup set aside, at most once per name every 6 hours
-
-selfqinfo()
-{
-  local now last
-  now=$(date +%s)
-  last="$(awk -v n="$1" '$1 == n { print $2 }' "$selfqseenfile" 2>/dev/null | tail -n 1)"
-  [ -n "$last" ] && [ $((now - last)) -lt 21600 ] && return 0
-  { awk -v n="$1" -v c=$((now - 21600)) '$1 != n && $2 >= c' "$selfqseenfile" 2>/dev/null; echo "$1 $now"; } > "$selfqseenfile.t"
-  mv -f "$selfqseenfile.t" "$selfqseenfile"
-  echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: $2" >> "$logfile"
+  [ -n "$offsetfile" ] && echo "$offset $anchorbytes" > "$offsetfile"
+  [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
+  [ "$sname" = "dns" ] && [ -n "$stateroot" ] && rm -f "$stateroot/dns_checkpoint"
+  eval "${sname}offsetcache=\"\$offset \$anchorbytes\""
+  eval "${sname}anchorcache=\"\$anchor\""
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -6376,8 +7402,9 @@ checkdns()
 
   [ "$enablednswatch" -eq 1 ] || return
 
-  local aghmode=0
+  local aghmode=0 phmode=0
   dnsusesagh && aghmode=1
+  dnsusesph && phmode=1
 
   if [ "$aghmode" -eq 1 ] && ! aghanylogin; then
     aghfailover=0
@@ -6391,7 +7418,7 @@ checkdns()
     aghloginwarned=0
   fi
 
-  if [ "$aghmode" -eq 0 ] && ! dnsquerylogenabled; then
+  if [ "$aghmode" -eq 0 ] && [ "$phmode" -eq 0 ] && ! dnsquerylogenabled; then
     if [ "$dnsquerylogwarned" != "1" ]; then
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: DNS watch is enabled but dnsmasq query logging is off - enable it from the Configuration Menu." >> "$logfile"
       dnsquerylogwarned=1
@@ -6432,6 +7459,28 @@ checkdns()
     mv -f "$dnspairfile.agh.times" "$dnspairfile.times" 2>/dev/null
     rm -f "$dnspairfile.agh"
     [ -z "$querypairs" ] && { rm -f "$dnspairfile.times"; return; }
+  elif [ "$phmode" -eq 1 ]; then
+    resolvestateroot
+    [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
+    if [ "$dnslogannounced" != "pihole:$(phdesc)" ]; then
+      aghlog "INFO" "DNS watch is reading $(phdesc)."
+      dnslogannounced="pihole:$(phdesc)"
+    fi
+    dnslogshort="$(phdesc short)"
+    local phrc
+    phreadall "$dnspairfile.ph"; phrc=$?
+    case "$phstate" in
+      none) dnslogshort="Pi-hole could not be read - see the IOCMON log" ;;
+      partial) if [ "$phfailslot" = "2" ]; then dnslogshort="Backup Pi-hole could not be read - see the IOCMON log"; else dnslogshort="Primary Pi-hole could not be read - see the IOCMON log"; fi ;;
+    esac
+    [ "$phrc" -eq 2 ] && dnslastcheck=$(date +'%H:%M')
+    [ "$phrc" -eq 0 ] || { rm -f "$dnspairfile.ph" "$dnspairfile.ph.times"; return; }
+    dnschecked="$phchecked"
+    dnslastcheck=$(date +'%H:%M')
+    querypairs="$(cat "$dnspairfile.ph")"
+    mv -f "$dnspairfile.ph.times" "$dnspairfile.times" 2>/dev/null
+    rm -f "$dnspairfile.ph"
+    [ -z "$querypairs" ] && { rm -f "$dnspairfile.times"; return; }
   else
     # dnsmasq: tail its log-queries lines
     local synclog
@@ -6455,76 +7504,8 @@ checkdns()
     fi
     [ "${dnslognonecount:-0}" -eq 0 ] && dnslognonewarned=0
 
-    local size offset=0 anchorbytes=0 anchor="" readfrom="" found sib newbytes=0 newcount offsetfile="" anchorfile="" dnsrangefile="/tmp/iocmon_dns_range.$$"
-    size="$(filesizebytes "$synclog")"
-    validateint "$size" 0 || size=0
-
-    if [ -n "$stateroot" ]; then
-      mkdir -m 755 -p "$stateroot"
-      offsetfile="$stateroot/dns_offset"
-      anchorfile="$stateroot/dns_anchor"
-      [ -f "$offsetfile" ] && read -r offset anchorbytes < "$offsetfile"
-      [ -f "$anchorfile" ] && anchor="$(cat "$anchorfile" 2>/dev/null)"
-    elif [ -n "$dnsoffsetcache" ]; then
-      offset="${dnsoffsetcache%% *}"; anchorbytes="${dnsoffsetcache##* }"
-      anchor="$dnsanchorcache"
-    fi
-    validateint "$offset" 0 || offset=0
-    validateint "$anchorbytes" 0 || anchorbytes=0
-
-    : > "$dnsrangefile"
-    if [ -z "$anchor" ]; then
-      readfrom=0
-    elif [ "$offset" -le "$size" ] && dnsanchorat "$synclog" "$offset" "$anchor" "$anchorbytes"; then
-      readfrom="$offset"
-    else
-      for sib in $(dnslogsiblings "$synclog"); do
-        if dnsanchorat "$sib" "$offset" "$anchor" "$anchorbytes"; then
-          filebytesfrom "$sib" "$offset" | awk '{print}' >> "$dnsrangefile"
-          readfrom=0
-          break
-        fi
-      done
-      if [ -z "$readfrom" ]; then
-        found="$(grep -nxF -- "$anchor" "$synclog" | tail -n 1 | cut -d: -f1)"
-        if [ -n "$found" ]; then
-          readfrom="$(head -n "$found" "$synclog" | wc -c | tr -d ' ')"
-        else
-          for sib in $(dnslogsiblings "$synclog"); do
-            found="$(grep -nxF -- "$anchor" "$sib" | tail -n 1 | cut -d: -f1)"
-            [ -n "$found" ] && { tail -n +"$((found + 1))" "$sib" | awk '{print}' >> "$dnsrangefile"; break; }
-          done
-          readfrom=0
-        fi
-      fi
-    fi
-
-    if [ "$readfrom" -eq 0 ] && [ "$size" -gt "$dnsmaxcatchup" ]; then
-      readfrom=$((size - dnsmaxcatchup))
-      readfrom=$((readfrom + $(filebytesfrom "$synclog" "$readfrom" | head -n 1 | wc -c)))
-    fi
-
-    filebytesfrom "$synclog" "$readfrom" > "$dnsrangefile.new"
-    if [ -s "$dnsrangefile.new" ]; then
-      newcount="$(wc -l < "$dnsrangefile.new" | tr -d ' ')"
-      # a last line dnsmasq is still writing has no newline yet; head -n leaves it for the next cycle
-      head -n "$newcount" "$dnsrangefile.new" > "$dnsrangefile.cur"
-      newbytes="$(wc -c < "$dnsrangefile.cur" | tr -d ' ')"
-      if [ "$newbytes" -gt 0 ]; then
-        cat "$dnsrangefile.cur" >> "$dnsrangefile"
-        anchor="$(tail -n 1 "$dnsrangefile.cur")"
-        anchorbytes="$(tail -n 1 "$dnsrangefile.cur" | wc -c | tr -d ' ')"
-      fi
-    fi
-    rm -f "$dnsrangefile.new" "$dnsrangefile.cur"
-    offset=$((readfrom + newbytes))
-    [ "$offset" -eq 0 ] && { anchor=""; anchorbytes=0; }
-
-    [ -n "$offsetfile" ] && echo "$offset $anchorbytes" > "$offsetfile"
-    [ -n "$anchorfile" ] && printf '%s\n' "$anchor" > "$anchorfile"
-    [ -n "$stateroot" ] && rm -f "$stateroot/dns_checkpoint"
-    dnsoffsetcache="$offset $anchorbytes"
-    dnsanchorcache="$anchor"
+    local newcount dnsrangefile="/tmp/iocmon_dns_range.$$"
+    dnsreadrange "$synclog" dns "$dnsrangefile"
 
     newcount="$(wc -l < "$dnsrangefile" | tr -d ' ')"
     [ "$newcount" -gt 0 ] || { rm -f "$dnsrangefile"; return; }
@@ -6639,28 +7620,6 @@ dnstunnelscan()
       }
     }
   '
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqtool $1=self file $2=src $3=name prints which add-on made that router lookup ($4=base: any name under $3), "Kairos and Astraea" if both
-
-selfqtool()
-{
-  awk -F'|' -v s="$2" -v d="$3" -v b="$4" '
-    $2 == s && ($1 == d || (b != "" && substr("." $1, length($1) - length(d) + 1) == "." d)) { t[$3] = 1 }
-    END { if (("Kairos" in t) && ("Astraea" in t)) print "Kairos and Astraea"; else for (k in t) print k }' "$1"
-}
-
-# -------------------------------------------------------------------------------------------------------------------------
-# selfqwhat $1=add-on name prints how a set-aside router lookup is described in the log
-
-selfqwhat()
-{
-  case "$1" in
-    Astraea) echo "Astraea's own certificate check" ;;
-    Kairos) echo "Kairos's own lookup (time servers and DNS checks)" ;;
-    *) echo "Kairos's and Astraea's own lookups" ;;
-  esac
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -8128,6 +9087,7 @@ acknowledgealert()
 clearalertpending()
 {
   resolvestateroot
+  [ -n "$stateroot" ] && rm -f "$stateroot/alert_ips"
   if [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     rm -f "$stateroot/alert_pending"
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Security alert banner acknowledged$1." >> "$logfile"
@@ -8143,6 +9103,7 @@ addtodnsexception()
     renderdashboard
     return
   fi
+  excmergedisk
 
   local maxnum num origkey domain base displayrange
   maxnum="$(wc -l < "$dnsnummapfile" | tr -d ' ')"
@@ -8618,6 +9579,7 @@ webuimount()
 webuiremove()
 {
   local page
+  tvstop
   webuilockmenu
   page="$(webuifindslot)"
   [ -n "$page" ] && rm -f "$webuiuserdir/$page" "$webuiuserdir/${page%.asp}.title"
@@ -8822,7 +9784,7 @@ webrecent()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# webpublishlog copies the tail of log $2 to data file $1, only when the log changed: $3 = lines kept, $4 = all to skip the date window
+# webpublishlog copies the tail of log $2 to data file $1 when the log or webuiversion changed: $3 = lines kept, $4 = all to skip the date window
 
 webpublishlog()
 {
@@ -8831,9 +9793,13 @@ webpublishlog()
     rm -f "$dst" "$sigfile"
     return
   fi
-  sig="$(ls -ln "$2" "$2.1" 2>/dev/null)"
+  sig="$webuiversion $(ls -ln "$2" "$2.1" 2>/dev/null)"
   [ -f "$dst" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ] && return
-  { echo "iocmon=1"; logall "$2" | tail -n "$3" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
+  if [ "$1" = "ioc" ]; then
+    { echo "iocmon=1"; logall "$2" | tail -n "$3" | webrecent "$4" | awk -v m=tag "$webexcawk" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
+  else
+    { echo "iocmon=1"; logall "$2" | tail -n "$3" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
+  fi
   mv -f "$webuidir/.$1.tmp.$$" "$dst"
   echo "$sig" > "$sigfile"
 }
@@ -8869,7 +9835,7 @@ webpublish()
   fi
   if [ "$enablednswatch" -eq 1 ]; then
     dnsstate="waiting"
-    if dnsusesagh; then dnsstate="adguardhome"; aghanylogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
+    if dnsusesph; then dnsstate="pihole"; elif dnsusesagh; then dnsstate="adguardhome"; aghanylogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
   fi
   {
     echo "iocmon=1"
@@ -8906,7 +9872,11 @@ webpublish()
     echo "dnschecked=$dnsqueriedcount"
     echo "dnslast=$dnslastcheck"
     echo "dnslog=$dnslogshort"
-    echo "dnsfailover=$aghfailover"
+    if dnsusesph; then
+      case "$phstate" in none) echo "dnsfailover=2" ;; partial) echo "dnsfailover=1" ;; *) echo "dnsfailover=0" ;; esac
+    else
+      echo "dnsfailover=$aghfailover"
+    fi
     echo "authon=$enableauthwatch"
     echo "authchecked=$authchecked"
     echo "authlast=$authlastcheck"
@@ -8943,6 +9913,7 @@ webpublishlogs()
   webpublishlog fsmod "${stateroot:+$stateroot/fs_last_modified.txt}" 200 all
   webpublishlog fsdel "${stateroot:+$stateroot/fs_last_deleted.txt}" 200 all
   webpublishlog fsperm "${stateroot:+$stateroot/fs_last_permchanged.txt}" 200 all
+  webpublishexceptions
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -9121,7 +10092,11 @@ webjobfull()
   esac
   rm -f "$webuidir"/full-*.htm
   if [ -z "$(logall "$stateroot/$src" | head -n1)" ]; then webjobmsg="Nothing has been logged yet."; return 1; fi
-  { echo "iocmon=1"; logall "$stateroot/$src" | tail -n "$webuifullrows" | webcleanlog; } > "$webuidir/.full.tmp"
+  if [ "$webfulllog" = "ioc" ]; then
+    { echo "iocmon=1"; logall "$stateroot/$src" | tail -n "$webuifullrows" | awk -v m=tag "$webexcawk" | webcleanlog; } > "$webuidir/.full.tmp"
+  else
+    { echo "iocmon=1"; logall "$stateroot/$src" | tail -n "$webuifullrows" | webcleanlog; } > "$webuidir/.full.tmp"
+  fi
   mv -f "$webuidir/.full.tmp" "$dst"
   date +%s > "$webuidir/.full.ts"
   webjobmsg="$(($(wc -l < "$dst") - 1)) row(s) loaded."
@@ -9160,6 +10135,577 @@ webjobstart()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# webexcawk tags IoC rows with an exception code (m=tag) or lists codes as code|list|critical|value (m=cand; "@list|value" lines are list entries)
+
+webexcawk='
+function hx(s,   i, h, c) {
+  h = 5381
+  for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); h = (h * 33 + ((c in o) ? o[c] : 1)) % 4294967296 }
+  return sprintf("%04x%04x", int(h / 65536), h % 65536)
+}
+function crit(v) { return (v ~ /\/\.ssh\// || v ~ /^\/jffs\/scripts\// || v ~ /\.conf\.add$/) }
+function cand(line,   n, p, i, k, src, v, d, nd) {
+  n = split(line, p, / [|] /)
+  if (n > 0 && p[n] ~ /^exc:/) n--
+  if (n > 0 && p[n] ~ /^sev:/) n--
+  if (n > 0 && p[n] ~ /^Astraea (clear|confirm|unknown|contained): /) n--
+  if (n > 0 && p[n] ~ /^(TEST )?AbuseIPDB /) n--
+  if (n < 5) return 0
+  k = p[2]; src = p[n - 1]; v = p[3]
+  for (i = 4; i <= n - 2; i++) v = v " | " p[i]
+  C = 0
+  if (k == "dns") { sub(/^.*->/, "", v); v = tolower(v); nd = split(v, d, "."); if (nd >= 2) v = d[nd - 1] "." d[nd]; L = "dns" }
+  else if (k == "conntrack") { sub(/^.*->/, "", v); L = "ip" }
+  else if (k == "fsintegrity") {
+    if (src ~ /^etc-critical-/ || src == "addon-signature") return 0
+    L = "file"; C = (crit(v) || src ~ /^(ssh-directory-change|startup-script-edit|startup-script-deleted|router-config-override|router-config-deleted)$/)
+  }
+  else if (k == "cron") L = "cron"
+  else return 0
+  if (v == "") return 0
+  V = v
+  return 1
+}
+BEGIN { for (i = 32; i < 127; i++) o[sprintf("%c", i)] = i }
+m == "tag" { if (cand($0)) print $0 " | exc:" hx(L "|" V); else print; next }
+m == "cand" {
+  if (substr($0, 1, 1) == "@") { s = substr($0, 2); i = index(s, "|"); if (i < 2) next; L = substr(s, 1, i - 1); V = substr(s, i + 1); C = (L == "file" && crit(V)) }
+  else if (!cand($0)) next
+  t = hx(L "|" V)
+  if (C) cc[t] = 1
+  if (t in seen) next
+  seen[t] = 1; ord[++nn] = t; ll[t] = L; vv[t] = V
+}
+END { if (m == "cand") for (i = 1; i <= nn; i++) { t = ord[i]; print t "|" ll[t] "|" (cc[t] ? 1 : 0) "|" vv[t] } }
+'
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webexclistlines prints every DNS, IP, file and cron exception as an "@list|value" line for webexcawk
+
+webexclistlines()
+{
+  echo "$dnsexceptions" | tr ' ' '\n' | grep . | sed 's/^/@dns|/'
+  echo "$ipexceptions" | tr ' ' '\n' | grep . | sed 's/^/@ip|/'
+  echo "$fsexcludefiles" | tr ' ' '\n' | grep . | sed 's/^/@file|/'
+  printf '%s\n' "$cronexceptions" | grep . | sed 's/^/@cron|/'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webexcin $1=list $2=value succeeds while that exact value is in that exception list (cron: same command, any schedule)
+
+webexcin()
+{
+  case "$1" in
+    dns) case " $dnsexceptions " in *" $2 "*) return 0 ;; esac ;;
+    ip) case " $ipexceptions " in *" $2 "*) return 0 ;; esac ;;
+    file) case " $fsexcludefiles " in *" $2 "*) return 0 ;; esac ;;
+    cron) incronexceptionlist "$2" && return 0 ;;
+  esac
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webexclabel $1=list prints the exception list's name as the menus show it
+
+webexclabel()
+{
+  case "$1" in
+    dns) echo "DNS exceptions" ;;
+    ip) echo "IP/CIDR exceptions" ;;
+    file) echo "excluded files" ;;
+    cron) echo "cron exceptions" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webpublishexceptions writes exceptions.htm (code|list|on|critical|value) from the lists in iocmon.cfg, not this process's copy
+
+webpublishexceptions()
+{
+  local dst="$webuidir/exceptions.htm" tmp="$webuidir/.exceptions.tmp.$$" tok list crit val on
+  [ -d "$webuidir" ] || return
+  (
+    [ -f "$config" ] && . "$config"
+    { [ -n "$stateroot" ] && logall "$stateroot/ioc_alerts.log"; webexclistlines; } | awk -v m=cand "$webexcawk" > "$tmp.c"
+    {
+      echo "iocmon=1"
+      while IFS='|' read -r tok list crit val; do
+        on=0; webexcin "$list" "$val" && on=1
+        printf '%s|%s|%s|%s|%s\n' "$tok" "$list" "$on" "$crit" "$val"
+      done < "$tmp.c" | webescape
+    } > "$tmp"
+  )
+  mv -f "$tmp" "$dst"
+  rm -f "$tmp.c"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webexclock serialises exception changes, so two quick clicks can't overwrite each other's iocmon.cfg; a dead owner's lock is replaced
+
+webexclock()
+{
+  local n=0 lockpid
+  while ! mkdir "$webexclockdir" 2>/dev/null; do
+    lockpid="$(cat "$webexclockdir/pid" 2>/dev/null)"
+    if [ -n "$lockpid" ] && ! kill -0 "$lockpid" 2>/dev/null; then rm -rf "$webexclockdir"; continue; fi
+    n=$((n + 1)); [ "$n" -ge 10 ] && return 1
+    sleep 1
+  done
+  echo "$$" > "$webexclockdir/pid"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webexception $1=on|off $2=code adds a logged item to, or removes an entry from, its exception list; the browser only ever sends the code
+
+webexception()
+{
+  local mode="$1" tok="$2" rec n list val label w x kept="" nl
+  nl="$(printf '\nx')"; nl="${nl%x}"
+  resolvestateroot
+  rec="$({ [ -n "$stateroot" ] && logall "$stateroot/ioc_alerts.log"; [ "$mode" = "off" ] && webexclistlines; } | awk -v m=cand "$webexcawk" | grep "^$tok|")"
+  n="$(printf '%s' "$rec" | grep -c .)"
+  if [ "$n" -ne 1 ]; then webuilog "WARNING" "Ignored a web interface exception change: the item is no longer in the log or the list."; return; fi
+  list="$(printf '%s' "$rec" | cut -d'|' -f2)"
+  val="$(printf '%s' "$rec" | cut -d'|' -f4-)"
+  label="$(webexclabel "$list")"
+  if [ "$mode" = "on" ]; then
+    case "$list" in
+      dns) validdomainentry "$val" || { webuilog "WARNING" "Not added to $label from the web interface: not a plain domain name."; return; } ;;
+      ip) validipcidr "$val" || { webuilog "WARNING" "Not added to $label from the web interface: not an IPv4 address."; return; } ;;
+      file) case "$val" in /*) ;; *) webuilog "WARNING" "Not added to $label from the web interface: not an absolute path."; return ;; esac
+            case "$val" in *[!A-Za-z0-9._/+@:,=~-]*) webuilog "WARNING" "Not added to $label from the web interface: the path has characters the list can't hold."; return ;; esac ;;
+      cron) case "$val" in *"$nl"*|"") return ;; esac ;;
+      *) return ;;
+    esac
+  fi
+  webexclock || { webuilog "WARNING" "Web interface exception change skipped: another change is still being saved."; return; }
+  [ -f "$config" ] && . "$config"
+  if [ "$mode" = "on" ]; then
+    if webexcin "$list" "$val"; then rm -rf "$webexclockdir"; webpublishexceptions; return; fi
+    case "$list" in
+      dns) dnsexceptions="${dnsexceptions:+$dnsexceptions }$val" ;;
+      ip) ipexceptions="${ipexceptions:+$ipexceptions }$val" ;;
+      file) fsexcludefiles="${fsexcludefiles:+$fsexcludefiles }$val" ;;
+      cron) if [ -z "$cronexceptions" ]; then cronexceptions="$val"; else cronexceptions="$cronexceptions$nl$val"; fi ;;
+    esac
+  else
+    case "$list" in
+      dns|ip|file)
+        eval "w=\"\$$(case "$list" in dns) echo dnsexceptions ;; ip) echo ipexceptions ;; *) echo fsexcludefiles ;; esac)\""
+        while IFS= read -r x; do
+          [ -n "$x" ] && [ "$x" != "$val" ] && kept="${kept:+$kept }$x"
+        done <<EOF
+$(echo "$w" | tr ' ' '\n')
+EOF
+        case "$list" in dns) dnsexceptions="$kept" ;; ip) ipexceptions="$kept" ;; *) fsexcludefiles="$kept" ;; esac ;;
+      cron)
+        val="$(cronmatchkey "$val")"
+        while IFS= read -r w; do
+          [ -z "$w" ] && continue
+          [ "$(cronmatchkey "$w")" = "$val" ] && continue
+          if [ -z "$kept" ]; then kept="$w"; else kept="$kept$nl$w"; fi
+        done <<EOF
+$cronexceptions
+EOF
+        cronexceptions="$kept"
+        val="$(printf '%s' "$rec" | cut -d'|' -f4-)" ;;
+    esac
+  fi
+  saveconfig
+  rm -rf "$webexclockdir"
+  if [ "$mode" = "on" ]; then webuilog "INFO" "Added $val to $label from the web interface."
+  else webuilog "INFO" "Removed $val from $label from the web interface."; fi
+  webpublishexceptions
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webclearlog $1=ioc|dropbear|hash|reputation empties that log and its rotated copies, as the (R) hotkey does
+
+webclearlog()
+{
+  local f="" label=""
+  resolvestateroot
+  case "$1" in
+    ioc) f="ioc_alerts.log"; label="IoC Detections" ;;
+    dropbear) f="dropbear_attempts.log"; label="Dropbear Attempts" ;;
+    hash) f="hash_check.log"; label="Hash-Check" ;;
+    reputation) f="reputation.log"; label="Reputation" ;;
+  esac
+  [ -n "$stateroot" ] && [ -n "$f" ] || return
+  : > "$stateroot/$f"
+  logremoverotated "$stateroot/$f"
+  rm -f "$webuidir/full-$1.htm"
+  webuilog "INFO" "$label log cleared from the web interface."
+  webpublishlogs
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# geoipbuild turns IPLocate's zipped country CSV ($1: network/prefix,continent,code,...) into the page's IPv4 table $2
+
+geoipbuild()
+{
+  { unzip -p "$1" 2>/dev/null || echo "unzip-failed"; } | awk -F, -v month="$3" '
+    function n(s, a) { split(s, a, "."); return ((a[1] * 256 + a[2]) * 256 + a[3]) * 256 + a[4] }
+    function hx(v, h) { h = int(v / 65536); return h ? sprintf("%x%04x", h, v - h * 65536) : sprintf("%x", v) }
+    function emit(st, cc) { if (cc != last) { print hx(st) cc; c++; last = cc } }
+    BEGIN { print "iocmon=1"; print "month=" month; print "fmt=2"; print "src=iplocate" }
+    $0 == "unzip-failed" { bad = 1; next }
+    { sub(/\r$/, "") }
+    $1 !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/ { next }
+    {
+      split($1, p, "/"); if (p[2] + 0 > 32) next
+      s = n(p[1]); e = s + 2 ^ (32 - p[2]) - 1; cc = toupper(substr($3, 1, 2))
+      if (started && s <= pe) next
+      if (cc !~ /^[A-Z][A-Z]$/) cc = "--"
+      if (!started && s > 0) emit(0, "--")
+      if (started && s > pe + 1) emit(pe + 1, "--")
+      emit(s, cc); started = 1; pe = e
+    }
+    END { if (started && pe < 4294967295) emit(pe + 1, "--"); print "count=" c + 0; exit (bad || c < 1000) }
+  ' > "$2" 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# geoipupdate refreshes the Threat View country table (0 built, 1 failed, 2 not due); "cycle" only builds a missing or old one
+
+geoipupdate()
+{
+  [ "${enablewebui:-0}" = "1" ] || return 2
+  resolvefeedsroot
+  [ "$feedsdegraded" -eq 0 ] && [ -n "$feedsroot" ] || return 2
+  local mode="$1" month now last out="$feedsroot/geoip.txt" raw="$feedsroot/geoip.raw" meta="$feedsroot/meta/geoip.meta"
+  month="$(date +%Y-%m)"
+  if [ -s "$out" ] && head -n 4 "$out" | grep -qx 'src=iplocate'; then
+    [ "$mode" = "cycle" ] && return 2
+    [ "$(cat "$feedsroot/meta/geoip.month" 2>/dev/null)" = "$month" ] && return 2
+  elif [ -s "$out" ]; then
+    # a table from an older source (DB-IP, WHOIS) or format is replaced once now, ignoring the last try
+    [ "$(cat "$feedsroot/meta/geoip.src" 2>/dev/null)" = "iplocate" ] || { rm -f "$feedsroot/meta/geoip.try" "$feedsroot/meta/geoip.fmt"; echo "iplocate" > "$feedsroot/meta/geoip.src"; }
+  fi
+  mkdir -p "$feedsroot/meta"
+  now=$(date +%s); last="$(cat "$feedsroot/meta/geoip.try" 2>/dev/null)"
+  validateint "$last" 0 || last=0
+  [ $((now - last)) -lt 21600 ] && return 2
+  echo "$now" > "$feedsroot/meta/geoip.try"
+  if [ "$mode" = "cycle" ]; then
+    echo -e "  ${CGreen}[Updating Country IP Location Lookup Database]${CClear}"
+  else
+    inlinestatus "Country lookup: fetching"
+  fi
+  rm -f "$meta"
+  fetchfeedsource "Country lookup" "$geoipurl" "$raw" "$meta" || return 1
+  [ "$mode" = "cycle" ] || inlinestatus "Country lookup: building the table"
+  if geoipbuild "$raw" "$out.tmp" "$month"; then
+    mv -f "$out.tmp" "$out"
+    echo "$month" > "$feedsroot/meta/geoip.month"
+    geoipranges="$(sed -n 's/^count=//p' "$out")"
+    webuilog "INFO" "Threat View country table built from IPLocate.io ($geoipranges IPv4 ranges)."
+    rm -f "$raw"
+    return 0
+  fi
+  rm -f "$out.tmp" "$raw"
+  webuilog "WARNING" "The downloaded country file could not be read; the Threat View country table was not changed."
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# geoipfeedline runs geoipupdate inside a feed refresh and prints its result as a feed bullet
+
+geoipfeedline()
+{
+  geoipupdate
+  case "$?" in
+    0) echo -e "\33[2K\r  ${CGreen}*${CClear} Country lookup: built ${CGreen}${geoipranges}${CClear} IPv4 ranges for Threat View" ;;
+    1) echo -e "\33[2K\r  ${CRed}*${CClear} Country lookup: download failed, the current table was kept (retried in 6 hours)" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# alertipof prints the public IPv4 address an alert is about (the last one in its indicator), or nothing
+
+alertipof()
+{
+  local ip
+  ip="$(printf '%s\n' "$1" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | tail -n 1)"
+  [ -n "$ip" ] && ispublicip "$ip" && echo "$ip"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvwanifs prints each WAN interface name (the PPP one for PPPoE/PPTP/L2TP), once each
+
+tvwanifs()
+{
+  local u
+  for u in 0 1; do
+    nvramget "wan${u}_proto"
+    case "$nvramval" in pppoe|pptp|l2tp) nvramget "wan${u}_pppoe_ifname" ;; *) nvramget "wan${u}_ifname" ;; esac
+    case "$nvramval" in ""|*[!A-Za-z0-9._-]*) ;; *) echo "$nvramval" ;; esac
+  done | awk '!seen[$0]++'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvownips prints the router's own WAN addresses, the detected public one first
+
+tvownips()
+{
+  local v
+  for v in wan0_realip_ip wan0_ipaddr wan1_realip_ip wan1_ipaddr; do
+    nvramget "$v"
+    case "$nvramval" in ""|0.0.0.0) ;; *) printf '%s\n' "$nvramval" | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' ;; esac
+  done | awk '!seen[$0]++'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvrules adds (add) or removes (del) the ipset and mangle rules that record new inbound attempts on each WAN interface
+
+tvrules()
+{
+  local ifn rule
+  if [ "$1" = "add" ]; then
+    ipset -exist create "$tvset" hash:ip,port counters maxelem 65536 >/dev/null 2>&1
+    for ifn in $(tvwanifs); do
+      iptables -t mangle -C PREROUTING -i "$ifn" -m conntrack --ctstate NEW -j SET --add-set "$tvset" src,dst --exist 2>/dev/null ||
+        iptables -t mangle -A PREROUTING -i "$ifn" -m conntrack --ctstate NEW -j SET --add-set "$tvset" src,dst --exist 2>/dev/null
+    done
+  else
+    iptables -t mangle -S PREROUTING 2>/dev/null | grep -e "--add-set $tvset " | sed 's/^-A /-D /' | while read -r rule; do
+      iptables -t mangle $rule 2>/dev/null
+    done
+    ipset destroy "$tvset" >/dev/null 2>&1
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvrunning succeeds while a Threat View sampler is alive
+
+tvrunning()
+{
+  local pid
+  pid="$(cat "$tvdir/run/pid" 2>/dev/null)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && { [ ! -d "/proc/$pid" ] || iocmonpid "$pid"; }
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvskynet prints Skynet's inbound and outbound drop counts from its raw-table rules, or nothing when Skynet's rules are absent
+
+tvskynet()
+{
+  iptables -t raw -vxnL PREROUTING 2>/dev/null | awk '
+    $3 == "DROP" && /match-set Skynet-Master src/ { i += $1; f = 1 }
+    $3 == "DROP" && /match-set Skynet-Master dst/ { o += $1; f = 1 }
+    END { if (f) print i + 0, o + 0 }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvskylog copies Skynet's blocked lines written to syslog since the last sample to $tvdir/skylog; the first call only marks the end
+
+tvskylog()
+{
+  : > "$tvdir/skylog"
+  [ -f "$tvsyslog" ] || return
+  if [ -f "$tvdir/skylog_offset" ]; then
+    ( stateroot="$tvdir"; dnsreadrange "$tvsyslog" skylog "$tvdir/skyrange" )
+    grep -E '\[BLOCKED - (INBOUND|OUTBOUND)\]' "$tvdir/skyrange" > "$tvdir/skylog"
+    rm -f "$tvdir/skyrange"
+  else
+    tail -n 1 "$tvsyslog" > "$tvdir/skylog_anchor"
+    echo "$(filesizebytes "$tvsyslog") $(wc -c < "$tvdir/skylog_anchor" | tr -d ' ')" > "$tvdir/skylog_offset"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvsample writes one Threat View sample to tv.htm: connections new since the last sample, blocked attempts and alert IPs
+
+tvsample()
+{
+  local now seq own home ip sky skyin=0 skyout=0 skynet=0 first=0 prev geo
+  now=$(date +%s)
+  seq="$(cat "$tvdir/seq" 2>/dev/null)"; validateint "$seq" 0 || seq=0; seq=$((seq + 1)); echo "$seq" > "$tvdir/seq"
+  own="$(tvownips | tr '\n' ' ')"
+  home="$(for ip in $own; do ispublicip "$ip" && { echo "$ip"; break; }; done)"
+  ipset list "$tvset" 2>/dev/null | sed '1,/^Members:/d' > "$tvdir/set"
+  ipset flush "$tvset" >/dev/null 2>&1
+  cat "$tvconntrack" > "$tvdir/ct" 2>/dev/null
+  [ -f "$tvdir/prevkeys" ] || { first=1; : > "$tvdir/prevkeys"; }
+  { [ -f "$tvleases" ] && cat "$tvleases"; } > "$tvdir/leases" 2>/dev/null
+  tvskylog
+  awk -v own="$own" -v first="$first" -v keysout="$tvdir/keys" -v totout="$tvdir/totals" '
+    function pub(ip, a) {
+      if (split(ip, a, ".") != 4) return 0
+      a[1] += 0; a[2] += 0
+      if (a[1] == 0 || a[1] == 10 || a[1] == 127 || a[1] >= 224) return 0
+      if (a[1] == 169 && a[2] == 254) return 0
+      if (a[1] == 172 && a[2] >= 16 && a[2] <= 31) return 0
+      if (a[1] == 192 && a[2] == 168) return 0
+      if (a[1] == 100 && a[2] >= 64 && a[2] <= 127) return 0
+      return 1
+    }
+    function clean(s) { gsub(/[|\r\n]/, "_", s); return s }
+    BEGIN { n = split(own, o, " "); for (i = 1; i <= n; i++) mine[o[i]] = 1 }
+    FILENAME == ARGV[1] { old[$0] = 1; next }
+    FILENAME == ARGV[2] { if (NF >= 4 && $4 != "*") name[$3] = clean($4); next }
+    FILENAME == ARGV[3] {
+      if ($1 != "ipv4") next
+      s = d = sp = dp = rs = ""
+      for (i = 4; i <= NF; i++) {
+        if ($i ~ /^src=/) { if (s == "") s = substr($i, 5); else if (rs == "") rs = substr($i, 5) }
+        else if ($i ~ /^dst=/) { if (d == "") d = substr($i, 5) }
+        else if ($i ~ /^sport=/) { if (sp == "") sp = substr($i, 7) }
+        else if ($i ~ /^dport=/) { if (dp == "") dp = substr($i, 7) }
+      }
+      if (s !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || d !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) next
+      if (rs !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) rs = ""
+      if (sp !~ /^[0-9]*$/ || dp !~ /^[0-9]*$/) next
+      key = $3 " " s " " d " " sp " " dp
+      cur[key] = 1
+      if (!pub(s) || (s in mine)) {
+        if (!pub(d) || (d in mine)) next
+        dir = "out"; rem = d; dev = (s in mine) ? "" : s
+      } else {
+        if (pub(d) && !(d in mine)) next
+        dir = "in"; rem = s; dev = (rs != "" && !pub(rs) && !(rs in mine)) ? rs : ""
+        inok[s "," dp] = 1
+      }
+      if (!first && (key in old)) next
+      cnt[dir "|allowed|" rem "|" dp "|" $3 "|" dev]++
+      next
+    }
+    FILENAME == ARGV[4] {
+      if (split($1, a, ",") != 2 || split(a[2], b, ":") != 2) next
+      if (a[1] !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || !pub(a[1]) || (a[1] in mine) || b[2] !~ /^[0-9]+$/) next
+      if ((a[1] "," b[2]) in inok) next
+      p = 1; for (i = 2; i < NF; i++) if ($i == "packets") p = $(i + 1) + 0
+      cnt["in|blocked|" a[1] "|" b[2] "|" b[1] "|"] += (p > 0 ? p : 1)
+      next
+    }
+    FILENAME == ARGV[5] {
+      dir = (index($0, "[BLOCKED - OUTBOUND]") ? "out" : "in"); s = d = p = dp = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^SRC=/ && s == "") s = substr($i, 5)
+        else if ($i ~ /^DST=/ && d == "") d = substr($i, 5)
+        else if ($i ~ /^PROTO=/ && p == "") p = tolower(substr($i, 7))
+        else if ($i ~ /^DPT=/ && dp == "") dp = substr($i, 5)
+      }
+      if (s !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || d !~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) next
+      if (p !~ /^[a-z0-9]+$/) p = ""
+      if (dp !~ /^[0-9]*$/) dp = ""
+      if (dir == "in") { rem = s; dev = "" } else { rem = d; dev = (!pub(s) && !(s in mine)) ? s : "" }
+      if (!pub(rem)) next
+      cnt[dir "|skynet|" rem "|" dp "|" p "|" dev]++
+      next
+    }
+    END {
+      for (k in cur) print k > keysout
+      for (k in cnt) {
+        split(k, f, "|"); tot[f[1] "|" f[2]] += cnt[k]; dns = (f[1] == "out" && (f[4] == "53" || f[4] == "853"))
+        if (dns && f[2] == "allowed") tot["dns"] += cnt[k]
+        printf "%d|%s\n", (f[1] == "in" ? 1500000000 : dns ? 0 : 1000000000) + cnt[k], cnt[k] "|" k "|" ((f[6] in name) ? name[f[6]] : "")
+      }
+      printf "T|%d|%d|%d|%d|%d|%d\n", tot["out|allowed"], tot["in|allowed"], tot["in|blocked"], tot["in|skynet"], tot["out|skynet"], tot["dns"] > totout
+    }
+  ' "$tvdir/prevkeys" "$tvdir/leases" "$tvdir/ct" "$tvdir/set" "$tvdir/skylog" | sort -rn | head -n "$tvmaxevents" | cut -d'|' -f2- > "$tvdir/events"
+  mv -f "$tvdir/keys" "$tvdir/prevkeys" 2>/dev/null || : > "$tvdir/prevkeys"
+  sky="$(tvskynet)"
+  if [ -n "$sky" ]; then
+    skynet=1
+    prev="$(cat "$tvdir/sky" 2>/dev/null)"
+    if [ -n "$prev" ]; then
+      skyin=$((${sky% *} - ${prev% *})); skyout=$((${sky#* } - ${prev#* }))
+      [ "$skyin" -lt 0 ] && skyin=0; [ "$skyout" -lt 0 ] && skyout=0
+    fi
+    echo "$sky" > "$tvdir/sky"
+  fi
+  geo=""; [ -n "$feedsroot" ] && geo="$(cat "$feedsroot/meta/geoip.month" 2>/dev/null)"
+  {
+    echo "iocmon=1"
+    echo "ts=$now"
+    echo "seq=$seq"
+    echo "first=$first"
+    echo "interval=$tvinterval"
+    echo "home=$home"
+    echo "skynet=$skynet"
+    echo "skyin=$skyin"
+    echo "skyout=$skyout"
+    echo "geo=$geo"
+    [ -n "$stateroot" ] && [ -f "$stateroot/alert_ips" ] && sed 's/^/A|/' "$stateroot/alert_ips"
+    cat "$tvdir/totals" 2>/dev/null
+    sed 's/^/E|/' "$tvdir/events"
+  } | webescape > "$webuidir/.tv.tmp"
+  mv -f "$webuidir/.tv.tmp" "$webuidir/tv.htm"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webtvgeolink links the country table on the drive into the web folder, so the page can read it without a RAM copy
+
+webtvgeolink()
+{
+  local src="$feedsroot/geoip.txt" dst="$webuidir/geoip.htm"
+  if [ -n "$feedsroot" ] && [ -s "$src" ]; then
+    [ "$(readlink "$dst" 2>/dev/null)" = "$src" ] || ln -sf "$src" "$dst"
+  else
+    rm -f "$dst"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvsampler samples every tvinterval seconds while the page keeps sending heartbeats, then removes its firewall rules
+
+tvsampler()
+{
+  local beat now
+  [ "${enablewebui:-0}" = "1" ] && [ -d "$webuidir" ] || return
+  mkdir -p "$tvdir"
+  if ! mkdir "$tvdir/run" 2>/dev/null; then
+    tvrunning && return
+    rm -rf "$tvdir/run"
+    mkdir "$tvdir/run" 2>/dev/null || return
+  fi
+  echo "$$" > "$tvdir/run/pid"
+  trap 'tvrules del; rm -rf "$tvdir/run"; rm -f "$tvdir/prevkeys" "$tvdir/sky" "$tvdir/skylog_offset" "$tvdir/skylog_anchor" "$webuidir/tv.htm"' EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  resolvestateroot
+  resolvefeedsroot
+  webtvgeolink
+  rm -f "$tvdir/prevkeys" "$tvdir/sky" "$tvdir/skylog_offset" "$tvdir/skylog_anchor"
+  webuilog "INFO" "Threat View sampling started."
+  while :; do
+    now=$(date +%s)
+    beat="$(cat "$tvdir/beat" 2>/dev/null)"
+    validateint "$beat" 0 || beat=0
+    [ $((now - beat)) -gt "$tvidle" ] && break
+    tvrules add
+    tvsample
+    sleep "$tvinterval"
+  done
+  webuilog "INFO" "Threat View sampling stopped: the page has been closed for $tvidle seconds."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webtvbeat records the page's Threat View heartbeat and starts the sampler if it isn't running
+
+webtvbeat()
+{
+  mkdir -p "$tvdir"
+  date +%s > "$tvdir/beat"
+  tvrunning && return
+  sh "$apppath" -tvsample </dev/null >/dev/null 2>&1 &
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tvstop ends a running sampler and removes Threat View's firewall rules, ipset and data
+
+tvstop()
+{
+  local pid
+  pid="$(cat "$tvdir/run/pid" 2>/dev/null)"
+  tvrunning && kill "$pid" 2>/dev/null
+  tvrules del
+  rm -rf "$tvdir"
+  rm -f "$webuidir/tv.htm" "$webuidir/geoip.htm"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # webaction runs one fixed web button from service-event: $1 = its event name, which is never used as anything but a match
 
 webaction()
@@ -9172,6 +10718,10 @@ webaction()
       sed -i -e 's/^pendingcount=.*/pendingcount=/' -e 's/^pendingsummary=.*/pendingsummary=/' "$webuidir/status.htm" 2>/dev/null
       return ;;
     iocmonautocheck) webautocheck; return ;;
+    iocmontv) webtvbeat; return ;;
+    iocmonclearioc|iocmoncleardropbear|iocmonclearhash|iocmonclearreputation) webclearlog "${1#iocmonclear}"; return ;;
+    iocmonexcon_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) webexception on "${1#iocmonexcon_}"; return ;;
+    iocmonexcoff_[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) webexception off "${1#iocmonexcoff_}"; return ;;
     iocmonfeeds) webjobaction="feeds" ;;
     iocmonscan) webjobaction="scan" ;;
     iocmonsimulate) webjobaction="simulate" ;;
@@ -9243,9 +10793,9 @@ vresetdefaults()
 applyimportedconfig()
 {
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
-  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keptkeys=""
+  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keepphcred="$phcred" keepphcred2="$phcred2" keptkeys=""
 
-  alertlevel=""; alertfeedonly=0
+  alertlevel=""; alertfeedonly=0; dnssharedhostsrev=1
   . "$importfile"
   migratealertlevel
 
@@ -9257,6 +10807,8 @@ applyimportedconfig()
   [ -z "$abuseipdbapikey" ] && [ -n "$keepaipdbkey" ] && { abuseipdbapikey="$keepaipdbkey"; keptkeys="${keptkeys:+$keptkeys, }AbuseIPDB"; }
   [ -z "$aghcred" ] && [ -n "$keepaghcred" ] && { aghcred="$keepaghcred"; keptkeys="${keptkeys:+$keptkeys, }AdGuard Home"; }
   [ -z "$aghcred2" ] && [ -n "$keepaghcred2" ] && { aghcred2="$keepaghcred2"; keptkeys="${keptkeys:+$keptkeys, }backup AdGuard Home"; }
+  [ -z "$phcred" ] && [ -n "$keepphcred" ] && { phcred="$keepphcred"; keptkeys="${keptkeys:+$keptkeys, }Pi-hole"; }
+  [ -z "$phcred2" ] && [ -n "$keepphcred2" ] && { phcred2="$keepphcred2"; keptkeys="${keptkeys:+$keptkeys, }backup Pi-hole"; }
   [ -z "$urlhausapikey" ] && enableurlhaus=0
   [ -z "$threatfoxapikey" ] && enablethreatfox=0
   [ -z "$qfeedsapikey" ] && enableqfeeds=0
@@ -9265,6 +10817,8 @@ applyimportedconfig()
   dnslogpath=""
   aghurl=""
   aghurl2=""
+  phlogpath=""
+  phlogpath2=""
   dnsforcefilelog=0
   enableskynetimport=0
   enablewebui=0
@@ -9330,13 +10884,13 @@ exportiocmonconfig()
   fi
 
   echo ""
-  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys and the AdGuard Home logins in this export?"
+  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys, the AdGuard Home logins and the Pi-hole passwords in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
   { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(_GetLAN_HostName_)"
     cat "$config"
   } > "$exportpath"
-  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/' "$exportpath"
+  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/; s/^phcred=.*/phcred=""/; s/^phcred2=.*/phcred2=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
@@ -9787,6 +11341,7 @@ dnsoffsetcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblocked=0
 aghslot=1; aghfailover=0; aghapiwarned2=""; aghcursorcache2=""
+phslot=1; phstate=""
 timerpaused=0
 exitallmenus=0
 
@@ -9824,7 +11379,7 @@ if [ "$2" == "-now" ]; then
 fi
 
 # Check and see if an invalid commandline option is being used
-if [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "-setup" ] || [ "$1" == "-noswitch" ] || [ "$1" == "-autoupdate" ] || [ "$1" == "-email" ] || [ "$1" == "-screen" ] || [ "$1" == "-updatefeeds" ] || [ "$1" == "-fsintegrity" ] || [ "$1" == "-webmount" ] || [ "$1" == "-webaction" ]; then
+if [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "-setup" ] || [ "$1" == "-noswitch" ] || [ "$1" == "-autoupdate" ] || [ "$1" == "-email" ] || [ "$1" == "-screen" ] || [ "$1" == "-updatefeeds" ] || [ "$1" == "-fsintegrity" ] || [ "$1" == "-webmount" ] || [ "$1" == "-webaction" ] || [ "$1" == "-tvsample" ]; then
     clear
 else
     clear
@@ -9936,6 +11491,16 @@ if [ "$1" == "-webmount" ]; then
       webuimount
       webuirefreshpage
     fi
+    exit 0
+fi
+
+# Check to see if the web page's Threat View has started its sampler
+if [ "$1" == "-tvsample" ]; then
+    [ -f "$config" ] || exit 0
+    exec >/dev/null 2>&1
+    . "$config"
+    resolvelogfile
+    tvsampler
     exit 0
 fi
 
@@ -10075,6 +11640,7 @@ fi
 # Grab the IOCMON config file and read it in, or run interactive first-time setup (including drive selection)
 if [ -f "$config" ]; then
   . "$config"
+  excsnapshot
   resolvelogfile
   migratefeedkeys
   aghmigrateauth
@@ -10082,6 +11648,7 @@ if [ -f "$config" ]; then
     saveconfig
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Alert level set to '$alertlevel', carried over from the earlier 'Feed Matches Only' setting." >> "$logfile"
   fi
+  migratesharedhosts
 else
   initialsetup
 fi
@@ -10089,6 +11656,9 @@ fi
 checktimeoutbin
 webuirefreshpage
 migrateiocseverity
+rm -f "$addonsigstate"
+tvrunning || tvrules del
+addoncheckall
 
 # Check for updates
 updatecheck
@@ -10182,7 +11752,13 @@ renderdashboard()
   dnsstatus="${CDkGray}off${CClear}"
   dnslogcolor="$CDkGray"
   if [ "$enablednswatch" -eq 1 ]; then
-    if dnsusesagh && ! aghanylogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
+    if dnsusesph; then
+      case "$phstate" in
+        none) dnsstatus="${CYellow}Pi-hole could not be read${CClear} (last checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
+        partial) dnsstatus="${CYellow}on, one Pi-hole unreadable${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
+        *) dnsstatus="${CGreen}on${CClear} (Pi-hole, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})" ;;
+      esac
+    elif dnsusesagh && ! aghanylogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then dnsstatus="${CYellow}on, AdGuard Home backup${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow"
     elif [ "$aghfailover" = "2" ] && dnsusesagh; then dnsstatus="${CYellow}AdGuard Home not answering${CClear} (last checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow"
     elif dnsusesagh; then dnsstatus="${CGreen}on${CClear} (AdGuard Home, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"
@@ -10333,6 +11909,7 @@ while true; do
 
   if [ -f "$config" ]; then
     . "$config"
+    excsnapshot
     resolvelogfile
   else
     initialsetup
@@ -10344,7 +11921,9 @@ while true; do
 
   checkdrivealive
   checkfeedupdate
+  geoipupdate cycle
   checklogrotate
+  addoncheckall
 
   scanbulletprinted=0
 
@@ -10361,7 +11940,13 @@ while true; do
     blanklineguard
     dnsselfnote=""
     [ "${dnsselfcount:-0}" -gt 0 ] && dnsselfnote=" (${CGreen}${dnsselfcount}${CClear} router lookup(s) by Kairos/Astraea set aside)"
-    if [ "$aghfailover" = "2" ] && dnsusesagh; then
+    if dnsusesph && [ "$phstate" = "none" ]; then
+      echo -e "  ${CYellow}* WARNING: DNS watch could not read Pi-hole - see the IOCMON log.${CClear}"
+    elif dnsusesph && [ "$phstate" = "partial" ]; then
+      echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Pi-hole (${CYellow}one Pi-hole could not be read${CClear}) against known-malicious-domain feeds${dnsselfnote}"
+    elif dnsusesph; then
+      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Pi-hole against known-malicious-domain feeds${dnsselfnote}"
+    elif [ "$aghfailover" = "2" ] && dnsusesagh; then
       echo -e "  ${CYellow}* WARNING: DNS watch could not read the primary or the backup AdGuard Home - see the IOCMON log.${CClear}"
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then
       echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from the ${CYellow}backup${CClear} AdGuard Home (${aghurl2%/}) against known-malicious-domain feeds${dnsselfnote}"
