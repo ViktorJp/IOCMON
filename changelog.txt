@@ -10,7 +10,7 @@ v2.x BETA - (TBA)
             clear warnings for a wrong password, two-factor login, too many API sessions, an unreachable or
             unsupported (v5) Pi-hole, or a Pi-hole that only sees the router, so the device behind each lookup
             can't be identified. Passwords are stored encoded, never placed on a command line, and left out of
-            exports unless you choose to include them.
+            exports unless you choose to include them. @ryosuke @Ripshod
           - PATCH: The IOCMON web UI can now clear logs and manage exceptions without needing to use the main
             terminal. A Clear Log button at the bottom of each log page, just above Prev/Next, erases the log
             you're viewing and its rotated copies after a confirmation, exactly like the (R) hotkey. IoC 
@@ -21,7 +21,7 @@ v2.x BETA - (TBA)
             IP, file and cron exception, including ones added in the menus, each with a switch to remove it.
             The page never sends the item itself to the router, only a short code that IOCMON checks against
             its own log, so nothing in a log entry can be turned into a command and only items IOCMON actually
-            logged can be added.
+            logged can be added. @JB_1366 @Radon
           - MINOR: The web interface (v1.5.3) has a new Threat View button that opens a live world map of your
             router's traffic: inbound connections and blocked attempts, outbound connections, DNS lookups and
             addresses Skynet blocked. Countries come from DB-IP's free country database, which IOCMON downloads
@@ -38,7 +38,8 @@ v2.x BETA - (TBA)
             domains are now on the shared-hosting list, so a feed listing for them (such as malware using
             YouTube for its settings) is logged as Info instead of raising a Critical alert. A DNS match whose
             address AbuseIPDB marks as whitelisted is also logged as Info. On the main screen, (E) now detaches
-            from SCREEN and leaves IOCMON running, and (X) exits after asking first.
+            from SCREEN and leaves IOCMON running, and (X) exits after asking first. @Mutzli @Ripshod @jksmurf
+            
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
