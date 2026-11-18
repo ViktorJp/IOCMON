@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.4.1 -->
+<!-- IOCMON-WebUI v1.5.6 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -90,6 +90,9 @@
                text-decoration: none; letter-spacing: 1px; font-size: 11px; text-transform: uppercase; }
 #ioc .tabs a:hover { background: var(--buttonhover); }
 #ioc .tabs a.sel { background: var(--cyan); color: #0f1518 !important; font-weight: 600; }
+#ioc .xshow { margin-left: 10px; padding: 2px 10px; background: var(--button); border-bottom: 1px solid var(--cyan); color: var(--text) !important;
+              cursor: pointer; text-decoration: none; letter-spacing: 1px; font-size: 11px; text-transform: uppercase; }
+#ioc .xshow:hover { background: var(--buttonhover); }
 #ioc .tools { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
 #ioc .tools input, #ioc .tools select { background: var(--bg) !important; color: var(--text) !important; border: 1px solid var(--line) !important;
                padding: 3px 6px; height: 25px; font-size: 12px; }
@@ -123,12 +126,113 @@
 #ioc .pager a { color: var(--cyan) !important; cursor: pointer; text-decoration: none; padding: 2px 6px; }
 #ioc .pager a.dis { color: var(--line) !important; cursor: default; }
 #ioc .foot { color: var(--dim); font-size: 10px; text-align: right; margin-top: 8px; }
+#ioc .cleartools { display: flex; justify-content: flex-end; padding-top: 8px; }
+#ioc .cleartools .btn { flex: none; padding: 4px 8px; font-size: 10px; }
+#ioc .entry .links { display: flex; align-items: center; flex-wrap: wrap; }
+#ioc .xsw { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; color: var(--dim) !important; text-decoration: none; }
+#ioc .xsw .knob { position: relative; width: 26px; height: 12px; background: var(--button); border-radius: 6px; }
+#ioc .xsw .knob:after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 4px; background: var(--dim); }
+#ioc .xsw.on { color: var(--green) !important; }
+#ioc .links a.xsw { color: var(--dim) !important; margin-right: 0; }
+#ioc .links a.xsw.on { color: var(--green) !important; }
+#ioc .xsw.on .knob { background: #1f5a3c; }
+#ioc .xsw.on .knob:after { left: 16px; background: var(--green); }
+#ioc .xsw.wait { opacity: 0.6; cursor: default; }
+#ioc .excitem { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid #2c333a; }
+#ioc .excitem .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 11px; }
+#ioc .modal { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+#ioc .modal .mbox { background: var(--panel); border-left: 4px solid var(--cyan); padding: 14px 16px; width: 460px; max-width: 90%; overflow-wrap: anywhere; }
+#ioc .modal .mt { font-weight: 600; margin-bottom: 8px; }
+#ioc .modal .mwarn { color: var(--red); margin-top: 8px; }
+#ioc .modal .mbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+#ioc .modal .mbtns .btn { flex: none; min-width: 90px; }
+#ioc .btn.tvbtn { flex: 1.3; background: linear-gradient(100deg, #0f4a55, #173a44); border-bottom-color: var(--cyan); color: #bff6ff !important; font-weight: 600; }
+#ioc .btn.tvbtn:hover { background: linear-gradient(100deg, #146271, #1d4955); }
+#ioc .tv { position: relative; }
+#ioc .tvbar { display: flex; align-items: center; gap: 8px; }
+#ioc .tvbar .btn { flex: none; padding: 6px 10px; }
+#ioc .tvtitle { color: var(--cyan); font-size: 15px; font-weight: 600; letter-spacing: 4px; margin-left: 6px; text-shadow: 0 0 8px rgba(47, 208, 228, .55); }
+#ioc .tvclock { margin-left: auto; color: var(--dim); font-size: 11px; white-space: nowrap; }
+#ioc .tvclock b { color: var(--text); font-weight: 400; }
+#ioc .tvstage { position: relative; margin-top: 8px; background: radial-gradient(ellipse at 50% 40%, #13232b 0%, #0b1115 70%); border: 1px solid #1d2a31; overflow: hidden; }
+#ioc .tvstage canvas { position: absolute; left: 0; top: 0; display: block; }
+#ioc .tvstage::after { content: ""; position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none;
+                       background: repeating-linear-gradient(0deg, rgba(255, 255, 255, .018) 0, rgba(255, 255, 255, .018) 1px, transparent 1px, transparent 3px); }
+#ioc .tvmsg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center; color: var(--cyan);
+              background: rgba(11, 17, 21, .82); border: 1px solid #1d4955; padding: 10px 14px; z-index: 3; display: none; }
+#ioc .tvnote { position: absolute; left: 8px; bottom: 6px; color: var(--amber); font-size: 11px; z-index: 3; display: none; background: rgba(11, 17, 21, .8); padding: 2px 6px; }
+#ioc .tvreplaytag { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); color: var(--amber); border: 1px solid var(--amber); background: rgba(11, 17, 21, .8);
+                    padding: 2px 10px; letter-spacing: 2px; font-size: 11px; z-index: 3; display: none; }
+#ioc .tvlegend { position: absolute; right: 8px; bottom: 6px; display: flex; gap: 10px; font-size: 10px; color: var(--dim); z-index: 3; background: rgba(11, 17, 21, .7); padding: 2px 6px; }
+#ioc .tvlegend i { display: inline-block; width: 16px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
+#ioc .tvtip { position: absolute; z-index: 4; display: none; background: rgba(15, 21, 26, .95); border: 1px solid #1d4955; border-left: 3px solid var(--cyan);
+              padding: 7px 10px; font-size: 11px; width: 300px; max-height: 260px; overflow: auto; }
+#ioc .tvtip .tt { font-weight: 600; color: var(--text); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; }
+#ioc .tvtip .tt a { color: var(--dim) !important; cursor: pointer; text-decoration: none; }
+#ioc .tvtip .ip { padding: 3px 0; border-top: 1px solid #2c333a; }
+#ioc .tvtip .ip .links a { margin-right: 8px; }
+#ioc .tvcounts { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; }
+#ioc .tvcounts div { background: var(--panel); padding: 5px 7px; min-width: 0; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); }
+#ioc .tvcounts .k { color: var(--dim); font-size: 9px; letter-spacing: .3px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ioc .tvcounts .v { font-size: 19px; line-height: 1.2; }
+#ioc .tvcounts .v small { font-size: 10px; color: var(--dim); margin-left: 2px; }
+#ioc .tvcounts .off .v { font-size: 11px; line-height: 11.5px; min-height: 23px; color: var(--dim); white-space: normal; }
+#ioc .tvcounts .off .v small { display: none; }
+#ioc .tvfilters { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; align-items: center; color: var(--dim); font-size: 11px; }
+#ioc .tvfilters label { cursor: pointer; white-space: nowrap; }
+#ioc .tvfilters input { vertical-align: middle; margin: 0 4px 0 0; }
+#ioc .tvalert { margin-top: 8px; display: none; align-items: center; gap: 12px; }
+#ioc .tvpanel { margin-top: 8px; }
+#ioc .tvfeed { max-height: 260px; overflow: auto; }
+#ioc .tvrow { display: grid; grid-template-columns: 58px 30px 66px 108px 26px 70px 1fr 34px; gap: 6px; padding: 2px 4px; border-bottom: 1px solid #262d33;
+              font-size: 11px; cursor: pointer; align-items: baseline; }
+#ioc .tvrow:hover { background: var(--panel2); }
+#ioc .tvrow.tvhead { position: sticky; top: 0; z-index: 1; background: var(--panel); color: var(--dim); font-size: 10px; letter-spacing: .5px; text-transform: uppercase; cursor: default; }
+#ioc .tvrow .res { cursor: help; }
+#ioc .tvkey { color: var(--dim); font-size: 10px; margin-top: 4px; }
+#ioc .tvkey b { color: var(--text); font-weight: 600; }
+#ioc .tvrow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ioc .tvrow .n { text-align: right; color: var(--dim); }
+#ioc .tvrow.blk { color: var(--dim); }
+#ioc .tvrow.critical { color: var(--red); }
+#ioc .tvrow.warning { color: var(--amber); }
+#ioc .tvtop { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+#ioc .tvtop h3 { color: var(--dim); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; margin: 0 0 4px 0; font-weight: 600; }
+#ioc .tvbarrow { position: relative; display: flex; justify-content: space-between; padding: 2px 6px; margin-bottom: 2px; font-size: 11px; }
+#ioc .tvbarrow i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(47, 208, 228, .16); }
+#ioc .tvbarrow span { position: relative; }
+#ioc .tvreplay { display: flex; flex-direction: column; gap: 8px; }
+#ioc .tvreplay input[type=range] { width: 100%; }
+#ioc .tvreplay .tools { margin-bottom: 0; }
+#ioc .tvfoot { color: var(--dim); font-size: 10px; margin-top: 8px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+#ioc .tvfoot a { color: var(--cyan) !important; cursor: pointer; }
+#ioc .tv .fsonly { display: none; }
+#ioc .tv.full { position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 9000; background: var(--bg); padding: 10px 12px 4px 12px; display: flex; flex-direction: column; }
+#ioc .tv.full .fsonly { display: inline-block; }
+#ioc .tv.full .tvbar { flex: none; }
+#ioc .tv.full .tvstage { flex: 1; min-height: 0; }
+#ioc .tv.full .tvside { flex: none; }
+#ioc .tv.full .tvfoot { flex: none; margin-top: 6px; }
+#ioc .tvdrawbtn { display: none; }
+#ioc .tv.full .tvpanel { position: absolute; left: 0; bottom: 34px; height: 46%; width: min(620px, 52%); margin: 0; z-index: 5; display: flex; flex-direction: column;
+                         background: rgba(21, 27, 32, .95); border: 1px solid #1d4955; border-left: 0; padding: 8px 10px; transform: translateX(-100%); transition: transform .25s ease; }
+#ioc .tv.full.drawer .tvpanel { transform: none; }
+#ioc .tv.full .tvpanel .tabs { flex: none; }
+#ioc .tv.full .tvfeed, #ioc .tv.full #tvp_top, #ioc .tv.full #tvp_replay { flex: 1; min-height: 0; max-height: none; overflow: auto; }
+#ioc .tv.full .tvdrawbtn { display: block; position: absolute; left: 100%; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; padding: 12px 5px; cursor: pointer;
+                           background: #0f4a55; border: 1px solid var(--cyan); border-left: 0; color: #bff6ff !important; font-size: 11px; letter-spacing: 2px; text-decoration: none; }
+#ioc .tv.full .tvdrawbtn:hover { background: #146271; }
+@media (prefers-reduced-motion: reduce) { #ioc .tv.full .tvpanel { transition: none; } }
+@media (max-width: 700px) { #ioc .tvcounts { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.4.1", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
-var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 25;
+var pagever = "1.5.6", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 10;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
+var exc = {}, excpend = {}, askdone = null, curexc = "dns";
+var lognames = { ioc: "IoC Detections", dropbear: "Dropbear", hash: "Hash-Check", reputation: "Reputation" };
+var exclists = [["dns", "DNS Domains", "DNS exceptions"], ["ip", "IP Addresses", "IP/CIDR exceptions"], ["file", "Files", "excluded files"], ["cron", "Cron Entries", "cron exceptions"]];
 var full = {}, pendingfull = null, routerdate = "", recentdays = 14, recentrows = 2000, fullrows = 20000;
 var jobnames = { feeds: "Feed update", scan: "Filesystem scan", simulate: "Simulated detection", check: "Update check", start: "Start monitor", update: "Update", full: "Full history" };
 var chartkinds = [["conntrack", "Conntrack", "#3987e5"], ["dns", "DNS", "#d95926"], ["auth", "Auth", "#199e70"], ["fsintegrity", "Filesystem", "#c98500"], ["simulated", "Test", "#d55181"], ["other", "Cron, NVRAM, firewall", "#8b96a1"]];
@@ -201,13 +305,14 @@ function showstatus(d) {
   put("t_last", d.lastalert || "none yet");
   put("t_rep", d.reputation || "AbuseIPDB off");
 
-  var failover = d.dnsstate === "adguardhome" ? d.dnsfailover : "0";
+  var failover = d.dnsstate === "adguardhome" || d.dnsstate === "pihole" ? d.dnsfailover : "0";
+  var dnsname = d.dnsstate === "pihole" ? "Pi-hole" : "AdGuard Home";
   setrow("w_conn", onoff(d.conntrackon === "1", plural(d.conntrackchecked || "0", "dst ip") + ", checked " + (d.conntracklast || "n/a")));
   if (d.dnsstate === "off") setrow("w_dns", { t: "off", c: "v off" });
   else if (d.dnsstate === "waiting") setrow("w_dns", { t: "awaiting query-log setup", c: "v warn" });
   else if (d.dnsstate === "nologin") setrow("w_dns", { t: "skipped, AdGuard Home login missing", c: "v warn" });
-  else if (failover === "2") setrow("w_dns", { t: "AdGuard Home not answering, last checked " + (d.dnslast || "n/a"), c: "v warn" });
-  else setrow("w_dns", { t: (failover === "1" ? "AdGuard Home backup, " : d.dnsstate === "adguardhome" ? "AdGuard Home, " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: failover === "1" ? "v warn" : "v on" });
+  else if (failover === "2") setrow("w_dns", { t: dnsname + " not answering, last checked " + (d.dnslast || "n/a"), c: "v warn" });
+  else setrow("w_dns", { t: (failover === "1" ? (d.dnsstate === "pihole" ? "Pi-hole, one unreadable, " : "AdGuard Home backup, ") : d.dnsstate === "adguardhome" || d.dnsstate === "pihole" ? dnsname + ", " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: failover === "1" ? "v warn" : "v on" });
   put("w_dnslog", d.dnslog || "-", d.dnsstate === "nologin" || failover === "1" || failover === "2" ? "v warn" : d.dnslog && d.dnsstate !== "off" ? "v on" : "v off");
   setrow("w_auth", onoff(d.authon === "1", "+" + (d.authchecked || "0") + " new, checked " + (d.authlast || "n/a")));
   setrow("w_nvram", onoff(d.nvramon === "1", d.nvramvars + " vars, checked " + (d.nvramlast || "n/a")));
@@ -361,14 +466,15 @@ function poll() {
 function parts(line) { return line.split(" | "); }
 function trim(s) { return s.replace(/^\s+|\s+$/g, ""); }
 function parseioc(line) {
-  var p = parts(line), rep = "", intel = "", sev = "", n;
+  var p = parts(line), rep = "", intel = "", sev = "", xc = "", n;
+  if (/^exc:[0-9a-f]{8}$/.test(p[p.length - 1])) xc = p.pop().slice(4);
   if (/^sev:(critical|warning|info)$/.test(p[p.length - 1])) sev = p.pop().slice(4);
   if (p.length < 5) return { raw: line };
   n = p.length;
   if (/^Astraea (clear|confirm|unknown|contained): /.test(p[n - 1])) { intel = p[n - 1]; n--; }
   if (/^(TEST )?AbuseIPDB /.test(p[n - 1])) { rep = p[n - 1]; n--; }
   if (n < 5) return { raw: line };
-  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, intel: intel, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1], sev: sev };
+  return { when: p[0], tag: p[1], main: p.slice(2, n - 2).join(" | "), sub: p[n - 2] + " - " + p[n - 1], rep: rep, intel: intel, indicator: p.slice(2, n - 2).join(" | "), source: p[n - 2], detail: p[n - 1], sev: sev, exc: xc };
 }
 function parserep(line) {
   var p = parts(line), m;
@@ -404,6 +510,102 @@ function loadlog(name) {
 function loadlogs() {
   loadlog(curlog);
   if (curlog !== "ioc") loadlog("ioc");
+  loadexc();
+}
+function loadexc() {
+  fetchdata("exceptions.htm", function (text) {
+    var a = text ? datalines(text) : [], m = {}, i, f, t;
+    for (i = 0; i < a.length; i++) {
+      f = a[i].split("|");
+      if (f.length < 5 || !/^[0-9a-f]{8}$/.test(f[0])) continue;
+      m[f[0]] = { list: f[1], on: f[2] === "1", crit: f[3] === "1", value: f.slice(4).join("|") };
+    }
+    exc = m;
+    for (t in excpend) if ((exc[t] ? exc[t].on : false) === excpend[t].on || Date.now() - excpend[t].at > 20000) delete excpend[t];
+    if (curlog === "ioc") { fillkinds(); drawlog(); }
+    drawexc();
+  });
+}
+function excon(t) { return excpend[t] ? excpend[t].on : !!(exc[t] && exc[t].on); }
+function exclabel(list) { var i; for (i = 0; i < exclists.length; i++) if (exclists[i][0] === list) return exclists[i][2]; return list; }
+function askbox(title, text, warn, oklabel, done) {
+  put("m_title", title); put("m_text", text); put("m_warn", warn || "");
+  byid("m_warn").style.display = warn ? "block" : "none";
+  put("m_ok", oklabel);
+  askdone = done;
+  byid("m_box").style.display = "flex";
+}
+function closeask() { askdone = null; byid("m_box").style.display = "none"; }
+function okask() { var f = askdone; closeask(); if (f) f(); }
+function sendexc(t, on) {
+  excpend[t] = { on: on, at: Date.now() };
+  postaction("iocmonexc" + (on ? "on_" : "off_") + t);
+  drawlog(); drawexc();
+  setTimeout(loadexc, 2500);
+  setTimeout(loadexc, 7000);
+}
+function toggleexc(t) {
+  var e = exc[t], what;
+  if (!e || excpend[t]) return;
+  if (excon(t)) { sendexc(t, false); return; }
+  what = e.list === "dns" ? e.value + " and its subdomains" : e.value;
+  askbox("Add an exception", "Add " + what + " to the " + exclabel(e.list) + "? IOCMON stops alerting on it from now on; rows already in the log stay.",
+    e.crit ? "This is a startup script, SSH or router configuration file. IOCMON will no longer watch it for tampering: changes, deletion and permission changes to it will go unreported." : "",
+    "Add exception", function () { sendexc(t, true); });
+}
+function excswitch(t) {
+  var on = excon(t), e = exc[t], a = make("a", "xsw" + (on ? " on" : "") + (excpend[t] ? " wait" : ""));
+  a.appendChild(make("span", "knob"));
+  a.appendChild(make("span", "", "Exception"));
+  a.setAttribute("title", on ? "In the " + exclabel(e.list) + ": " + e.value + ". Turn off to remove it." : "Add " + e.value + " to the " + exclabel(e.list));
+  a.onclick = function () { toggleexc(t); };
+  return a;
+}
+function excitems(list) {
+  var items = [], t;
+  for (t in exc) if (exc[t].list === list && (exc[t].on || excpend[t])) items.push(t);
+  return items.sort(function (a, b) { return exc[a].value < exc[b].value ? -1 : exc[a].value > exc[b].value ? 1 : 0; });
+}
+function pickexc(list) { curexc = list; drawexc(); }
+var excopen = false;
+function excshowapply() {
+  byid("x_body").style.display = excopen ? "" : "none";
+  put("x_show", excopen ? "Hide" : "Show");
+}
+function toggleexc() {
+  excopen = !excopen;
+  try { localStorage.setItem("iocmon_excshow", excopen ? "1" : "0"); } catch (e) { }
+  excshowapply();
+}
+function drawexc() {
+  var box = byid("x_lists"), g, i, items, row, n;
+  for (g = 0; g < exclists.length; g++) {
+    put("xtab_" + exclists[g][0], exclists[g][1] + " (" + excitems(exclists[g][0]).length + ")");
+    byid("xtab_" + exclists[g][0]).className = exclists[g][0] === curexc ? "sel" : "";
+  }
+  clearnode(box);
+  items = excitems(curexc);
+  for (i = 0; i < items.length; i++) {
+    row = make("div", "excitem");
+    row.appendChild(make("span", "mono", exc[items[i]].value));
+    row.appendChild(excswitch(items[i]));
+    box.appendChild(row);
+  }
+  if (!items.length) box.appendChild(make("div", "plain off", "No " + exclabel(curexc) + "."));
+  for (i = 0, n = 0; i < exclists.length; i++) n += excitems(exclists[i][0]).length;
+  put("x_total", n + (n === 1 ? " item" : " items"));
+}
+function clearlog() {
+  var name = curlog;
+  if (byid("l_clear").className.indexOf("dis") >= 0) return;
+  askbox("Clear the " + lognames[name] + " log?", "This erases the whole " + lognames[name] + " log on the router, including rows older than this page shows and its rotated copies, for this page and the IOCMON screen alike.",
+    "This can't be undone.", "Clear Log", function () {
+      postaction("iocmonclear" + name);
+      logs[name] = []; full[name] = false; curpage = 0;
+      if (name === curlog) { drawfull(); fillkinds(); drawlog(); }
+      if (name === "ioc") drawchart();
+      setTimeout(loadlogs, 2500);
+    });
 }
 function daynum(y, m, d) { return Math.floor(Date.UTC(y, m, d) / 86400000); }
 function datetoday(s) {
@@ -500,7 +702,8 @@ function fillkinds() {
     seen[a[i].tag] = 1;
     o = make("option", "", a[i].tag); o.value = a[i].tag; sel.appendChild(o);
   }
-  sel.value = seen[keep] ? keep : "";
+  if (curlog === "ioc") { o = make("option", "", "Excepted only"); o.value = "__exc"; sel.appendChild(o); }
+  sel.value = seen[keep] || (keep === "__exc" && curlog === "ioc") ? keep : "";
 }
 function addlink(box, label, url) {
   var a = make("a", "", label);
@@ -528,7 +731,7 @@ function loghits() {
   for (i = 0; i < a.length; i++) {
     r = a[i];
     txt = (r.raw || [r.when, r.sev, r.tag, r.main, r.sub, r.rep, r.intel].join(" ")).toLowerCase();
-    if (kind && r.tag !== kind) continue;
+    if (kind === "__exc" ? !(r.exc && excon(r.exc)) : kind && r.tag !== kind) continue;
     if (sev === "critical" && r.sev !== "critical") continue;
     if (sev === "warning" && r.sev !== "critical" && r.sev !== "warning") continue;
     if (q && txt.indexOf(q) < 0) continue;
@@ -608,6 +811,7 @@ function downloadcsv() {
 function drawlog() {
   var box = byid("l_rows"), a = logs[curlog], hits = loghits(), i, r, row, top, pages, end, lk;
   byid("l_csv").className = hits.length ? "btn" : "btn dis";
+  put("l_clear", "Clear " + lognames[curlog] + " Log", a.length ? "btn" : "btn dis");
   pages = Math.max(1, Math.ceil(hits.length / pagesize));
   if (curpage >= pages) curpage = pages - 1;
   end = Math.min(hits.length, (curpage + 1) * pagesize);
@@ -620,6 +824,7 @@ function drawlog() {
     top.appendChild(make("span", "when num", r.when));
     if (r.sev) top.appendChild(make("span", r.sev === "critical" ? "tag bad" : r.sev === "warning" ? "tag warn" : "tag off", r.sev));
     top.appendChild(make("span", r.bad || r.score >= 75 ? "tag bad" : r.score >= 25 ? "tag warn" : "tag", r.tag));
+    if (r.exc && exc[r.exc] && excon(r.exc)) top.appendChild(make("span", "tag off", "excepted"));
     row.appendChild(top);
     row.appendChild(make("div", "main mono", r.main));
     if (r.sub) row.appendChild(make("div", "sub", r.sub));
@@ -627,6 +832,7 @@ function drawlog() {
     if (r.intel) row.appendChild(make("div", "sub", r.intel));
     lk = make("div", "links");
     addlinks(lk, r.indicator);
+    if (r.exc && exc[r.exc]) lk.appendChild(excswitch(r.exc));
     if (lk.firstChild) row.appendChild(lk);
     box.appendChild(row);
   }
@@ -674,7 +880,606 @@ function loadlist(name) {
     if (!a.length) box.appendChild(make("div", "off", "Nothing listed."));
   });
 }
+var tvmap = { cols: 288, rows: 105, step: 1.25, top: 75.0, mask: "AAAAAADw9wDz/wAA/P///wEAAAAAAAD4AADg//8HANAAAAAAAAAAAADwf9///wcA+P///wAAAAAAAAA8gBv//////wAHAAAAAwAAAAD4/58//38A+P//fwAAAAAAAAAewP////////b/AQCAA8D/AwAG/v88//8B8P//fwACAAD+AQD44Pv//////////wCAAPD///v/////+/0H8P//PwAAAMD/P8CI//v/////////////D/j/////////f+wf4P//AwAAAPD//5n///////////////////D/////////f+x/4P8/AAwAAPz///v///////////////////z/////////H/x34P8P4B8AAP7/D///////////////////MPz///////////4fwP8A4B8AAP/9////////////////////wPD///////9/+IAfgP8AAAMAwP/+////////////////////APj///////8/IH8WAH8AAAAE8D/+//////////////////8fAPz///////8fAP4RAD4AAABA8P/+////////////////H/8DAMD/gP////8fAP45AAAAAAAA8P/8////////////////jw8AAAA9APz///8/AP5/AAAAAAA8cH78//////////////8B4AcAAAA3APj/////A/x/AAAAAAB8wH////////////////8A8AcAAOABAOD/////P///AQAAAAB+wA/+/////////////z8A8BMAADAAAGD/////f///BwAAAID/gP////////////////8F8AMAAAAAAOD/////f///DwAAAAD3+/////////////////8H8AAAAgAAAAD+//////7/DwAAAAD3+/////////////////8HYAAAAAAAAAD+////////DQAAAAD4//////////////////8HAAAAAAAAAAD8//////8/HgAAAADA//////////////////8PAAAAAAAAAADw//////8fPwAAAADw//////////////////8GAAAAAAAAAADw////////KAAAAADA/////////////////38GAgAAAAAAAADw////////AAAAAACA/////X/+/////////38CAQAAAAAAAADw//////8/AQAAAACA//9/yD///////////x8uAAAAAAAAAADw//////8AAAAAAAD/P/9/AD/+/////////w8fAAAAAAAAAADw//////8AAAAAAAD+h55/Hn78/////////wEFAAAAAAAAAADw/////18AAAAAAAD+wbj////8/////////wADAAAAAAAAAADg/////x8AAAAAAAD/hrDn///8////////fgADAAAAAAAAAADg/////w8AAAAAAgD/ADz////4////////8YADAAAAAAAAAADA/////w8AAAAAAAB+/gnG////////////4+ABAAAAAAAAAADA/////wcAAAAAAADY/wEY9P//////////4PwBAAAAAAAAAACA/////wcAAAAAAAD8/wEA9P//////////4f4AAAAAAAAAAAAA/v///wEAAAAAAAD//w8H8P//////////AQ8AAAAAAAAAAAAA/P///wAAAAAAAAD//x8/+///////////AQMAAAAAAAAAAAAA+P//fwAAAAAAAAD/////////////////AwAAAAAAAAAAAAAA+P//6QAAAAAAAID//////3//////////AwAAAAAAAAAAAAAA8P8H4AAAAAAAAPj//////3/+////////gwAAAAAAAAAAAAAA8P8HwAAAAAAAAPD////////8////////AQAAAAAAAAAAAAAAwP8HwAQAAAAAAPD/////7//z////////AgAAAAAAAAAAAAAAwP4DAAIAAAAAAPj///////8/4P////9/AwAAAAAAAAAAAAAAgP0D4AkAAAAAAPj/////n///wP////8/AwAAAAAAAAAAAAAAAPgD8gcAAAAAAPz/////v///gP////8PAAAAAAAAAAAAAAAAAPiHBz4AAAAAAPz/////v/9/AP8//r8AAAAAAAAAAAAIAAAAAPiPA+ABAAAAAPj/////P/9/APwf+J8BAAAAAAAAAAAAAAAAAOD/A9QXAAAAAPj/////f/4/APwP+L8AAwAAAAAAAAAAAAAAAID/AwBAAAAAAPz///////4fAPwD+H8AAwAAAAAAAAAAAAAAAADuHwAAAAAAAPz///////wDAPwB2H+AAwAAAAAAAAAAAAAAAADAPwCAAAAAAPz///////8AAPgAwP8ABwAAAAAAAAAAAAAAAAAAHwAAAAAAAPz//////z8AAPgBwP8ADwAAAAAAAAAAAAAAAAAAHGABAAAAAPz//////wcBAPAAgPyAHgAAAAAAAAAAAAAAAAAAOPj/AAAAAPD///////8BAPAAwHiADgAAAAAAAAAAAAAAAAAA+Pv/AAAAAOD///////8BAOABwDBAHAAAAAAAAAAAAAAAAAAA4P7/AQAAAOD///////8BAOADwAAgPgAAAAAAAAAAAAAAAAAAAP7/AwAAAMD///////8AAAADgAMgOgAAAAAAAAAAAAAAAAAAAPz/PwAAAAD/8f///38AAAAAMAfwCQAAAAAAAAAAAAAAAAAAAPz/fwAAAAAG8P///38AAAAAcAd4IAAAAAAAAAAAAAAAAAAAAP7//wAAAAAAgP///z8AAAAA8AZ+AAAAAAAAAAAAAAAAAAAAAP7//wAAAAAAgP///x8AAAAAwI9/QAAAAAAAAAAAAAAAAAAAAP///wEAAAAAoP///wcAAAAAwI9/TwAAAAAAAAAAAAAAAAAAgP///wcAAAAAgP///wMAAAAAAI+/Rx8AAAAAAAAAAAAAAAAAgP///x8AAAAAgP///wMAAAAAgB+/W+4AAAAAAAAAAAAAAAAAgP////8BAAAAAP///wAAAAAAAH6f4/8HAwAAAAAAAAAAAAAAgP////8HAAAAAP7//wAAAAAAAByIB/gfBgAAAAAAAAAAAAAAgP////8PAAAAAP7//wAAAAAAADiAAcC/EwAAAAAAAAAAAAAAgP////8PAAAAAPz//wAAAAAAAPAHAIJ/MAAAAAAAAAAAAAAAAP////8PAAAAAPz//wAAAAAAAMD/NcJ3oQAAAAAAAAEAAAAAAP7///8PAAAAAPz//wAAAAAAAACgGQDnBAEAAAAAAAAAAAAAAP7///8HAAAAAPz//wEAAAAAAAAACQCGAQIAAAAAAAAAAAAAAPz///8DAAAAAPj//wEAAAAAAAAAAD8GBAAAYAAAAAAAAAAAAPz///8DAAAAAPz//8EAAAAAAAAAAD8GAAAAQAAAAAAAAAAAAPj///8BAAAAAP7//8EBAAAAAAAA8D8OAAAAAAAAAAAAAAAAAPj///8BAAAAAP7///EBAAAAAAAA+D8eACAAAQAAAAAAAAAAAOD///8BAAAAAP7///gAAAAAAAAA/v8fAEAAAAAAAAAAAAAAAID///8BAAAAAP7/P/gAAAAAAAAA/v8fAEBAAAAAAAAAAAAAAID///8BAAAAAPz/H/gAAAAAAAAA//9/AAAAAAAAAAAAAAAAAAD///8AAAAAAPz/D3hAAAAAAADw////ADgAAAAAAAAAAAAAAID//38AAAAAAPj/H3wAAAAAAAD4////ABAAAAAAAAAAAAAAAID//38AAAAAAPj/H3wAAAAAAAD4////AQAAAAAAAAAAAAAAAID//wcAAAAAAPj/HzgAAAAAAAD8////AwAAAAAAAAAAAAAAAID//wMAAAAAAPD/BxgAAAAAAAD4////BwAAAAAAAAAAAAAAAID//wEAAAAAAPD/BwAAAAAAAAD8////BwAAAAAAAAAAAAAAAID//wMAAAAAAPD/AwAAAAAAAAD4////BwAAAAAAAAAAAAAAAMD//wEAAAAAAOD/AwAAAAAAAAD4////BwAAAAAAAAAAAAAAAMD//wAAAAAAAOD/AQAAAAAAAADw////BwAAAAAAAAAAAAAAAMD/fwAAAAAAAMD/AAAAAAAAAADw////BwAAAAAAAAAAAAAAAMD/PwAAAAAAAMB/AAAAAAAAAADwD/j/AwAAAAAAAAAAAAAAAMD/PwAAAAAAAMAPAAAAAAAAAADwAPD/AQAAAAAAAAAAAAAAAOD/AwAAAAAAAAAAAAAAAAAAAAAAAMD/AQAMAAAAAAAAAAAAAOD/BwAAAAAAAAAAAAAAAAAAAAAAAID/AAAYAAAAAAAAAAAAAOD/AwAAAAAAAAAAAAAAAAAAAAAAAAD/AAB4AAAAAAAAAAAAAOD/AAAAAAAAAAAAAAAAAAAAAAAAAAAoAAB4AAAAAAAAAAAAAPA/AAAAAAAAAAAAAAAAAAAAAAAAAAB4AAA2AAAAAAAAAAAAAPAfAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAeAAAAAAAAAAAAAPAfAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAHBAAAAAAAAAAAAPAPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMADAAAAAAAAAAAAAPAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOABAAAAAAAAAAAAAPgPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAPgPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgDAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPiDAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKAfAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  coast: "zBu`@CLNPb@JZAOUHS[OMGQASJHL cwAr@a@Le@JMHIHCJ_@JEHP@CLQJKTK??FMBDBUF@DL@BEPARCNKHKJOXINDJDANNDHATAPORCBDX?GOMEDUHOd@QN?\\SDHF@BG?GNIUEM?@E\\?FKPCFI[CIE_@FAFE^UJOUUKQ?QFMDUB kfAyAGGQIMMIOG?IHAFKDQD@FL?CHLFJPMP@HUPV@DL?PPL@RF\\@ETFFKLAHEVFFIL?NA@YHEHO@QAQKMMDOCCOGCWCMOIK ny@{m@JFZAVCII[CQDGD ry@mo@H?d@ABCg@?MB@@ n{@gp@WFBD\\BNCHG?GY@I? bv@om@^Ar@EFK@IRGh@ATGGGg@@UDg@?QFDDWDKB[?[@_@Cg@Aa@@SFEFLBZDXCx@Bh@? pdA{o@[BDDd@DZEOG[A jdAgp@YBVB^??CSCI? lh@qJI@CBBBN?J@?IAAO? no@qJM@IBCDL?DBJCHEAEG?C? lr@oMQ@O?QDGFSAEBQJKHE?KB@DO?MF@BLBJ?LA\\@MIFEJ?FEBKJ?PCDCXCFCGCRALHF?BDF@HAKECGGCICOACA va@a_@HJLPMGKDDDQDGESFDLMCAHGLHNF@LCCOBCVPJ?MIRCR?f@?@EKGFCOKS_@MKOEI?BD ls@ug@UDWD?HOAMFPD\\EJGRHZHFIX@OICOEQM?CHICKD fp@gl@SEk@H[FAHe@ESLo@FQFQPb@Ho@J]D]P]?DL`@VVG^SX@@JSJ[HGBKRDLXCp@O[NUJAFt@Gh@KVIEE\\IZI?Dx@BPGMMe@?g@CDEGIWSBGFG\\Ih@EMCTMP?NGHDb@BfAEj@E^ANGSGZ?DSOQSGs@ENJOLQOs@Ia@T@Je@E `z@im@i@?e@B\\PVBTNTAJO?IIISC v}@ml@TMUGWBc@CEDRH_@FBP`@FPALEp@O?Ei@@ jbAkn@QCS?CHJHbA@p@H\\?BEi@IxABZC[SQEw@Fc@Ja@?ZQQGU@EHGF xkAqn@a@Oi@K]?[A@LNFP?d@F^BZC |jAom@[Bq@?SDUFXDn@LXL?Fr@HHGl@KGGMMQMRKcAA `gBwd@O@AFJ@JALESC v~Agc@K@IDPHRFHEBIQEKC |qAw`@SADTONF?JGDIJE@I?EIB jmAg^IHSFGJH@`@GDGPE@ETCDI?EUBKBQ@GD hjB{f@KBKAODS@@@LBNCFCP@BAAG |`Aqp@g@@u@FMHGF^A^El@ASEVC@G qScUO?QELHABRFHABGI?AE mOaU@D\\@?CVCCGIDO?O?@BKA }]xFEFELAVEF@HBDDKBDCN@FDB@PFTHZJd@FZFTNDPFJENEBI@QFO?MAOIA?GIMAMDGBM?QEIAMI?KCGCG?KKOKEI@GG@IMAKEIEH ogB|HKJD@DG?E ggBxHBE?OIDCNDAB@ {rAhC@OCECGCD?HHL sfBdLOJIHFBHELGLKJMBEI?IFIDED k~AhAGDAHDDBKBGFEJILECCKDEBGBGH q}ArBHDJBH?NEJEAEQBIACIA?AHK?EGIE@KKACB?JDJH@BB idBpEEDL?FKKBC@ adB~DBBLQBKE?GNGH qcBdEF?LABCAGMBEBCD wbB~CED?BNGHEFGCAGDOF eaBjCGDB@FCFG?CKF w_BhBEDGJID@DD@FGHKBOCAAD qmB`XFHHLNF@EFAIODKTGAGMEAO?KFM?CHGLQHMG?KHMDEPMRAMGDCNODK@KGI@BPDJNADDAH@B aiBfZOKKIIMEECIMICFCFOGCF?HDFLNHFGHN?NDDLJRNHHBP?JETABEIOYSKCOE i{AnXK@AVFD@NDELLB?LAJO@MJO?IM@SDIAOC ymAbSRHPDBHDFP?J@PCL@L@JHD?HBHFLAL?RKJC?KIACC?GAM@KHSBK?IFM?EFGBOHOBGIFFQIDEF?IHO@EBEAKCCAI@KGMALGMQEGGOGIAC@OEKACEE?I?UEIIEIIIAG?IMQGPICFIEIIBAMIIEGIC?EG@?CIAICMHKJK?K@BKIOGC@EGKKEI@QC?INEKCKDKFOBEAKDKCG?CAIHDHFFD?AFDHFHADOJODIDMJE?IDCDQDMECKCGAKEO@G?E@KCOAC@ECICK?EGEEHAJC@AFEHAJ?FELMEEFIF@FCPAHE@EP@HELUHMHKF@BKLGRGCGHCCCTMJIFONCNAH@LIN@PBHBP?HBLFRNFFNDHDPFHBLBLADJFT?PFHFJFNGJCAIHBPLPEHAJAREJKBOBIHGRAEIBMHLPBKKAKGI@MNPJDFNNG?KJMHGCCXKL?RIb@@XDTFRA cr@uCBRFDPBFOB[G_@MHILIT {oAv@UDENNIN?J?L?CKY? inAjALCBGSACFDD }nAk@AJK@AF@NHA@LGHD@FKDYCOEG ykAQW?SMABNRLBRC^?PBBLQPKGc@G?HHCFJPFSXBDQV?JJDFEIORFBEAGLKASLDAV?ZJBFEEQBSF?DMGMAMI_@CGQMODW@ ejAlEXMQCIDGD@BF@ yjAhDM?QG@H\\DZA?GOCKD }hAfDKACFTBL@J?GIIAEEGD ybA~BAFe@@EGc@FGL]BWJTFTIP@TAPCVGLAFBb@GBIP?MSW@ODG@ g`ATALGHM@ILBV@^T?NQXOFKNOHMN[NQDOFOPMHONKRU@IK@_@BQPMLKFQTU?OLKNMHFNKFG? ojA}FHOQ@EDBPHI skAgECEAKK?BJOQ@PFDDLDDJMCE _nAgDAJ?JDPFSFHENDFVKDMEIJGDFHALJBEGOKEKGEHOECIM?@OOHAHAF mcAkJNE@QIGUEK?CFFFDJNH ckAgNJ^HNHO@OKQOOIDBJ uwAoWPR?TFNCHHLXFb@@ZTLE?Ob@BTHV?SNL^JHHGCQJEFMSEIKSIMMg@EUBSc@MH]SIGMWBWGKUCIZ?N kyAoZMGCTZDPR^MHTT?BSIMUAE[EOUTODMB mDqXIEKL@XH?FDFE?WBKI@ mDsYMGCNFNFCDMCE wFab@EHJNTK@G]E rAsc@W?TRSAU?BNPPS@SXM@KVEFWB@JHDEHNHZ?`@DHCJHPALDJC]SQC^CDGUEJICM]@CKLKVCDEGGDEJH?SHIESOOO? `Hqh@BLULXLx@LPBXAv@GSGj@Ic@C?Eh@CKM_@A]L]KYD_@Ia@? ixAq`@GR@PGTU`@\\EJZQT?LNKJLBOAS@UCMA[JQA[QIFGICCL aiAyDXPIMMKKMISCNLJHL mkAkJ@FELBNJFBNCNK@GAYH@JEB@HNIFKBFLKPBHEAGECDE@FHKBG?SGFA_@EQK?KDEEAD gkAcF@IKDK??FHHJD?I?I mmAsFEVNE?DEJHD?MDABKK@?GJOQ@ED jo@mDK@MMGA?GCOKIK?ACO@OIGEGGG?EDBD@DH@EF?JHHGNG?EOFE?OWG@GGGELM@MH?DQ@UAIFO@KE?CWAW?NDEHO?OHANI?GBMFKL?HG?KHGDWBACO?SBGBMBUNAFG@CFKb@IBALNNEDc@@?ROKWDa@LIHBJWEe@H]?]NYTMDQ?GFEVCJF`@HJZZLVLND@DLAd@D\\@LDFBXRX@RPHBJT?\\FNFTDTNPR@LAJBRBHLHTb@PNLFFRLJFJTJNCH@PIL@JK@HYPBLMF@HPX\\Hf@BTACJBNCHJDTBPGFDARMDIGEJPDNJ@RDHP?NJDLSLSBFPVJJVPFFFETMHH?P?FBPFBPF@VGTMVI to@oCGHCPBBCPBJGDFHFJH@DDAHF@ADJFJBAFFLBJDBAPBBKHGICHHLNJDLIRDFMFMLGLGHQf@Sb@OX@DGNOLc@Te@RAFSHC\\A^Dj@Dh@Bd@JXAVDNE\\H\\L^J^F@ATERHJDd@DZKBEYMDHh@VGD`@PN]DTNFRA`@IJDJGL tm@~_@QB[LYFIIEMSGM@EHKLYLYBFHP@JGDFNDH?JANERAXKRIZW _[kq@g@C]?CDKEQA]BFBX@P@@@VBTCKGl@? m`@am@o@QDIm@IaAMaAAa@Gg@AMFLDfAHz@F|@R\\R^PCPe@NJ@~@CDGb@E@ISC@Kg@OPA cPaq@\\Jx@@x@CBCZATG}@E[BSEq@Dg@D mNuo@j@Hb@EMCJGi@CGF[B mHyp@GE]AYF_ALp@FHNPBHNV?h@KQE\\Ef@QNOw@EID[? to@oCDEBKCCBABEHEH@BDFDB?@BIJD@@@H@BK@BDABGFADAB?B?@B@AHCBEAA?EDCFCDA@EDCADBBBCFA@C?EAG@?@ACCFEFGBEHGHGACCBAABE@?BA@DJADAHCH?DCHCJ?HCHGVUHENEJ@NDH@LCLCPINATIPGBEJAREFGTKHKBIEA@ECE?EDI@GDIPSRMHMPG@CAKHEJIBMJ?JKFI@EHMFOAGNGD@JE@FAHALGFMLCDA?CFA?CJEDEDKHEREFEH?HI?GHGF?BHF@?DKJKNIHCAOBIHELI@BBELCJKAAG@GG?ILMJEFKFKFOFQBIJKHA@EJADCRABC@KRSN[?CHELQBOHICO?QDOGQAQAQB[DODIAC]FIPEEBODOB?d@SLGb@GJQAKVIBOVM?IJGPEDQVOJQPA^?VEh@SPCb@GZ@d@IVGTBCLJ@TBPDTBBIISUEDEXJLJZLMHPNTFRDDF\\HDHVFL?PBRFPD`@D@CUGQEUKWAIG[KCCOGAMKKVDDCJFJIDDFIRFJ?@KCEJGXBPIJC@KLGGKOIEIOAM@OGO?MEBGHCMGJ?TBDDLE\\BZEFGXK[Gk@IO?@Hi@?NKVGLIRGZGKIc@?WIEISGSAe@IQ@]K]DOFGCa@@@B_@BSAi@De@@O@YC]DUBe@B_@HS@QGWE]@]G_@EMFMCEIM@_@P[MANWCGEW@_@Fm@F[BSAYHZHc@Bu@AQCSJUIRGKGW?OAQBSJUAa@H_@C]?BKQC_@F?PKOO?ISTKVGAUWMY@SH[TPHe@B@R[OWLDLQLUMMQAU[@]@YHAHNJMH@Hd@LZ@TEDHPPDFVLZ@NF@JTBXNRTFN@V]@GRIL[Ce@FSFMHWDUF_@@U@@NERMT]ROEIUH]LK_@GUMKM@MLQVMWUHQD]MEa@DS@QCQDWJEFc@??PEVQBOJ[KSUKGOPYVUVFLYHQJ_@DMDGNMBGDAVLDLF`@DVP`@@j@C\\?R@NLXF\\ZTPOCa@Yg@O]AQHPJETENYHa@CSUALKFVJl@JPFVNLA@Qc@O^?TBADRHTDRDHJBB?JEHG?@EEB@DJ@H?NBF?J@ND]CEBZDL??CDDE@BLLN@EB?DECHCB?FDFHN@AEKHGBQ@HCJLAMD?PE@ADCRLNRDLJH?HF@DTLJHFJBLCLENIL?HGT?L?FDJD@HA@GFEHOHOBGCKBKNOFCRHBAHIJCT@PAN@F@CD?FCBB@FAFBL?LKP@LCJ@PBPNRFHHDF?LAHCDFPBL@Z@HCHEHCNMLCJGHUBGHQEMAOCKCKGEK?OCEMEUCO?K?EB?HJHBLC@BHBLDCB??@C@?BBHA@@FA@BHBB@@BDEBACEBA?CCE?A@A?I?I?EAAAE?E@C?CAI@A@EBEBG@ED@@@BAFBD@F@HAB?H@@@F?DBBADABA@CFGFIF pr@_EEF?BG?A?EBIAGCKCEEK?@@K@GBGDEB xk@iKACC?K?KDC?CDK?@DI?IFFFHCF?F?@BF?BCD@FLDC?CLCF@LAFBJEAGSBM@GEHG?GJACEK?QB gHyVMADNADBHNGHAZICIU@UA mV}ZWFYP wqA}SIKKBGIMDCDJJFEHBDJJE?I dI}J@IAIBIJGAG?IGEEI?EEMKMEAEK?IGMKEMSIGQAOMIEOOBYGOAKKKSIOGMSEMM?KHSASBG?SIUCKGSEa@C_@AIBSGS?GBM?UGM@?HOGABHH?HEB@PLHCHK?CHGBWDGAOBYFIPQB[FUHICIIDOEGOIKA[BEFG?EBS@EDY?SDSDG@OEGEQAMBEHCGODO?ICEE@AEICMAEGOIM@OCGDIGGJ@PCLJ\\@NITABFLBRKT?JSLIIOJIUQ]AGMe@@WKWEa@?a@L[FWCQ@WIAIBKJGJADEXQVGNIMCOOHG[G?EPBN@JDR@ND?JIDSABFTBXHJCCGREACSGDC^C?GR@DJNL?DHBDABVJFDLEJAFQDBBV@FDNHFGACLAH?VBMJH@J?HIBBCJKHFBIHID?HPCEHJ@GPL?NGFOBMFIHI?EBA?CJG@GAMAE@CBADEFCREJGPENMCAHG?GJADFDE?GCANANDAH@DEHQHINUNO?EDDBQDMDQHABBFJINAHJOF@HH@HNF@?ECKCCFIDIFCDGJCHGLANGPMLIDSHANGHBHFH@PJd@E\\D@J?JPLXB@DJJFNGJJFBLLBLLX?R?JFFFHADGDIRCFDHCH@CO@KHABEAMGG?GCK?GBE?G?MFG[MW@[?UBOA_@@IKCg@RUNI\\G@MYCa@DDWQHm@OEOQCOCIEQ][GO?CCO?CBMIBG@KFI?SCECEQAGCOE@HDDCDI@BFDANLEH?FUB@FUCIEUFIDME_@GWGSBADS?CI[EBO?OIKQGONO?COAKD@LE@KYEYASBUAUIRIb@@b@D^DJKRECSFQGKQKm@UMC@GZI`@DRLCJ^Nf@PLZMLSHPTTDF`@HPVAJNV?DQNUN]JKf@VZBXIFUDm@QKu@Qe@Se@[o@e@_@Ow@Wk@I_@@]Oe@?c@C}@LXDUJSEa@Ju@BkAVOF?LTH^DxAOLB_@LAH?RYDODAIJIMEo@JOEJMm@SQ@QDKMNKIKLKw@FIHV@?JMD_@CCKoB[O@RJY@KEe@A]GUJWKTKKEy@D[DgATMIRI@EVAGGJO?Ec@QMQMCu@BCJRNMDELBZUJHLd@ZU@GEUEEIQIJIGMTABIOSXOc@MBMIAIJFRU@HMa@Gi@?c@JPQ@Sa@Eq@@i@ANKWKU?g@Is@CECu@AOBk@Ie@?CISGo@Ga@DZDm@@CHSCy@?k@HOFBHTDr@HNDWB]BQCILIE_@C_ABCHsA@AMi@@_@?_@JIJJFWN_@FSS_@Fa@Ee@FMEa@@NQ[GsDJQJs@NoACg@@OF@NWD[Cc@Ac@Bg@Aa@PWENMIG}@Di@Ay@H[F ooBsg@XHXAQHKNIDAFDDb@Cv@LP@\\L\\LFFZMr@NHGPHZCDLVRAFUB@ZR@FNGF`@JFT\\BDTZPFMF]Jk@I[QK?G_@Ec@Wa@Sc@OO]V@JPr@TNYr@Fp@^OLj@B\\@?M\\CXHz@A`AD~@d@lAn@_@@IJSBKIU@[TAPNR@VF^\\ZFLXVZTJJZJJ?JIZL@FFAFFDD?LHBBBFDJBHB?H@@G@IHQVEJ?VFHPBNFP@@ICOHSOCLOHC@@D@@CB?DCEGCC@AEK@CJAFCZDNFRDIIBGOKJINDVLJJR@HHKJOB?HOBUMQFM?AJZBHJPHHLSHGRKPMN?NJBCJKDBNBNJ@LRNZPVZPZNT@JHFEJFZHRBDN@DH?DMEGZEF@ZPNPBLMTSXQJKNGd@@`@NLVJNPVPFKEMNKNAFKHSPGP?COP?@TH\\DN?NM?GPCPIHKBIHE@KJGJ?L@HADAJGDEP?DL@POVO@IJK@QFIAMBIFEBIHKHIBJ@KAKEQ@OEMFKAUFIDWBYFOLHTLJAJCEYBQNWCEJCLODI@IBIFKP?AFDJHC@@DAFA@FL?VB?NHHZLVVLJRL?FHDPDH@DNCXANFP?`@J@FNEDPDFJFDPQH[FSDIHQDYBKP[Fe@DY?WBSZJLAXWGGDETQNCDOLMd@B^?Z@d@ETCTAFYHAN@RHVEROREJQNYH@LEDFJACH@BELGPIBCFMF?F@FADEDCDAB@MEIEAED?JBJCFCA?DOCO?K@MMMKMMEEA@@F@BANGLKDMBK@IJEDEB?BFJ@DFDFLHABD@HAJ@BH?JD@HBBJ?FD?FHBJ?JDH?LDBH?DRF^HPLH@DAHFLBN@D?BDD?@DH?D@L?DKAKBEBMDGCA@GAC?GBIDE?GHEJQDOLMFALS@MAKJUHGHCDK?CDIDCFOJOHMH?CI?GCG@ADFBNBHDBDGHGL]@@GTKRO^GHEJQTB@?LWPCBERBBARGVGBIFKVEPIH[PIJKJEDIDCD?FJDGBGBCFGHI?SESAQEIAGCI?G?GCKAGEG??D@H?JBDBTHTJXP\\PTTXRP\\PRNTVBHBDLFDFD@BLDFBJFFHVAJKDADDJAD@HEJGRGBCH@RCN?^CHDLFLJJRFTHTTF@LNFB@LINCH?DC?@R@FCB@FHFNDVJFDAFC@@HBN@NDHLHB@FHDHHLVTLJLFTFH@@BJAHBTCJ@F?TFN@JFH?FEDAHG?@BCAKFMEC?MJSHONYLOFMBSDMD]?W@KFGHOJWBMNQ@O@KCQEQAIEQCGKKEIAM?KDEDKBK?CEGDSBMHKAC@EDONSRSLQJS?ECEEOCMBCEUCOFKHCBIBA?ERFFAFDNAHKFMLML?P?NBNB^JJDPDPEF?LCJ?VBLDRFBAD?RGPOPIJMDALGHIBG@MHKFGBADC@I@CDAJIF?BE?CDC@C@OAGFOHEGCIMCI?KCICQBS ~mBsi@n@O noB`ICA@H@@ umAfDM?GAE@DDTFNDLLND@CAEGKSGACOE noBcj@o@Nu@R@JMDDOu@Bg@PRH^@@PFBP?NEXEBIRAV@HECGVBIHJF noBuk@AAQ?[D@BRBX@ ooBgk@T?BEYG ooBjIJBLB@GICE?KE fe@j_@WKODKGOHBDZDFGPHHI aj@j]MDQBABDF^@?KCG?C inB|IECED@JL@HA@IGEG@ pe@wEKAC??NP@BAEE?G b`BqKC@A@EFFDD@BBBC?CBGAAAC?C?AA@G@ n`B_L@BD?BC@AAAE@E@ ~`BgL?@H??AI? vaBqLA?CF@?D?BC?AEA rbB{LABB@DCA?AAC? zo@wNE?GP?HD@BKFECK jp@wOIAM@?BTB@G ro@{OOFBLBAAIHG?A ~f@k\\EFOBQ?HFF?VGDEGE e\\{ZSSQCIKQCWGOBSACLBPNAPB?LRA?DKDGPWDCFDFABELAOOCEHMJNFREBPM?DLODBTCL@B\\D\\CLIPCDM?IECCGCOOADCHAHMHITWAMPQ hg@e^EAYDUF?BH?XEPI dq@ye@GEG?CBFJFADEAA ns@af@MG[??BVHL?BE ~m@ci@LDT?BIGIQCOD?F@B j{@qj@SJLDXEN@ZGQEMGSBKB paAul@UFKRELa@Hc@H@F^@KFDDb@Ab@ET@d@Dp@Bb@@JIXEP@VOKA_@A[?YCd@Cj@@Z?HGm@G^?`@EOMMGu@KSBHFm@EYHWIQFOPIGLSQAS@ zp@ol@TIAGGAm@@c@J?DRAT?TBDA mvA{l@QGYA[FAD\\?h@A@A s{Aan@q@BTF^Ad@GEEc@B wuAqn@u@?gAHNNhA?^Bf@MIKYC r|@{n@AAOF?JHL^@TC?I^?@MU?]E[? g_Aqp@s@JDFpBFe@YOAM? sy@sq@i@Eg@Jm@PDPh@@v@C`@GNMXCs@M ~z@kq@MESAFCm@AYJaAFOJWFZDb@Lb@@h@ATIAEOEd@?TEJIMG fx@er@]CW?e@C]GW@UDOKYAc@A}@AI@y@Ai@?k@@u@@i@@e@D@Bn@Hp@BPBk@?l@J`@D`@Nf@BLBz@@[@LBOHPD^DHFZDCBa@??Bt@Jr@Ex@B\\Ad@A@Ic@CHMMAs@HXM`@COGc@CEEZGFKu@@O@_@Gl@AdA@b@GNGVEBE f\\sr@cAKeA?YEeAA_D@}BNd@FjA?jB@IBeAA}@De@EOFTHs@E_BG{@BKFpALHB~@Bm@@VLNJ?VWJ\\@`@De@HCPT?YPj@@WFFDZBZ?YL?Ff@GHD[BYJEN`@BNGVIEJVJu@?[@t@Nt@Nz@FT?RFZRj@LJ@ZBZBPL?LHJ^NGNHNHRZ@\\Qf@?PILS`@WHMBQZQGMLGSW]EGGCOTDJBP@VE@MGIS?g@B`@KPER@NEUQJGNKVUXG?Gt@Kh@At@@n@?VE`@Ks@Eg@ArACl@GAGkAIiAIGGt@EOGeAM]AHIo@C}@C}@?UDs@Io@D[@i@Dn@IAG raA_m@Y?OBPJ\\MEA",
+  countries: "ZW|29.9|-18.9|1.2|Zimbabwe;ZM|26.4|-14.7|1.8|Zambia;YE|45.9|15.3|1.5|Yemen;VN|105.4|21.7|1.7|Vietnam;VE|-64.6|7.2|2.1|Venezuela;VA|12.5|41.9|0.3|Vatican;VU|166.9|-15.4|0.8|Vanuatu;UZ|64.0|41.7|2.0|Uzbekistan;UY|-56.0|-33.0|0.8|Uruguay;FM|158.2|6.9|1.7|Micronesia;MH|171.2|7.1|0.9|Marshall Is.;MP|145.7|15.2|0.3|N. Mariana Is.;VI|-64.8|17.7|0.3|U.S. Virgin Is.;GU|144.7|13.4|0.3|Guam;AS|-170.7|-14.3|0.3|American Samoa;PR|-66.5|18.2|0.3|Puerto Rico;US|-97.5|39.5|3.0|United States of America;GS|-31.1|-55.7|1.2|S. Geo. and the Is.;IO|71.3|-6.2|0.3|Br. Indian Ocean Ter.;SH|-5.7|-16.0|1.4|Saint Helena;PN|-128.3|-24.4|0.3|Pitcairn Is.;AI|-63.0|18.2|0.3|Anguilla;FK|-58.7|-51.6|0.3|Falkland Is.;KY|-81.2|19.3|0.3|Cayman Is.;BM|-64.8|32.3|0.3|Bermuda;VG|-64.6|18.4|0.3|British Virgin Is.;TC|-71.8|21.8|0.3|Turks and Caicos Is.;MS|-62.2|16.7|0.3|Montserrat;JE|-2.1|49.2|0.3|Jersey;GG|-2.6|49.5|0.3|Guernsey;IM|-4.5|54.2|0.3|Isle of Man;GB|-2.1|54.4|1.7|United Kingdom;AE|54.5|23.5|0.7|United Arab Emirates;UA|32.1|49.7|1.9|Ukraine;UG|32.9|2.0|0.9|Uganda;TM|58.7|39.9|1.7|Turkmenistan;TR|34.5|39.3|1.8|Turkey;TN|9.0|33.7|0.9|Tunisia;TT|-60.9|11.0|0.3|Trinidad and Tobago;TO|-175.2|-21.2|0.3|Tonga;TG|1.1|8.8|0.5|Togo;TL|125.9|-8.8|0.4|Timor-Leste;TH|101.1|15.5|1.8|Thailand;TZ|35.0|-6.1|1.8|Tanzania;TJ|72.6|38.2|1.0|Tajikistan;SY|38.3|35.0|1.0|Syria;CH|7.5|46.7|0.5|Switzerland;SE|19.0|65.9|2.2|Sweden;SZ|31.5|-26.5|0.3|eSwatini;SR|-55.9|4.1|0.7|Suriname;SS|30.4|7.2|1.6|S. Sudan;SD|29.3|16.3|2.5|Sudan;LK|80.7|7.6|0.5|Sri Lanka;ES|-3.5|40.1|3.0|Spain;KR|128.1|36.4|0.9|South Korea;ZA|23.7|-29.7|3.0|South Africa;SO|45.2|3.6|2.0|Somalia;SB|159.2|-8.0|1.3|Solomon Is.;SK|19.0|48.7|0.5|Slovakia;SI|14.9|46.1|0.4|Slovenia;SG|103.8|1.4|0.3|Singapore;SL|-11.8|8.6|0.5|Sierra Leone;SC|55.5|-4.7|0.3|Seychelles;RS|20.8|44.2|0.7|Serbia;SN|-14.8|15.1|0.9|Senegal;SA|44.7|23.8|3.0|Saudi Arabia;ST|7.0|1.0|0.3|Sao Tome and Principe;SM|12.4|43.9|0.3|San Marino;WS|-172.4|-13.6|0.3|Samoa;VC|-61.3|13.1|0.3|St. Vin. and Gren.;LC|-61.0|13.9|0.3|Saint Lucia;KN|-62.8|17.3|0.3|St. Kitts and Nevis;RW|30.1|-1.9|0.3|Rwanda;RU|44.7|58.2|3.0|Russia;RO|25.0|45.7|1.1|Romania;QA|51.1|25.2|0.3|Qatar;PT|-8.3|39.6|2.6|Portugal;PL|19.5|52.0|1.3|Poland;PH|122.5|11.2|2.1|Philippines;PE|-72.9|-13.0|2.5|Peru;PY|-60.1|-21.7|1.4|Paraguay;PG|143.9|-5.7|2.1|Papua New Guinea;PA|-80.4|8.7|0.6|Panama;PW|134.6|7.5|0.7|Palau;PK|68.5|29.3|2.4|Pakistan;OM|57.3|22.1|1.5|Oman;NO|9.7|61.4|3.0|Norway;KP|126.4|39.9|1.0|North Korea;NG|7.5|9.4|1.8|Nigeria;NE|9.5|17.4|2.3|Niger;NI|-85.1|12.7|0.7|Nicaragua;NZ|172.8|-39.8|3.0|New Zealand;NU|-169.9|-19.0|0.3|Niue;CK|-159.8|-21.2|0.3|Cook Is.;NL|5.6|52.4|3.0|Netherlands;AW|-70.0|12.5|0.3|Aruba;CW|-68.9|12.1|0.3|Curacao;NP|83.6|28.3|1.0|Nepal;NR|166.9|-0.5|0.3|Nauru;NA|17.1|-20.6|2.1|Namibia;MZ|37.8|-13.9|2.2|Mozambique;MA|-7.2|31.7|2.5|Morocco;EH|-12.6|24.0|1.3|W. Sahara;ME|19.1|42.8|0.3|Montenegro;MN|104.2|46.0|3.0|Mongolia;MD|28.5|47.4|0.5|Moldova;MC|7.4|43.7|0.3|Monaco;MX|-102.3|23.9|3.0|Mexico;MU|57.6|-20.3|0.3|Mauritius;MR|-9.7|19.6|2.1|Mauritania;MT|14.4|35.9|0.3|Malta;ML|-2.0|18.7|2.6|Mali;MV|73.5|4.2|0.3|Maldives;MY|113.8|2.5|1.9|Malaysia;MW|33.6|-13.4|0.8|Malawi;MG|46.7|-18.6|1.6|Madagascar;MK|21.6|41.6|0.3|North Macedonia;LU|6.1|49.7|0.3|Luxembourg;LT|24.1|55.1|0.6|Lithuania;LI|9.6|47.1|0.3|Liechtenstein;LY|18.0|26.6|2.5|Libya;LR|-9.5|6.4|0.7|Liberia;LS|28.2|-29.5|0.4|Lesotho;LB|36.0|34.1|0.3|Lebanon;LV|25.5|57.1|0.7|Latvia;LA|102.5|19.4|1.3|Laos;KG|74.5|41.7|1.1|Kyrgyzstan;KW|47.3|29.4|0.3|Kuwait;XK|20.9|42.6|0.3|Kosovo;KI|-157.4|1.8|3.0|Kiribati;KE|37.9|0.5|1.5|Kenya;KZ|68.7|49.1|3.0|Kazakhstan;JO|36.4|30.8|0.7|Jordan;JP|138.4|36.1|3.0|Japan;JM|-77.3|18.1|0.3|Jamaica;IT|11.1|44.7|1.9|Italy;IL|34.8|30.9|0.4|Israel;PS|35.3|32.0|0.3|Palestine;IE|-7.8|53.1|0.7|Ireland;IQ|43.3|33.1|1.5|Iraq;IR|54.9|32.2|2.8|Iran;ID|101.9|-1.0|3.0|Indonesia;IN|79.4|22.7|3.0|India;IS|-18.7|64.8|1.0|Iceland;HU|19.4|47.1|0.7|Hungary;HN|-86.9|14.8|0.8|Honduras;HT|-72.2|19.3|0.4|Haiti;GY|-58.9|5.1|1.0|Guyana;GW|-14.5|12.2|0.4|Guinea-Bissau;GN|-10.0|10.6|1.1|Guinea;GT|-90.5|15.0|0.7|Guatemala;GD|-61.7|12.1|0.3|Grenada;GR|21.7|39.5|1.3|Greece;GH|-1.0|7.7|0.9|Ghana;DE|9.7|51.0|1.4|Germany;GE|43.7|41.9|0.7|Georgia;GM|-15.0|13.6|0.3|Gambia;GA|11.8|-0.4|1.0|Gabon;FR|2.6|46.7|3.0|France;PM|-56.3|47.0|0.3|St. Pierre and Miquelon;WF|-178.1|-14.3|0.3|Wallis and Futuna Is.;MF|-63.0|18.1|0.3|St-Martin;BL|-62.8|17.9|0.3|St-Barthelemy;PF|-149.5|-17.6|2.3|Fr. Polynesia;NC|165.1|-21.1|0.9|New Caledonia;TF|69.1|-49.3|1.3|Fr. S. Antarctic Lands;AX|19.9|60.2|0.3|Aland;FI|27.3|63.3|1.8|Finland;FJ|178.0|-17.8|3.0|Fiji;ET|39.1|8.0|2.2|Ethiopia;EE|25.9|58.7|0.6|Estonia;ER|38.3|15.8|1.0|Eritrea;GQ|9.0|2.3|0.5|Eq. Guinea;SV|-88.9|13.7|0.3|El Salvador;EG|29.4|26.2|1.8|Egypt;EC|-78.2|-1.3|1.7|Ecuador;DO|-70.7|19.1|0.5|Dominican Rep.;DM|-61.3|15.5|0.3|Dominica;DJ|42.5|12.0|0.3|Djibouti;GL|-39.3|74.3|3.0|Greenland;FO|-7.1|62.2|0.3|Faeroe Is.;DK|9.0|56.0|0.8|Denmark;CZ|15.4|49.9|0.7|Czechia;CY|33.1|34.9|0.3|Cyprus;CU|-78.0|21.3|1.0|Cuba;HR|16.4|45.8|0.8|Croatia;CI|-5.6|7.5|1.0|Cote d'Ivoire;CR|-84.1|10.1|0.5|Costa Rica;CD|23.5|-1.9|3.0|Dem. Rep. Congo;CG|15.9|0.1|1.3|Congo;KM|43.3|-11.7|0.3|Comoros;CO|-73.2|3.4|2.4|Colombia;CN|106.3|32.5|3.0|China;MO|113.6|22.1|0.3|Macao;HK|114.1|22.4|0.3|Hong Kong;CL|-72.3|-38.2|3.0|Chile;TD|18.6|15.1|2.2|Chad;CF|20.9|7.0|1.8|Central African Rep.;CV|-23.6|15.1|0.4|Cabo Verde;CA|-101.9|60.3|3.0|Canada;CM|12.5|4.6|1.6|Cameroon;KH|104.5|12.6|0.8|Cambodia;MM|95.8|21.6|2.2|Myanmar;BI|29.9|-3.3|0.3|Burundi;BF|-1.4|12.7|1.1|Burkina Faso;BG|25.2|42.5|0.7|Bulgaria;BN|114.6|4.4|0.3|Brunei;BR|-49.6|-12.1|3.0|Brazil;BW|24.2|-22.1|1.5|Botswana;BA|18.1|44.1|0.5|Bosnia and Herz.;BO|-64.6|-16.7|2.1|Bolivia;BT|90.0|27.5|0.4|Bhutan;BJ|2.4|10.3|0.7|Benin;BZ|-88.7|17.2|0.3|Belize;BE|4.8|50.8|0.5|Belgium;BY|28.4|53.8|1.1|Belarus;BB|-59.6|13.2|0.3|Barbados;BD|89.7|24.2|0.9|Bangladesh;BH|50.6|26.1|0.3|Bahrain;BS|-77.1|26.4|1.0|Bahamas;AZ|47.2|40.4|0.7|Azerbaijan;AT|14.1|47.5|0.7|Austria;AU|134.0|-24.1|3.0|Australia;HM|73.5|-53.1|0.3|Heard I. and McDonald Is.;NF|168.0|-29.0|0.3|Norfolk Island;AM|44.8|40.5|0.5|Armenia;AR|-64.2|-33.5|3.0|Argentina;AG|-61.8|17.4|0.3|Antigua and Barb.;AO|18.0|-12.2|2.2|Angola;AD|1.5|42.5|0.3|Andorra;DZ|2.8|27.4|3.0|Algeria;AL|20.1|40.7|0.4|Albania;AF|66.5|34.2|1.9|Afghanistan;AQ|35.9|-79.8|3.0|Antarctica;SX|-63.1|18.0|0.3|Sint Maarten;TV|179.2|-8.5|0.3|Tuvalu" };
+var tv = { open: false, full: false, poll: null, beat: null, raf: 0, clock: null, seq: -1, ts: 0, first: 0, home: "", homeip: "", homepos: null, skynet: 0, geomonth: "",
+  started: 0, lastdata: 0, alerts: {}, samples: [], events: [], arcs: [], marks: {}, live: true, rtimers: [], tab: "feed", W: 0, H: 0, s: 1, ox: 0, oy: 0,
+  dpr: 1, base: null, fx: null, land: null, coast: null, cc: {}, geo: null, geoload: 0, still: false, basetime: 0, tipcc: "" };
+var tvcolors = { critical: [255, 95, 82], warning: [255, 193, 77], bg: [143, 180, 200] };
+var tvkeep = 900, tvmaxarcs = 160;
+
+function tvinitmap() {
+  var b = atob(tvmap.mask), i, a, c, p;
+  tv.land = [];
+  for (i = 0; i < tvmap.cols * tvmap.rows; i++) if ((b.charCodeAt(i >> 3) >> (i & 7)) & 1) tv.land.push(i);
+  tv.coast = [];
+  a = tvmap.coast.split(" ");
+  for (i = 0; i < a.length; i++) tv.coast.push(tvdecode(a[i]));
+  a = tvmap.countries.split(";");
+  for (i = 0; i < a.length; i++) { c = a[i].split("|"); if (c.length === 5) tv.cc[c[0]] = { lon: +c[1], lat: +c[2], r: +c[3], name: c[4] }; }
+  p = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  tv.still = !!(p && p.matches);
+}
+function tvdecode(s) {
+  var pts = [], i = 0, x = 0, y = 0, k, r, sh, b, v;
+  while (i < s.length) {
+    for (k = 0; k < 2; k++) {
+      r = 0; sh = 0;
+      do { b = s.charCodeAt(i++) - 63; r |= (b & 31) << sh; sh += 5; } while (b >= 32 && i < s.length);
+      v = (r & 1) ? ~(r >> 1) : (r >> 1);
+      if (k) y += v; else x += v;
+    }
+    pts.push([x / 10, y / 10]);
+  }
+  return pts;
+}
+function tvipnum(ip) {
+  var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  return m ? ((+m[1]) * 16777216 + (+m[2]) * 65536 + (+m[3]) * 256 + (+m[4])) : -1;
+}
+function tvlookup(ip) {
+  var g = tv.geo, n = tvipnum(ip), lo = 0, hi, mid;
+  if (!g || n < 0) return "";
+  hi = g.n - 1;
+  while (lo < hi) { mid = (lo + hi + 1) >> 1; if (g.start[mid] <= n) lo = mid; else hi = mid - 1; }
+  return g.start[lo] <= n ? g.code[lo] : "";
+}
+function tvloadgeo() {
+  var x = new XMLHttpRequest();
+  if (tv.geoload && Date.now() - tv.geoload < 300000) return;
+  tv.geoload = Date.now();
+  x.open("GET", datapath + "geoip.htm?m=" + encodeURIComponent(tv.geomonth || "x") + "l1", true);
+  x.onreadystatechange = function () {
+    if (x.readyState !== 4) return;
+    var t = x.status === 200 ? x.responseText : "", lines, i, m, start = [], code = [], ok = t.substring(0, 8) === "iocmon=1";
+    if (ok && t.substring(0, 300).indexOf("\nfmt=2\n") < 0) {
+      tvnote("The country table on the router is from an older IOCMON. The monitor rebuilds it at its next cycle; reopen Threat View after that.");
+      return;
+    }
+    if (ok) {
+      lines = t.split("\n");
+      for (i = 1; i < lines.length; i++) {
+        m = /^([0-9a-f]{1,8})([A-Z]{2}|--)$/.exec(lines[i]);
+        if (m) { start.push(parseInt(m[1], 16)); code.push(m[2] === "--" || m[2] === "ZZ" ? "" : m[2]); }
+      }
+    }
+    if (start.length > 1000) {
+      tv.geo = { start: new Float64Array(start), code: code, n: start.length };
+      tvhome();
+      tvnote("");
+    } else {
+      tvnote("Country table not ready yet: IOCMON downloads it once a month while a USB drive is in use. The feed works meanwhile; arcs appear once it is built.");
+    }
+  };
+  x.send(null);
+}
+function tvnote(t) { var e = byid("tv_note"); e.textContent = t; e.style.display = t ? "block" : "none"; }
+function tvmsg(t) { var e = byid("tv_msg"); e.textContent = t; e.style.display = t ? "block" : "none"; }
+
+function tvhome() {
+  var own = "", m, c;
+  try { own = localStorage.getItem("iocmon_tvhome") || ""; } catch (e) { own = ""; }
+  m = /^\s*(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)\s*$/.exec(own);
+  if (m && Math.abs(+m[1]) <= 90 && Math.abs(+m[3]) <= 180) { tv.homepos = { lat: +m[1], lon: +m[3] }; put("tv_home", m[1] + ", " + m[3] + " (set in this browser)"); return; }
+  c = tv.homeip ? tvlookup(tv.homeip) : "";
+  if (c && tv.cc[c]) { tv.homepos = { lat: tv.cc[c].lat, lon: tv.cc[c].lon }; put("tv_home", tv.cc[c].name + " (from the WAN address)"); }
+  else { tv.homepos = null; put("tv_home", tv.geo ? "unknown - set a location" : "waiting for the country table"); }
+}
+function tvsethome() {
+  var cur = "", v;
+  try { cur = localStorage.getItem("iocmon_tvhome") || ""; } catch (e) { cur = ""; }
+  v = window.prompt("Home location as latitude, longitude (for example 43.65, -79.38). Leave empty to use the WAN address's country. Kept only in this browser.", cur);
+  if (v === null) return;
+  try { if (/\S/.test(v)) localStorage.setItem("iocmon_tvhome", v); else localStorage.removeItem("iocmon_tvhome"); } catch (e) { }
+  tvhome();
+}
+
+function tvlayout() {
+  var st = byid("tv_stage"), w, h, aspect = 360 / (tvmap.rows * tvmap.step), b = byid("tv_base"), f = byid("tv_fx");
+  w = st.clientWidth;
+  if (!tv.full) { h = Math.round(w / aspect) + 20; st.style.height = h + "px"; } else { st.style.height = ""; h = st.clientHeight; }
+  if (w < 50 || h < 50) return;
+  tv.dpr = window.devicePixelRatio || 1;
+  tv.W = w; tv.H = h;
+  tv.s = Math.min(w / 360, (h - 20) / (tvmap.rows * tvmap.step));
+  tv.ox = (w - 360 * tv.s) / 2; tv.oy = (h - tvmap.rows * tvmap.step * tv.s) / 2 + 6;
+  b.width = f.width = Math.round(w * tv.dpr); b.height = f.height = Math.round(h * tv.dpr);
+  b.style.width = f.style.width = w + "px"; b.style.height = f.style.height = h + "px";
+  tv.base = b.getContext("2d"); tv.fx = f.getContext("2d");
+  tv.base.setTransform(tv.dpr, 0, 0, tv.dpr, 0, 0); tv.fx.setTransform(tv.dpr, 0, 0, tv.dpr, 0, 0);
+  tvdrawbase();
+}
+function tvx(lon) { return tv.ox + (lon + 180) * tv.s; }
+function tvy(lat) { return tv.oy + (tvmap.top - lat) * tv.s; }
+function tvsun(t) {
+  var n = t / 86400000 - 10957.5, rad = Math.PI / 180, L = (280.46 + 0.9856474 * n) % 360, g = (357.528 + 0.9856003 * n) * rad;
+  var lam = (L + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * rad, eps = 23.439 * rad;
+  var dec = Math.asin(Math.sin(eps) * Math.sin(lam)), ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / rad;
+  var gmst = (18.697374558 + 24.06570982441908 * n) % 24, lon = ((ra - gmst * 15) % 360 + 540) % 360 - 180;
+  return { dec: dec, lon: lon };
+}
+function tvdrawbase() {
+  var c = tv.base, sun = tvsun(Date.now()), rad = Math.PI / 180, i, k, col, row, lon, lat, cz, d = Math.max(0.7, tv.s * tvmap.step * 0.36), pts, j, lx;
+  tv.basetime = Date.now();
+  c.clearRect(0, 0, tv.W, tv.H);
+  c.strokeStyle = "rgba(47,208,228,0.06)"; c.lineWidth = 1;
+  c.beginPath();
+  for (lon = -180; lon <= 180; lon += 30) { c.moveTo(tvx(lon), tvy(tvmap.top)); c.lineTo(tvx(lon), tvy(tvmap.top - tvmap.rows * tvmap.step)); }
+  for (lat = 60; lat >= -50; lat -= 30) { c.moveTo(tvx(-180), tvy(lat)); c.lineTo(tvx(180), tvy(lat)); }
+  c.stroke();
+  for (k = 0; k < tv.land.length; k++) {
+    i = tv.land[k]; col = i % tvmap.cols; row = (i - col) / tvmap.cols;
+    lon = -180 + tvmap.step * (col + 0.5); lat = tvmap.top - tvmap.step * (row + 0.5);
+    cz = Math.sin(lat * rad) * Math.sin(sun.dec) + Math.cos(lat * rad) * Math.cos(sun.dec) * Math.cos((lon - sun.lon) * rad);
+    c.fillStyle = cz > 0 ? "rgba(47,208,228," + (0.42 + 0.3 * cz).toFixed(2) + ")" : "rgba(47,208,228,0.16)";
+    c.beginPath(); c.arc(tvx(lon), tvy(lat), d, 0, 6.2832); c.fill();
+  }
+  c.save();
+  c.strokeStyle = "rgba(120,235,250,0.38)"; c.lineWidth = 0.8; c.shadowColor = "rgba(47,208,228,0.9)"; c.shadowBlur = 6;
+  c.beginPath();
+  for (k = 0; k < tv.coast.length; k++) {
+    pts = tv.coast[k]; lx = null;
+    for (j = 0; j < pts.length; j++) {
+      if (lx === null || Math.abs(pts[j][0] - lx) > 180) c.moveTo(tvx(pts[j][0]), tvy(pts[j][1])); else c.lineTo(tvx(pts[j][0]), tvy(pts[j][1]));
+      lx = pts[j][0];
+    }
+  }
+  c.stroke();
+  c.restore();
+  c.save();
+  c.strokeStyle = "rgba(255,193,77,0.28)"; c.lineWidth = 1; c.setLineDash([2, 4]);
+  c.beginPath();
+  for (lon = -180; lon <= 180; lon += 2) {
+    lat = Math.atan(-Math.cos((lon - sun.lon) * rad) / Math.tan(Math.abs(sun.dec) < 1e-4 ? 1e-4 : sun.dec)) / rad;
+    lat = Math.max(Math.min(lat, tvmap.top), tvmap.top - tvmap.rows * tvmap.step);
+    if (lon === -180) c.moveTo(tvx(lon), tvy(lat)); else c.lineTo(tvx(lon), tvy(lat));
+  }
+  c.stroke();
+  c.restore();
+}
+
+function tvpos(cc, ip) {
+  var c = tv.cc[cc], h = tvipnum(ip), a, r;
+  if (!c) return null;
+  if (h < 0) h = 0;
+  a = ((h * 2654435761) % 3600) / 10 * Math.PI / 180; r = c.r * ((h >>> 3) % 97) / 97;
+  return { lon: c.lon + r * Math.cos(a), lat: c.lat + r * Math.sin(a) * 0.7 };
+}
+function tvisdns(e) { return e.dir === "out" && (e.port === "53" || e.port === "853"); }
+function tvshown(e) {
+  if (e.sev === "bg" && tvisdns(e) && !byid("tf_dns").checked) return false;
+  if (e.dir === "in" && !byid("tf_in").checked) return false;
+  if (e.dir === "out" && !byid("tf_out").checked) return false;
+  if (e.blocked && !byid("tf_blk").checked) return false;
+  if (!e.blocked && !byid("tf_ok").checked) return false;
+  if (byid("tf_flag").checked && e.sev === "bg") return false;
+  return true;
+}
+function tvlaunch(e, when) {
+  var p, x0, y0, x1, y1, h, dist, cx, cy, rgb = tvcolors[e.sev];
+  if (!tv.homepos || !e.cc || !tvshown(e)) return;
+  p = tvpos(e.cc, e.ip);
+  if (!p) return;
+  if (tv.arcs.length >= 600) tv.arcs.shift();
+  h = { x: tvx(tv.homepos.lon), y: tvy(tv.homepos.lat) };
+  if (e.dir === "out") { x0 = h.x; y0 = h.y; x1 = tvx(p.lon); y1 = tvy(p.lat); } else { x0 = tvx(p.lon); y0 = tvy(p.lat); x1 = h.x; y1 = h.y; }
+  dist = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+  cx = (x0 + x1) / 2; cy = Math.max(4, (y0 + y1) / 2 - Math.min(dist * 0.38, tv.H * 0.42));
+  tv.arcs.push({ x0: x0, y0: y0, x1: x1, y1: y1, cx: cx, cy: cy, t0: when, dur: 1300 + dist / Math.max(tv.W, 1) * 2600, rgb: rgb,
+                 w: e.sev === "critical" ? 2.6 : e.sev === "warning" ? 1.9 : 1.1, a: e.blocked ? 0.5 : 0.95, dash: e.blocked });
+  tvmark(e, when);
+}
+function tvmark(e, when) {
+  var m = tv.marks[e.cc];
+  if (!m) m = tv.marks[e.cc] = { n: 0, last: 0, sev: "bg", ips: {} };
+  m.n += e.count; m.last = Math.max(m.last, when);
+  if (e.sev === "critical" || (e.sev === "warning" && m.sev === "bg")) m.sev = e.sev;
+}
+function tvbez(a, t) {
+  var u = 1 - t;
+  return { x: u * u * a.x0 + 2 * u * t * a.cx + t * t * a.x1, y: u * u * a.y0 + 2 * u * t * a.cy + t * t * a.y1 };
+}
+function tvrgba(rgb, a) { return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + a.toFixed(3) + ")"; }
+function tvframe() {
+  var c = tv.fx, now = Date.now(), keep = [], i, a, p, ta, tb, k, q, g, h, cc, m, age, r, pos, al;
+  tv.raf = 0;
+  if (!tv.open || !c) return;
+  if (now - tv.basetime > 60000) tvdrawbase();
+  c.clearRect(0, 0, tv.W, tv.H);
+  if (tv.homepos) {
+    h = { x: tvx(tv.homepos.lon), y: tvy(tv.homepos.lat) };
+    for (cc in tv.alerts) {
+      al = tv.alerts[cc]; pos = tvpos(al.cc, al.ip);
+      if (!pos) continue;
+      a = { x0: h.x, y0: h.y, x1: tvx(pos.lon), y1: tvy(pos.lat) };
+      k = Math.sqrt((a.x1 - a.x0) * (a.x1 - a.x0) + (a.y1 - a.y0) * (a.y1 - a.y0));
+      a.cx = (a.x0 + a.x1) / 2; a.cy = Math.max(4, (a.y0 + a.y1) / 2 - Math.min(k * 0.38, tv.H * 0.42));
+      q = tv.still ? 0.55 : 0.4 + 0.25 * Math.sin(now / 400);
+      c.strokeStyle = tvrgba(tvcolors[al.sev], q); c.lineWidth = al.sev === "critical" ? 2.4 : 1.7; c.setLineDash([]);
+      c.beginPath(); c.moveTo(a.x0, a.y0); c.quadraticCurveTo(a.cx, a.cy, a.x1, a.y1); c.stroke();
+      c.fillStyle = tvrgba(tvcolors[al.sev], 0.9); c.beginPath(); c.arc(a.x1, a.y1, 3 + (tv.still ? 0 : 1.5 * Math.sin(now / 300)), 0, 6.2832); c.fill();
+    }
+  }
+  for (cc in tv.marks) {
+    m = tv.marks[cc]; age = now - m.last;
+    if (age > 90000) { delete tv.marks[cc]; continue; }
+    if (age < 0 || !tv.cc[cc]) continue;
+    r = 1.5 + Math.min(5, Math.log(m.n + 1) / Math.LN2 * 0.8);
+    c.fillStyle = tvrgba(tvcolors[m.sev], 0.75 * (1 - age / 90000));
+    c.beginPath(); c.arc(tvx(tv.cc[cc].lon), tvy(tv.cc[cc].lat), r, 0, 6.2832); c.fill();
+  }
+  for (i = 0; i < tv.arcs.length; i++) {
+    a = tv.arcs[i]; p = (now - a.t0) / a.dur;
+    if (p < 0) { keep.push(a); continue; }
+    if (p > 1.6) continue;
+    keep.push(a);
+    c.setLineDash(a.dash ? [4, 4] : []); c.lineWidth = a.w;
+    if (tv.still) {
+      c.strokeStyle = tvrgba(a.rgb, a.a * Math.max(0, 1 - p / 1.6));
+      c.beginPath(); c.moveTo(a.x0, a.y0); c.quadraticCurveTo(a.cx, a.cy, a.x1, a.y1); c.stroke();
+      continue;
+    }
+    tb = Math.min(1, p); ta = Math.max(0, tb - 0.35);
+    if (p > 1) ta = Math.min(1, ta + (p - 1) * 0.7);
+    if (tb > ta) {
+      q = tvbez(a, ta); k = tvbez(a, tb);
+      g = c.createLinearGradient(q.x, q.y, k.x, k.y);
+      g.addColorStop(0, tvrgba(a.rgb, 0)); g.addColorStop(1, tvrgba(a.rgb, a.a));
+      c.strokeStyle = g; c.beginPath(); c.moveTo(q.x, q.y);
+      for (k = 1; k <= 14; k++) { q = tvbez(a, ta + (tb - ta) * k / 14); c.lineTo(q.x, q.y); }
+      c.stroke();
+    }
+    c.setLineDash([]);
+    if (p <= 1) {
+      q = tvbez(a, p);
+      c.fillStyle = tvrgba(a.rgb, a.a); c.shadowColor = tvrgba(a.rgb, 1); c.shadowBlur = 8;
+      c.beginPath(); c.arc(q.x, q.y, a.w + 0.8, 0, 6.2832); c.fill(); c.shadowBlur = 0;
+    } else {
+      r = (p - 1) / 0.6; c.strokeStyle = tvrgba(a.rgb, a.a * (1 - r)); c.lineWidth = 1;
+      c.beginPath(); c.arc(a.x1, a.y1, 2 + r * 10, 0, 6.2832); c.stroke();
+    }
+  }
+  tv.arcs = keep;
+  if (tv.homepos) {
+    h = { x: tvx(tv.homepos.lon), y: tvy(tv.homepos.lat) }; r = tv.still ? 0 : (now % 2000) / 2000;
+    c.fillStyle = "#bff6ff"; c.shadowColor = "#2fd0e4"; c.shadowBlur = 12;
+    c.beginPath(); c.arc(h.x, h.y, 3.2, 0, 6.2832); c.fill(); c.shadowBlur = 0;
+    c.strokeStyle = "rgba(47,208,228," + (0.7 * (1 - r)).toFixed(3) + ")"; c.lineWidth = 1.2;
+    c.beginPath(); c.arc(h.x, h.y, 4 + r * 14, 0, 6.2832); c.stroke();
+  }
+  tv.raf = window.requestAnimationFrame(tvframe);
+}
+
+function tvparse(text) {
+  var a = text.split("\n"), d = { ev: [], al: [], tot: null }, i, l, p, f;
+  for (i = 1; i < a.length; i++) {
+    l = unesc(a[i]);
+    if (l.substring(0, 2) === "E|") {
+      f = l.split("|");
+      if (f.length >= 9) d.ev.push({ count: parseInt(f[1], 10) || 1, dir: f[2] === "out" ? "out" : "in", state: f[3], blocked: f[3] !== "allowed", ip: f[4],
+                                     port: f[5], proto: f[6], dev: f[7], name: f.slice(8).join("|") });
+    } else if (l.substring(0, 2) === "A|") {
+      f = l.split("|"); if (f.length >= 4) d.al.push({ sev: f[1] === "critical" ? "critical" : "warning", kind: f[2], ip: f[3] });
+    } else if (l.substring(0, 2) === "T|") {
+      f = l.split("|"); d.tot = { out: +f[1] || 0, ain: +f[2] || 0, bin: +f[3] || 0, skin: +f[4] || 0, skout: +f[5] || 0, dns: +f[6] || 0 };
+    } else if ((p = l.indexOf("=")) > 0) d[l.substring(0, p)] = l.substring(p + 1);
+  }
+  return d;
+}
+function tvpoll() {
+  fetchdata("tv.htm", function (text) {
+    var d, i, e, al, ts, bad = Date.now() - tv.started > 25000;
+    if (!text) {
+      if (!tv.lastdata) tvmsg(bad ? "No Threat View data from the router yet. Check that IOCMON is installed with its USB drive and that the web interface is on; the router starts sampling when this view is opened." : "Starting the Threat View sampler on the router...");
+      else if (Date.now() - tv.lastdata > 30000) tvmsg("The router stopped sending samples. Trying again...");
+      return;
+    }
+    d = tvparse(text);
+    tv.lastdata = Date.now();
+    tvmsg("");
+    if (d.geo && d.geo !== tv.geomonth) { tv.geomonth = d.geo; if (!tv.geo) { tv.geoload = 0; tvloadgeo(); } }
+    if (!tv.geo && !d.geo) tvnote("Country table not ready yet: IOCMON downloads it once a month while a USB drive is in use. The feed works meanwhile; arcs appear once it is built.");
+    if (d.home !== tv.homeip) { tv.homeip = d.home || ""; tvhome(); }
+    tv.skynet = d.skynet === "1";
+    tv.alerts = {}; tv.alertips = {};
+    for (i = 0; i < d.al.length; i++) {
+      al = d.al[i]; al.cc = tvlookup(al.ip);
+      if (!tv.alertips[al.ip] || al.sev === "critical") tv.alertips[al.ip] = al.sev;
+      if (al.cc) tv.alerts[al.ip] = al;
+    }
+    tvdrawalert(d.al);
+    if (d.seq === String(tv.seq)) { tvage(); return; }
+    tv.seq = d.seq; tv.ts = parseInt(d.ts, 10) || Math.floor(Date.now() / 1000);
+    ts = tv.ts;
+    for (i = 0; i < d.ev.length; i++) {
+      e = d.ev[i]; e.ts = ts; e.cc = tvlookup(e.ip);
+      e.sev = tv.alertips[e.ip] || "bg";
+    }
+    tvorder(d.ev);
+    tv.samples.push({ ts: ts, first: d.first === "1", ev: d.ev, tot: d.tot || { out: 0, ain: 0, bin: 0, skin: 0, skout: 0, dns: 0 },
+                      sky: (parseInt(d.skyin, 10) || 0) + (parseInt(d.skyout, 10) || 0) });
+    while (tv.samples.length && tv.samples[0].ts < ts - tvkeep) tv.samples.shift();
+    if (tv.live) tvplay(d.ev, Date.now(), (parseInt(d.interval, 10) || 5) * 1000);
+    tvaddfeed(d.ev);
+    tvcounts();
+    if (tv.tab === "top") tvdrawtop();
+    if (tv.tab === "replay") tvrrange();
+    tvage();
+  });
+}
+function tvorder(ev) {
+  var i, rank = function (e) { return (e.sev === "critical" ? 0 : e.sev === "warning" ? 1 : 2) * 8 + (e.dir === "in" ? 0 : tvisdns(e) ? 4 : 2) + (e.blocked ? 0 : 1); };
+  for (i = 0; i < ev.length; i++) { ev[i].rk = rank(ev[i]); ev[i].ix = i; }
+  ev.sort(function (a, b) { return a.rk - b.rk || b.count - a.count || a.ix - b.ix; });
+}
+function tvplay(ev, now, span) {
+  var i, n = 0;
+  for (i = 0; i < ev.length && n < tvmaxarcs; i++) {
+    if (!ev[i].cc || !tvshown(ev[i])) continue;
+    tvlaunch(ev[i], now + (ev.length > 1 ? Math.random() * span * 0.9 : 0));
+    n++;
+  }
+}
+function tvage() {
+  var s = tv.lastdata ? Math.round((Date.now() - tv.lastdata) / 1000) : -1;
+  put("tv_age", tv.ts ? tvtime(tv.ts) : "-");
+  byid("tv_age").className = s > 20 ? "warn" : "";
+}
+function tvdrawalert(al) {
+  var b = byid("tv_alert"), crit = 0, i;
+  for (i = 0; i < al.length; i++) if (al[i].sev === "critical") crit++;
+  if (!al.length) { b.style.display = "none"; return; }
+  b.style.display = "flex";
+  put("tv_alert_t", al.length + " unacknowledged alert address" + (al.length === 1 ? "" : "es") + " (" + crit + " critical) drawn in " + (crit ? "red" : "yellow") + " until acknowledged.");
+}
+function tvack() {
+  put("tv_ack", "Acknowledging...");
+  postaction("iocmonack");
+  setTimeout(function () { put("tv_ack", "Acknowledge"); poll(); }, 6000);
+}
+function tvtime(ts) { var d = new Date(ts * 1000); return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2); }
+var tvresnote = {
+  ALLOWED: "Allowed: the connection went through. Outbound, a device or the router opened it; inbound, the firewall let it in (a port forward, VPN server or router service).",
+  FIREWALL: "Blocked by the router's own firewall: an unsolicited inbound attempt that was dropped. IOCMON records these on the WAN side.",
+  SKYNET: "Blocked by Skynet: the address is on Skynet's blocklist, and Skynet dropped the packet before it reached the firewall (inbound or outbound)."
+};
+function tvrow(e) {
+  var r = make("div", "tvrow" + (e.sev !== "bg" ? " " + e.sev : e.blocked ? " blk" : "")), dev = e.name || e.dev || "";
+  r.appendChild(make("span", "num", tvtime(e.ts)));
+  r.appendChild(make("span", "", e.dir === "out" ? "OUT" : "IN"));
+  var res = e.state === "skynet" ? "SKYNET" : e.blocked ? "FIREWALL" : "ALLOWED", rs = make("span", "res", res);
+  rs.title = tvresnote[res]; r.appendChild(rs);
+  r.appendChild(make("span", "num", e.ip));
+  r.appendChild(make("span", "", e.cc || "??"));
+  r.appendChild(make("span", "num", (e.proto || "?") + (e.port ? "/" + e.port : "")));
+  r.appendChild(make("span", "", dev));
+  r.appendChild(make("span", "n num", e.count > 1 ? "x" + e.count : ""));
+  r.title = (e.cc && tv.cc[e.cc] ? tv.cc[e.cc].name : "Unknown country") + (dev ? " | device " + dev : "");
+  r.onclick = function () { tvtipfor(e.cc, null); };
+  return r;
+}
+function tvaddfeed(ev) {
+  var box = byid("tvp_feed"), i, n = 0, f = document.createDocumentFragment();
+  for (i = ev.length - 1; i >= 0; i--) {
+    tv.events.unshift(ev[i]);
+  }
+  if (tv.events.length > 400) tv.events.length = 400;
+  if (tv.tab !== "feed") return;
+  tvdrawfeed();
+}
+function tvfeedhead() {
+  var r = make("div", "tvrow tvhead"), h = ["Time", "Dir", "Result", "Address", "CC", "Port", "Device", "Hits"], i, s;
+  for (i = 0; i < h.length; i++) { s = make("span", i === 7 ? "n" : "", h[i]); if (i === 2) s.title = "ALLOWED: went through. FIREWALL: dropped by the router's firewall. SKYNET: dropped by Skynet's blocklist."; r.appendChild(s); }
+  return r;
+}
+function tvdrawfeed() {
+  var box = byid("tvp_feed"), i, n = 0, f = document.createDocumentFragment();
+  for (i = 0; i < tv.events.length && n < 150; i++) if (tvshown(tv.events[i])) { f.appendChild(tvrow(tv.events[i])); n++; }
+  clearnode(box);
+  box.appendChild(tvfeedhead());
+  if (!n) box.appendChild(make("div", "plain off", tv.lastdata ? "Nothing matching the filters yet." : "Waiting for the first sample..."));
+  box.appendChild(f);
+}
+function tvcounts() {
+  var now = tv.samples.length ? tv.samples[tv.samples.length - 1].ts : 0, i, j, s, c = { bin: 0, ain: 0, out: 0, dns: 0, bout: 0, sky: 0, flag: 0 }, span = 0, first = 0;
+  for (i = tv.samples.length - 1; i >= 0; i--) {
+    s = tv.samples[i];
+    if (s.ts <= now - 60) break;
+    if (s.first) continue;
+    if (!first || s.ts < first) first = s.ts;
+    c.bin += s.tot.bin + s.tot.skin; c.ain += s.tot.ain; c.out += s.tot.out - s.tot.dns; c.dns += s.tot.dns; c.bout += s.tot.skout; c.sky += s.sky;
+    for (j = 0; j < s.ev.length; j++) if (s.ev[j].sev !== "bg") c.flag += s.ev[j].count;
+  }
+  span = first ? Math.max(5, now - first + 5) : 0;
+  function rate(v) { return span ? String(Math.round(v * 60 / Math.min(60, span))) : "-"; }
+  put("tc_bin", rate(c.bin)); put("tc_ain", rate(c.ain)); put("tc_out", rate(c.out)); put("tc_dns", rate(c.dns)); tvskytile("tc_bout", rate(c.bout)); tvskytile("tc_sky", rate(c.sky));
+  byid("tvp_keysky").style.display = tv.samples.length && !tv.skynet ? "none" : ""; put("tc_flag", rate(c.flag));
+  byid("tc_flag").className = c.flag ? "bad" : "";
+}
+function tvskytile(id, v) {
+  var t = byid(id).parentNode.parentNode, off = tv.samples.length > 0 && !tv.skynet;
+  if (!t.getAttribute("data-tip")) t.setAttribute("data-tip", t.title);
+  t.className = off ? "off" : "";
+  t.title = off ? "Skynet Firewall was not detected on this router, so there is nothing to count here. Everything else in Threat View works without it." : t.getAttribute("data-tip");
+  put(id, off ? "Not installed" : tv.skynet ? v : "-");
+}
+function tvdrawtop() {
+  var agg = { in: {}, out: {} }, i, j, e, d, k, list, box, max, r;
+  for (i = 0; i < tv.samples.length; i++) for (j = 0; j < tv.samples[i].ev.length; j++) {
+    e = tv.samples[i].ev[j];
+    if (!tvshown(e)) continue;
+    k = e.cc || "??"; agg[e.dir][k] = (agg[e.dir][k] || 0) + e.count;
+  }
+  for (d in agg) {
+    list = []; for (k in agg[d]) list.push([k, agg[d][k]]);
+    list.sort(function (a, b) { return b[1] - a[1]; });
+    box = byid(d === "in" ? "tv_topin" : "tv_topout"); clearnode(box);
+    max = list.length ? list[0][1] : 1;
+    for (i = 0; i < list.length && i < 10; i++) {
+      r = make("div", "tvbarrow");
+      k = make("i"); k.style.width = Math.round(100 * list[i][1] / max) + "%"; r.appendChild(k);
+      r.appendChild(make("span", "", (tv.cc[list[i][0]] ? tv.cc[list[i][0]].name : "Unknown") + " (" + list[i][0] + ")"));
+      r.appendChild(make("span", "num", String(list[i][1])));
+      r.style.cursor = "pointer";
+      (function (c) { r.onclick = function () { tvtipfor(c, null); }; })(list[i][0]);
+      box.appendChild(r);
+    }
+    if (!list.length) box.appendChild(make("div", "plain off", "None yet."));
+  }
+}
+function tvtab(name) {
+  var t = ["feed", "top", "replay"], i;
+  tv.tab = name;
+  for (i = 0; i < t.length; i++) { byid("tvt_" + t[i]).className = t[i] === name ? "sel" : ""; byid("tvp_" + t[i]).style.display = t[i] === name ? "" : "none"; }
+  byid("tvp_key").style.display = name === "feed" ? "" : "none";
+  if (name === "feed") tvdrawfeed(); else if (name === "top") tvdrawtop(); else tvrrange();
+}
+function tvfilter() { tvdrawfeed(); if (tv.tab === "top") tvdrawtop(); tvcounts(); }
+
+function tvtipfor(cc, xy) {
+  var tip = byid("tv_tip"), ips = {}, i, j, e, k, list = [], c = tv.cc[cc], box, row, l, x, y, t;
+  if (!cc) return;
+  for (i = 0; i < tv.samples.length; i++) for (j = 0; j < tv.samples[i].ev.length; j++) {
+    e = tv.samples[i].ev[j];
+    if (e.cc !== cc) continue;
+    k = ips[e.ip] || (ips[e.ip] = { ip: e.ip, n: 0, inb: 0, out: 0, blk: 0, ports: {}, sev: e.sev });
+    k.n += e.count; if (e.dir === "in") k.inb += e.count; else k.out += e.count; if (e.blocked) k.blk += e.count;
+    if (e.port) k.ports[e.proto + "/" + e.port] = 1;
+  }
+  for (k in tv.alerts) if (tv.alerts[k].cc === cc && !ips[k]) ips[k] = { ip: k, n: 0, inb: 0, out: 0, blk: 0, ports: {}, sev: tv.alerts[k].sev };
+  for (k in ips) list.push(ips[k]);
+  list.sort(function (a, b) { return (b.sev !== "bg") - (a.sev !== "bg") || b.n - a.n; });
+  clearnode(tip);
+  t = make("div", "tt"); t.appendChild(make("span", "", (c ? c.name : "Unknown country") + " (" + cc + ")"));
+  l = make("a", "", "x"); l.onclick = function () { tip.style.display = "none"; tv.tipcc = ""; }; t.appendChild(l);
+  tip.appendChild(t);
+  tip.appendChild(make("div", "off", list.length + " address" + (list.length === 1 ? "" : "es") + " in the last 15 minutes"));
+  for (i = 0; i < list.length && i < 12; i++) {
+    e = list[i]; row = make("div", "ip");
+    box = make("div", "num" + (e.sev === "critical" ? " bad" : e.sev === "warning" ? " warn" : ""), e.ip + "  in " + e.inb + " / out " + e.out + (e.blk ? " / blocked " + e.blk : ""));
+    row.appendChild(box);
+    k = []; for (j in e.ports) k.push(j);
+    if (k.length) row.appendChild(make("div", "off", k.slice(0, 6).join(" ") + (k.length > 6 ? " ..." : "")));
+    box = make("div", "links"); addlinks(box, e.ip); row.appendChild(box);
+    tip.appendChild(row);
+  }
+  if (!xy && c) xy = { x: tvx(c.lon), y: tvy(c.lat) };
+  x = xy ? Math.min(Math.max(4, xy.x + 12), tv.W - 310) : 8; y = xy ? Math.min(Math.max(4, xy.y - 20), tv.H - 120) : 8;
+  tip.style.left = x + "px"; tip.style.top = y + "px"; tip.style.display = "block"; tv.tipcc = cc;
+}
+function tvclick(ev) {
+  var r = byid("tv_fx").getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top, best = "", bd = 144, cc, d, k, list = {};
+  for (cc in tv.marks) list[cc] = 1;
+  for (k in tv.alerts) list[tv.alerts[k].cc] = 1;
+  for (cc in list) {
+    if (!tv.cc[cc]) continue;
+    d = Math.pow(tvx(tv.cc[cc].lon) - x, 2) + Math.pow(tvy(tv.cc[cc].lat) - y, 2);
+    if (d < bd) { bd = d; best = cc; }
+  }
+  if (best) tvtipfor(best, { x: x, y: y }); else { byid("tv_tip").style.display = "none"; tv.tipcc = ""; }
+}
+
+function tvrrange() {
+  var r = byid("tv_rpos"), n = tv.samples.length;
+  r.max = Math.max(0, n - 1);
+  if (tv.live) r.value = Math.max(0, n - 1);
+  put("tv_rinfo", n ? n + " samples kept, " + tvtime(tv.samples[0].ts) + " to " + tvtime(tv.samples[n - 1].ts) + ". Pick a point and play it back." : "Samples are kept in this browser for 15 minutes while Threat View is open.");
+  tvrlabel();
+}
+function tvrlabel() { var s = tv.samples[+byid("tv_rpos").value]; put("tv_rlabel", s ? tvtime(s.ts) + " (" + s.ev.length + " events)" : "-"); }
+function tvreplay() {
+  var start = +byid("tv_rpos").value, speed = +byid("tv_rspeed").value || 4, list = tv.samples.slice(start), t0, i, base = Date.now();
+  if (!list.length) return;
+  tvlive(true);
+  tv.live = false;
+  t0 = list[0].ts;
+  for (i = 0; i < list.length; i++) (function (s, pos, delay) {
+    tv.rtimers.push(setTimeout(function () {
+      put("tv_rtag", "REPLAY " + tvtime(s.ts) + " (" + speed + "x)"); byid("tv_rtag").style.display = "block";
+      if (tv.samples[pos] !== s) pos = tv.samples.indexOf(s);
+      if (pos >= 0) { byid("tv_rpos").value = pos; tvrlabel(); }
+      tvplay(s.ev, Date.now(), 5000 / speed);
+    }, delay));
+  })(list[i], start + i, (list[i].ts - t0) * 1000 / speed);
+  tv.rtimers.push(setTimeout(function () { tvlive(); }, (list[list.length - 1].ts - t0) * 1000 / speed + 6000 / speed));
+}
+function tvlive(keep) {
+  var i;
+  for (i = 0; i < tv.rtimers.length; i++) clearTimeout(tv.rtimers[i]);
+  tv.rtimers = []; tv.arcs = [];
+  if (keep) return;
+  tv.live = true; byid("tv_rtag").style.display = "none"; tvrrange();
+}
+
+function tvheartbeat() { if (tv.open && !document.hidden) postaction("iocmontv"); }
+function tvclock() { var d = new Date(); put("tv_utc", ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2) + ":" + ("0" + d.getUTCSeconds()).slice(-2)); }
+function tvopen() {
+  if (tv.open) return;
+  if (!tv.land) { tvinitmap(); byid("tv_fx").onclick = tvclick; }
+  tv.open = true; tv.started = Date.now();
+  byid("dash").style.display = "none"; byid("tv").style.display = "";
+  try { sessionStorage.setItem("iocmon_tv", "1"); } catch (e) { }
+  tvlayout(); tvhome(); tvdrawfeed(); tvclock();
+  if (!tv.lastdata) tvmsg("Starting the Threat View sampler on the router...");
+  tvheartbeat(); tvloadgeo();
+  tv.beat = setInterval(tvheartbeat, 30000);
+  tv.poll = setInterval(tvpoll, 2000);
+  tv.clock = setInterval(function () { tvclock(); tvage(); }, 1000);
+  setTimeout(tvpoll, 700);
+  if (!tv.raf) tv.raf = window.requestAnimationFrame(tvframe);
+}
+function tvclose() {
+  if (tv.full) tvexpand();
+  tv.open = false;
+  clearInterval(tv.beat); clearInterval(tv.poll); clearInterval(tv.clock);
+  if (tv.raf) window.cancelAnimationFrame(tv.raf);
+  tv.raf = 0; tvlive();
+  byid("tv").style.display = "none"; byid("dash").style.display = "";
+  try { sessionStorage.removeItem("iocmon_tv"); } catch (e) { }
+}
+function tvexpand() {
+  var el = byid("tv");
+  if (tv.full && (document.fullscreenElement || document.webkitFullscreenElement)) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+  tv.full = !tv.full;
+  el.className = tv.full ? "tv full" + (tvdraweropen() ? " drawer" : "") : "tv";
+  if (tv.full) byid("tv_stage").appendChild(byid("tv_panel")); else byid("tv_side").appendChild(byid("tv_panel"));
+  tvdrawlabel();
+  put("tv_exp", tv.full ? "Shrink" : "Expand");
+  document.documentElement.style.overflow = tv.full ? "hidden" : "";
+  tv.arcs = [];
+  tvlayout();
+}
+function tvdraweropen() {
+  try { return localStorage.getItem("iocmon_tvdrawer") === "1"; } catch (e) { return false; }
+}
+function tvdrawlabel() {
+  var open = / drawer/.test(byid("tv").className);
+  put("tv_drawbtn", open ? "◀ HIDE" : "▶ FEED");
+  byid("tv_drawbtn").title = open ? "Hide the feed panel" : "Show the Live Feed, Top Countries and Replay panel";
+}
+function tvdrawer() {
+  var el = byid("tv"), open = !/ drawer/.test(el.className);
+  if (!tv.full) return;
+  el.className = "tv full" + (open ? " drawer" : "");
+  try { localStorage.setItem("iocmon_tvdrawer", open ? "1" : "0"); } catch (e) { }
+  tvdrawlabel();
+}
+function tvfullscreen() {
+  var el = byid("tv");
+  if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  else if (el.requestFullscreen) el.requestFullscreen(); else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+function tvinitpage() {
+  window.addEventListener("resize", function () { if (tv.open) { tv.arcs = []; tvlayout(); } });
+  document.addEventListener("fullscreenchange", function () { put("tv_fs", document.fullscreenElement ? "Exit Fullscreen" : "Fullscreen"); setTimeout(function () { if (tv.open) tvlayout(); }, 100); });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) tvheartbeat(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && tv.full && !document.fullscreenElement) tvexpand(); });
+  try { if (sessionStorage.getItem("iocmon_tv") === "1") tvopen(); } catch (e) { }
+}
 function initial() {
+  try { excopen = localStorage.getItem("iocmon_excshow") === "1"; } catch (e) { }
+  excshowapply();
   try { show_menu(); } catch (e) { if (window.console) console.error("IOCMON: show_menu failed", e); }
   document.form.current_page.value = window.location.pathname.substring(1);
   put("f_ver", pagever);
@@ -682,6 +1487,7 @@ function initial() {
   poll();
   postaction("iocmonautocheck");
   setInterval(poll, 15000);
+  tvinitpage();
 }
 </script>
 </head>
@@ -715,6 +1521,7 @@ function initial() {
 <tr>
 <td bgcolor="#4D595D" colspan="3" valign="top">
 <div id="ioc">
+<div id="dash">
 
 <div class="hdr" id="hdr">
   <div class="dot"></div>
@@ -726,6 +1533,7 @@ function initial() {
 <div class="banner amber" id="b_page" style="display:none"></div>
 
 <div class="actions" id="actions">
+  <a class="btn tvbtn" onclick="tvopen();">Threat View</a>
   <a class="btn" onclick="runaction('iocmonfeeds');">Update Feeds</a>
   <a class="btn" onclick="runaction('iocmonscan');">Scan Filesystem</a>
   <a class="btn" onclick="runaction('iocmonsimulate');">Simulate Detection</a>
@@ -795,8 +1603,85 @@ function initial() {
     <a class="btn dis" id="l_csv" title="Downloads every row matching this search and these filters in the order shown, not just this page. Use Full History first for older rows." onclick="downloadcsv();">Download CSV</a>
   </div>
   <div id="l_rows"></div>
+  <div class="cleartools"><a class="btn dis" id="l_clear" onclick="clearlog();">Clear Log</a></div>
   <div class="pager"><a id="l_prev" onclick="turn(-1);">&lt; Prev</a><span><span id="l_page"></span> | <span id="l_count"></span></span><a id="l_next" onclick="if(this.className!=='dis')turn(1);">Next &gt;</a></div>
 </div>
+
+<div class="panel"><h2 class="split">Exceptions<span class="fcols num"><span id="x_total"></span><a class="xshow" id="x_show" onclick="toggleexc();">Show</a></span></h2>
+<div id="x_body" style="display:none">
+  <div class="tabs">
+    <a id="xtab_dns" class="sel" onclick="pickexc('dns');"></a>
+    <a id="xtab_ip" onclick="pickexc('ip');"></a>
+    <a id="xtab_file" onclick="pickexc('file');"></a>
+    <a id="xtab_cron" onclick="pickexc('cron');"></a>
+  </div>
+  <div class="plain off">Items in these lists never alert. Turn a switch off to remove an item from its list. Add items with the Exception switch at the right of an IoC Detections row, or in IOCMON's Advanced Settings.</div>
+  <div id="x_lists"></div>
+</div>
+</div>
+</div>
+
+<div class="tv" id="tv" style="display:none">
+  <div class="tvbar">
+    <a class="btn" onclick="tvclose();">&lt; Back to Dashboard</a>
+    <span class="tvtitle">THREAT VIEW</span>
+    <span class="tvclock num"><b id="tv_utc"></b> UTC | sample <b id="tv_age">-</b></span>
+    <a class="btn fsonly" id="tv_fs" onclick="tvfullscreen();">Fullscreen</a>
+    <a class="btn" id="tv_exp" onclick="tvexpand();">Expand</a>
+  </div>
+  <div class="tvstage" id="tv_stage">
+    <canvas id="tv_base"></canvas><canvas id="tv_fx"></canvas>
+    <div class="tvmsg" id="tv_msg"></div>
+    <div class="tvnote" id="tv_note"></div>
+    <div class="tvreplaytag" id="tv_rtag"></div>
+    <div class="tvlegend"><span><i style="color:#ff5f52;border-top-width:3px"></i>critical</span><span><i style="color:#ffc14d"></i>warning</span><span><i style="color:#8fb4c8"></i>traffic</span><span><i style="color:#8fb4c8;border-top-style:dashed;opacity:.6"></i>blocked</span></div>
+    <div class="tvtip" id="tv_tip"></div>
+  </div>
+  <div class="tvside" id="tv_side">
+  <div class="tvcounts">
+    <div title="Inbound attempts dropped per minute: the router's firewall (unsolicited packets from the internet) plus Skynet's inbound blocklist drops it logged"><div class="k">Blocked in</div><div class="v num"><span id="tc_bin">-</span><small>/min</small></div></div>
+    <div title="New connections started from the internet that the firewall let in: port forwards, UPnP, a VPN server or router services. Replies to connections your own devices opened are not counted, so this is usually 0-2 on a home network."><div class="k">Allowed in</div><div class="v num"><span id="tc_ain">-</span><small>/min</small></div></div>
+    <div title="New connections your devices or the router opened to the internet, not counting DNS lookups"><div class="k">Outbound</div><div class="v num"><span id="tc_out">-</span><small>/min</small></div></div>
+    <div title="DNS lookups to outside servers (port 53 and 853), counted separately from Outbound"><div class="k">DNS lookups</div><div class="v num"><span id="tc_dns">-</span><small>/min</small></div></div>
+    <div title="Outbound connections Skynet dropped because the destination is on its blocklist, from its log lines"><div class="k">Blocked out</div><div class="v num"><span id="tc_bout">-</span><small>/min</small></div></div>
+    <div title="All packets Skynet dropped, in and out, from its firewall counters (includes packets it does not log)"><div class="k">Skynet drops</div><div class="v num"><span id="tc_sky">-</span><small>/min</small></div></div>
+    <div title="Connections to or from addresses IOCMON has alerted on"><div class="k">Flagged</div><div class="v num"><span id="tc_flag">-</span><small>/min</small></div></div>
+  </div>
+  <div class="tvfilters">
+    <label><input type="checkbox" id="tf_in" checked onchange="tvfilter();"/>Inbound</label>
+    <label><input type="checkbox" id="tf_out" checked onchange="tvfilter();"/>Outbound</label>
+    <label><input type="checkbox" id="tf_ok" checked onchange="tvfilter();"/>Allowed</label>
+    <label title="Dropped by the router's firewall or by Skynet"><input type="checkbox" id="tf_blk" checked onchange="tvfilter();"/>Blocked</label>
+    <label title="Show DNS lookups (port 53 and 853) on the map and in the feed. Lookups to flagged addresses always show."><input type="checkbox" id="tf_dns" onchange="tvfilter();"/>DNS lookups</label>
+    <label><input type="checkbox" id="tf_flag" onchange="tvfilter();"/>Flagged only</label>
+  </div>
+  <div class="banner red tvalert" id="tv_alert"><span id="tv_alert_t" style="flex:1"></span><a class="btn ack" id="tv_ack" onclick="tvack();">Acknowledge</a></div>
+  <div class="tvpanel" id="tv_panel">
+    <a class="tvdrawbtn" id="tv_drawbtn" onclick="tvdrawer();"></a>
+    <div class="tabs">
+      <a id="tvt_feed" class="sel" onclick="tvtab('feed');">Live Feed</a>
+      <a id="tvt_top" onclick="tvtab('top');">Top Countries</a>
+      <a id="tvt_replay" onclick="tvtab('replay');">Replay</a>
+    </div>
+    <div id="tvp_feed" class="tvfeed"></div>
+    <div id="tvp_key" class="tvkey"><b>ALLOWED</b> went through &nbsp;|&nbsp; <b>FIREWALL</b> dropped by the router's firewall <span id="tvp_keysky">&nbsp;|&nbsp; <b>SKYNET</b> dropped by Skynet's blocklist</span></div>
+    <div id="tvp_top" class="tvtop" style="display:none"><div><h3>Inbound, last 15 min</h3><div id="tv_topin"></div></div><div><h3>Outbound, last 15 min</h3><div id="tv_topout"></div></div></div>
+    <div id="tvp_replay" class="tvreplay" style="display:none">
+      <div class="plain off" id="tv_rinfo">Samples are kept in this browser for 15 minutes while Threat View is open.</div>
+      <input type="range" id="tv_rpos" min="0" max="0" value="0" oninput="tvrlabel();"/>
+      <div class="tools"><span class="num" id="tv_rlabel" style="flex:1">-</span>
+        <select id="tv_rspeed"><option value="1">1x</option><option value="4" selected>4x</option><option value="16">16x</option></select>
+        <a class="btn" onclick="tvreplay();">Play From Here</a><a class="btn" onclick="tvlive();">Back to Live</a></div>
+    </div>
+  </div>
+  </div>
+  <div class="tvfoot"><span>Home: <span id="tv_home">-</span> <a onclick="tvsethome();">change</a></span><span>IP address data powered by <a href="https://www.iplocate.io" target="_blank" rel="noopener noreferrer">IPLocate.io</a> (CC BY-SA 4.0) | Map: Natural Earth</span></div>
+</div>
+
+<div class="modal" id="m_box" style="display:none"><div class="mbox">
+  <div class="mt" id="m_title"></div><div id="m_text"></div><div class="mwarn" id="m_warn"></div>
+  <div class="mbtns"><a class="btn" id="m_ok" onclick="okask();">OK</a><a class="btn" onclick="closeask();">Cancel</a></div>
+</div></div>
 
 <div class="foot">IOCMON web interface v<span id="f_ver"></span>. Updates every 15 seconds.</div>
 </div>
