@@ -39,6 +39,11 @@ v2.0.21   - (BETA)
             YouTube for its settings) is logged as Info instead of raising a Critical alert. A DNS match whose
             address AbuseIPDB marks as whitelisted is also logged as Info. On the main screen, (E) now detaches
             from SCREEN and leaves IOCMON running, and (X) exits after asking first. @Mutzli @Ripshod @jksmurf
+          - PATCH: Connection and DNS alerts now name the local device, for example 192.168.50.82 [DesktopXYZ]
+            ->www.youtube.com, for wired and wireless devices. The name comes from the router's own client list.
+            It is saved with the alert, shown on the log, emails, the web page and Threat View. @SashaSolitaire
+          - PATCH: Fixed the web page's Exception switch on log rows, and now adds their contents to the
+            correct exception list. @dj600 @JB_1366 @SashaSolitaire
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
