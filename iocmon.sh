@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.21
+# Version: 2.0.22
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-17
+# Last Updated: 2026-Nov-18
 # ============================================================================================================================
 #
 # Description:
@@ -42,6 +42,7 @@
 #   /tmp/iocmon_selfq_seen, /tmp/iocmon_astraea_intel                   : set-aside lookups already logged, and recent Astraea verdicts for emails (RAM)
 #   /jffs/scripts/kairos.sh(.sig), /jffs/scripts/astraea.sh(.sig)       : read only - each add-on is used only while its script passes the author's release signature
 #   /tmp/iocmon_tv/                                                     : Threat View sampler lock, heartbeat and last sample (RAM)
+#   /tmp/iocmon_devnames                                                : LAN address to device name list, from the router's client list (RAM)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/geoip.txt                   : Threat View IPv4 country table built monthly from IPLocate.io (CC BY-SA 4.0)
 #   /tmp/iocmon_addonsig                                                : last Kairos/Astraea signature check results, re-checked when either file changes (RAM)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
@@ -116,7 +117,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.21"
+version="2.0.22"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -128,7 +129,7 @@ updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.5.6"  # web interface page version this script expects
+webuiversion="1.5.8"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -155,7 +156,12 @@ tvinterval=5  # seconds between Threat View samples
 tvidle=120  # Threat View sampling stops this many seconds after the page's last heartbeat
 tvmaxevents=400  # most connections listed in one Threat View sample
 tvconntrack="/proc/net/nf_conntrack"  # connection table Threat View samples
-tvleases="/var/lib/misc/dnsmasq.leases"  # DHCP leases, for Threat View device names
+tvleases="/var/lib/misc/dnsmasq.leases"  # DHCP leases, one source of device names
+devnmpfile="/jffs/nmp_cl_json.js"  # the router's network map client cache (MAC, name), wired and wireless
+devclientlist="/tmp/clientlist.json"  # clients connected now, per node and band, with their IP
+devarpfile="/proc/net/arp"  # ARP table: IP to MAC for every LAN client, including fixed addresses
+devnamefile="/tmp/iocmon_devnames"  # "<ip> <name>" per LAN client, rebuilt at most once a minute
+devnamemaxage=60  # seconds the device name list is reused before it is rebuilt
 tvsyslog="/tmp/syslog.log"  # syslog, where Skynet writes its [BLOCKED - INBOUND/OUTBOUND] lines
 geoipurl="https://media.githubusercontent.com/media/iplocate/ip-address-databases/main/ip-to-country/ip-to-country.csv.zip"  # IPLocate.io IP to Country, daily (CC BY-SA 4.0)
 feedslockfile="/tmp/iocmon_feeds.lock"  # held during a feed refresh, in RAM so a reboot can't leave it stale
@@ -5966,6 +5972,57 @@ alertseverity()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# devnamesrefresh rebuilds $devnamefile ("<ip> <name>" per LAN client) from the router's client list when it is over a minute old
+
+devnamesrefresh()
+{
+  local now stamp ccl dsl dhn tmp="$devnamefile.$$"
+  now=$(date +%s)
+  stamp="$(head -n 1 "$devnamefile" 2>/dev/null)"; stamp="${stamp#\#}"
+  validateint "$stamp" 0 && [ "$now" -ge "$stamp" ] && [ "$((now - stamp))" -lt "$devnamemaxage" ] && return 0
+  nvramget custom_clientlist; ccl="$nvramval"
+  nvramget dhcp_staticlist; dsl="$nvramval"
+  nvramget dhcp_hostnames; dhn="$nvramval"
+  {
+    echo "#$now"
+    {
+      printf '@C\n%s\n@S\n%s\n@H\n%s\n@N\n' "$ccl" "$dsl" "$dhn"; cat "$devnmpfile"
+      printf '\n@J\n'; cat "$devclientlist"; printf '\n@L\n'; cat "$tvleases"; printf '\n@A\n'; cat "$devarpfile"
+    } 2>/dev/null | awk '
+      function mac(m) { m = toupper(m); return (m ~ /^[0-9A-F][0-9A-F](:[0-9A-F][0-9A-F])+$/ && m != "00:00:00:00:00:00") ? m : "" }
+      function ip4(v) { return v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ }
+      function cl(v) { gsub(/\\u[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]/, "", v); gsub(/\\/, "", v); gsub(/[][|<>"`$]/, "", v); gsub(/[[:cntrl:]]/, "", v); gsub(/  +/, " ", v); sub(/^ /, "", v); sub(/ $/, "", v); return substr(v, 1, 32) }
+      function nm(m, v, r) { m = mac(m); v = cl(v); if (m == "" || v == "" || v == "*") return; if (!(m in nr) || r < nr[m]) { name[m] = v; nr[m] = r } }
+      function at(i, m, r) { m = mac(m); if (m == "" || !ip4(i)) return; if (!(i in ir) || r < ir[i]) { ipmac[i] = m; ir[i] = r } }
+      function jv(t, k,   x) { if (!match(t, "\"" k "\":\"[^\"]*\"")) return ""; x = substr(t, RSTART, RLENGTH); sub("^\"" k "\":\"", "", x); return substr(x, 1, length(x) - 1) }
+      /^@[CSHNJLA]$/ { sec = substr($0, 2); next }
+      sec == "C" { n = split($0, r, "<"); for (i = 1; i <= n; i++) { split(r[i], f, ">"); nm(f[2], f[1], 1) } }
+      sec == "S" { n = split($0, r, "<"); for (i = 1; i <= n; i++) { k = split(r[i], f, ">"); if (k >= 2) at(f[2], f[1], 5); if (k >= 4) nm(f[1], f[4], 2) } }
+      sec == "H" { n = split($0, r, "<"); for (i = 1; i <= n; i++) { split(r[i], f, ">"); nm(f[1], f[2], 2) } }
+      sec == "N" { n = split($0, r, "}"); for (i = 1; i <= n; i++) nm(jv(r[i], "mac"), jv(r[i], "name"), 3) }
+      sec == "J" { t = $0; while (match(t, /"[0-9A-Fa-f:]+":\{"ip":"[0-9.]+"/)) { x = substr(t, RSTART, RLENGTH); t = substr(t, RSTART + RLENGTH); split(x, f, "\""); at(f[6], f[2], 2) } }
+      sec == "L" { if (NF >= 4) { at($3, $2, 3); nm($2, $4, 4) } }
+      sec == "A" { if (NF >= 4 && $1 != "IP") at($1, $4, ($3 == "0x0" ? 4 : 1)) }
+      END { for (i in ipmac) if (ipmac[i] in name) print i " " name[ipmac[i]] }
+    '
+  } > "$tmp" 2>/dev/null
+  mv -f "$tmp" "$devnamefile" 2>/dev/null || rm -f "$tmp"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# devnametag turns an indicator "<LAN ip>-><x>" into "<ip> [<device name>]-><x>" when the router knows the device's name
+
+devnametag()
+{
+  local ip="${1%%->*}" name
+  case "$1" in *"->"*) ;; *) printf '%s\n' "$1"; return ;; esac
+  case "$ip" in ""|*[!0-9.]*) printf '%s\n' "$1"; return ;; esac
+  devnamesrefresh
+  name="$(awk -v ip="$ip" 'NR > 1 && $1 == ip { sub(/^[^ ]+ /, ""); print; exit }' "$devnamefile" 2>/dev/null)"
+  if [ -n "$name" ]; then printf '%s [%s]->%s\n' "$ip" "$name" "${1#*->}"; else printf '%s\n' "$1"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # raisealert is the single entry point every detection check routes an IOC/brute-force match through.
 
 raisealert()
@@ -5994,6 +6051,7 @@ raisealert()
     mv "${dbfile}.tmp" "$dbfile"
   fi
 
+  case "$kind" in conntrack|dns) indicator="$(devnametag "$indicator")" ;; esac
   [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
   astraeaintel "$(astraeatarget "$kind" "$indicator")"
 
@@ -8924,7 +8982,7 @@ votxreport()
           if (mon == 0) next
           dn = daynum(dp[3] + 0, mon, dp[2] + 0)
           if (startday != "" && (dn < startday || dn > endday)) next
-          split(indpart, parts, "->")
+          split(indpart, parts, "->"); sub(/ \[.*$/, "", parts[1])
           if (parts[2] == "") next
           split(dp[4], tp, ":")
           key = dn * 86400 + (tp[1] + 0) * 3600 + (tp[2] + 0) * 60 + (tp[3] + 0)
@@ -8963,7 +9021,7 @@ votxreport()
           if (mon == 0) next
           dn = daynum(dp[3] + 0, mon, dp[2] + 0)
           if (startday != "" && (dn < startday || dn > endday)) next
-          split(indpart, parts, "->")
+          split(indpart, parts, "->"); sub(/ \[.*$/, "", parts[1])
           dstip = parts[2]
           if (dstip == "") next
           events++
@@ -10426,7 +10484,7 @@ geoipfeedline()
 alertipof()
 {
   local ip
-  ip="$(printf '%s\n' "$1" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | tail -n 1)"
+  ip="$(printf '%s\n' "$1" | sed 's/ \[[^]]*\]->/->/' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | tail -n 1)"
   [ -n "$ip" ] && ispublicip "$ip" && echo "$ip"
 }
 
@@ -10527,7 +10585,7 @@ tvsample()
   ipset flush "$tvset" >/dev/null 2>&1
   cat "$tvconntrack" > "$tvdir/ct" 2>/dev/null
   [ -f "$tvdir/prevkeys" ] || { first=1; : > "$tvdir/prevkeys"; }
-  { [ -f "$tvleases" ] && cat "$tvleases"; } > "$tvdir/leases" 2>/dev/null
+  devnamesrefresh; cp "$devnamefile" "$tvdir/names" 2>/dev/null || : > "$tvdir/names"
   tvskylog
   awk -v own="$own" -v first="$first" -v keysout="$tvdir/keys" -v totout="$tvdir/totals" '
     function pub(ip, a) {
@@ -10543,7 +10601,7 @@ tvsample()
     function clean(s) { gsub(/[|\r\n]/, "_", s); return s }
     BEGIN { n = split(own, o, " "); for (i = 1; i <= n; i++) mine[o[i]] = 1 }
     FILENAME == ARGV[1] { old[$0] = 1; next }
-    FILENAME == ARGV[2] { if (NF >= 4 && $4 != "*") name[$3] = clean($4); next }
+    FILENAME == ARGV[2] { if (FNR > 1 && NF >= 2) { v = $0; sub(/^[^ ]+ /, "", v); name[$1] = clean(v) }; next }
     FILENAME == ARGV[3] {
       if ($1 != "ipv4") next
       s = d = sp = dp = rs = ""
@@ -10603,7 +10661,7 @@ tvsample()
       }
       printf "T|%d|%d|%d|%d|%d|%d\n", tot["out|allowed"], tot["in|allowed"], tot["in|blocked"], tot["in|skynet"], tot["out|skynet"], tot["dns"] > totout
     }
-  ' "$tvdir/prevkeys" "$tvdir/leases" "$tvdir/ct" "$tvdir/set" "$tvdir/skylog" | sort -rn | head -n "$tvmaxevents" | cut -d'|' -f2- > "$tvdir/events"
+  ' "$tvdir/prevkeys" "$tvdir/names" "$tvdir/ct" "$tvdir/set" "$tvdir/skylog" | sort -rn | head -n "$tvmaxevents" | cut -d'|' -f2- > "$tvdir/events"
   mv -f "$tvdir/keys" "$tvdir/prevkeys" 2>/dev/null || : > "$tvdir/prevkeys"
   sky="$(tvskynet)"
   if [ -n "$sky" ]; then
