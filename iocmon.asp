@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.5.6 -->
+<!-- IOCMON-WebUI v1.5.8 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -227,7 +227,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.5.6", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.5.8", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 10;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var exc = {}, excpend = {}, askdone = null, curexc = "dns";
@@ -572,7 +572,7 @@ function excshowapply() {
   byid("x_body").style.display = excopen ? "" : "none";
   put("x_show", excopen ? "Hide" : "Show");
 }
-function toggleexc() {
+function toggleexcpanel() {
   excopen = !excopen;
   try { localStorage.setItem("iocmon_excshow", excopen ? "1" : "0"); } catch (e) { }
   excshowapply();
@@ -752,11 +752,11 @@ function csvcell(v) {
 function csvblank(v) { return /^(n\/a|\?\?|never|no flags|no categories)$/.test(v) ? "" : v; }
 var csvlogs = {
   ioc: {
-    head: ["timestamp_local", "type", "severity", "client", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail", "astraea_verdict", "astraea_reason"],
+    head: ["timestamp_local", "type", "severity", "client", "client_name", "indicator", "source", "detail", "abuseipdb_ip", "abuseipdb_score", "abuseipdb_reports", "abuseipdb_users", "abuseipdb_detail", "astraea_verdict", "astraea_reason"],
     row: function (r) {
-      var c = /^([0-9A-Fa-f:.]+)->(.+)$/.exec(r.indicator), m = /^(?:TEST )?AbuseIPDB (\S+) (\d+)% (\d+)r\/(\d+)u ?(.*)$/.exec(r.rep);
+      var c = /^([0-9A-Fa-f:.]+)(?: \[([^\]]*)\])?->(.+)$/.exec(r.indicator), m = /^(?:TEST )?AbuseIPDB (\S+) (\d+)% (\d+)r\/(\d+)u ?(.*)$/.exec(r.rep);
       var v = /^Astraea (\w+): (.*)$/.exec(r.intel || "");
-      return [csvtime(r.when), r.tag, r.sev, c ? c[1] : "", c ? c[2] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""], v ? [v[1], v[2]] : ["", ""]);
+      return [csvtime(r.when), r.tag, r.sev, c ? c[1] : "", c ? c[2] || "" : "", c ? c[3] : r.indicator, r.source, r.detail].concat(m ? m.slice(1) : r.rep ? ["", "", "", "", r.rep] : ["", "", "", "", ""], v ? [v[1], v[2]] : ["", ""]);
     }
   },
   dropbear: {
@@ -1607,7 +1607,7 @@ function initial() {
   <div class="pager"><a id="l_prev" onclick="turn(-1);">&lt; Prev</a><span><span id="l_page"></span> | <span id="l_count"></span></span><a id="l_next" onclick="if(this.className!=='dis')turn(1);">Next &gt;</a></div>
 </div>
 
-<div class="panel"><h2 class="split">Exceptions<span class="fcols num"><span id="x_total"></span><a class="xshow" id="x_show" onclick="toggleexc();">Show</a></span></h2>
+<div class="panel"><h2 class="split">Exceptions<span class="fcols num"><span id="x_total"></span><a class="xshow" id="x_show" onclick="toggleexcpanel();">Show</a></span></h2>
 <div id="x_body" style="display:none">
   <div class="tabs">
     <a id="xtab_dns" class="sel" onclick="pickexc('dns');"></a>
