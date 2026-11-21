@@ -1,4 +1,4 @@
-v2.0.27   - (BETA)
+v2.0.28   - (BETA)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
             same naming convention and functionality from tainting possible results. This also helps keeps
             IOCMON more stable and secure by not relying on other similar forks that may break functionality.
