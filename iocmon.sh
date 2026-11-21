@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.22
+# Version: 2.0.28
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-18
+# Last Updated: 2026-Nov-21
 # ============================================================================================================================
 #
 # Description:
@@ -45,6 +45,10 @@
 #   /tmp/iocmon_devnames                                                : LAN address to device name list, from the router's client list (RAM)
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/feeds/geoip.txt                   : Threat View IPv4 country table built monthly from IPLocate.io (CC BY-SA 4.0)
 #   /tmp/iocmon_addonsig                                                : last Kairos/Astraea signature check results, re-checked when either file changes (RAM)
+#   /jffs/addons/iocmon.d/iocmon.sh.verified                            : last copy of this script that passed its release signature check (restored if an update fails)
+#   /jffs/addons/iocmon.d/relsig_alerted                                : script/page copies already alerted as not authenticated
+#   /tmp/iocmon_relsig                                                  : last release signature check results for this script and the web page (RAM)
+#   /tmp/iocmon_relsig_restored                                         : an altered copy replaced by the verified copy, shown until IOCMON is restarted (RAM)
 #   /jffs/addons/iocmon.d/dropbear_seen.db, httpd_seen.db               : content ledgers of auth-failure lines already counted (checkauth) - kept on JFFS, not the drive, so a drive flap can't cause a replay
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/dropbear_attempts.log       : dropbear auth-failure log, syslog lines with the year added, rotated to .1/.2 at $logsize lines
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/fs_baseline.db              : plain sorted file-path list (no stat - see below)
@@ -117,7 +121,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.22"
+version="2.0.28"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -127,9 +131,15 @@ jffslogfile="/jffs/addons/iocmon.d/iocmon.log"  # default (JFFS) activity log lo
 logfile="$jffslogfile"  # main activity/alert log actually written to - resolved from logfilepath by resolvelogfile()
 updatingfile="/jffs/addons/iocmon.d/updating.txt"  # maintenance-mode lock file
 restartpendingfile="/jffs/addons/iocmon.d/restart_pending"  # presence = -autoupdate/AMTM downloaded a newer version; the persistent loop restarts into it next cycle
+relsigbackup="/jffs/addons/iocmon.d/iocmon.sh.verified"  # last copy of this script that passed the release signature check, restored if a later copy fails it
+relsigalerted="/jffs/addons/iocmon.d/relsig_alerted"  # "name|md5" of copies already alerted as not authenticated, so each copy alerts once
+relsigrestoredfile="/tmp/iocmon_relsig_restored"  # "owner pid or next|version|date|kind|acknowledged 0/1" of an altered copy replaced by the verified copy
+relsigstate="/tmp/iocmon_relsig"  # "name|md5|state|signed|fingerprint|reason|time" of the last script/page signature checks, RAM only
+relsigopensslpaths="/usr/sbin/openssl /usr/bin/openssl /opt/bin/openssl"  # where an openssl for the release signature check is looked for (any version)
+iocmonhomeurl="https://github.com/ViktorJp/IOCMON"  # official source named in the authenticity warning
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.5.8"  # web interface page version this script expects
+webuiversion="1.6.4"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -266,6 +276,7 @@ phpagesize=500                  # queries fetched per Pi-hole API call
 phmaxpages=20                   # most Pi-hole API pages read per cycle before warning about a gap
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
+ipexceptionnotes=""             # newline-separated "<entry>|<note>" lines, a short note per ipexceptions entry
 enableskynetimport=0            # push current IPv4 feed indicators into Skynet Firewall's own ban list, tagged IOCMON - see syncskynetimport()
 skynetimportqfeeds=0            # also include Q-Feeds' much larger, lower-confidence OSINT IP list in that Skynet import
 enablefwlogwatch=0              # requires an iptables LOG rule; setup menu can add it
@@ -574,17 +585,28 @@ ScriptUpdateFromAMTM()
 
     echo ""
     echo -e "${InvGreen} ${CClear} Downloading latest ${CGreen}IOCMON${CClear}...Please stand by while we enhance your router's security posture..."
+    cp -f "/jffs/scripts/iocmon.sh" "/tmp/iocmon.sh.amtmprev" 2>/dev/null
     curl -fsSL "$iocmonreposcriptstable" -o "/jffs/scripts/iocmon.sh" && chmod 755 "/jffs/scripts/iocmon.sh"
     DLsuccess=$?
-    if [ "$DLsuccess" -eq 0 ]; then
+    if [ "$DLsuccess" -eq 0 ] && ! relsiggate "/jffs/scripts/iocmon.sh" sh "IOCMON script v$(ondiskversion) downloaded by AMTM" restore "/tmp/iocmon.sh.amtmprev" update; then
+      DLsuccess=4
+      if [ "$relsigrestoredok" = "1" ]; then
+        echo -e "${InvRed} ${CClear} The downloaded IOCMON failed its release signature check and was replaced with the last verified copy (v$(ondiskversion))."
+      else
+        echo -e "${InvRed} ${CClear} The downloaded IOCMON failed its release signature check and no verified copy could be put back - reinstall from $iocmonhomeurl"
+      fi
+      echo ""
+    elif [ "$DLsuccess" -eq 0 ]; then
+      [ "$relsiggaterc" = "0" ] && relsigsavebackup
       touch "$restartpendingfile"
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated via AMTM to v$(ondiskversion) - any running instance will restart into it." >> "$logfile"
       echo -e "${InvGreen} ${CClear} IOCMON Download/Update Success."
       echo ""
-    else
+    elif [ "$DLsuccess" -ne 4 ]; then
       echo -e "${InvRed} ${CClear} IOCMON Download/Update Failed. Please check all the things."
       echo ""
     fi
+    rm -f "/tmp/iocmon.sh.amtmprev"
 
     return "$DLsuccess"
 }
@@ -605,6 +627,8 @@ downloadiocmonupdate()
   fi
 
   [ "$dlrc" -eq 0 ] && ! scriptfilevalid "${apppath}.new" && dlrc=255
+  relsiggaterc=""
+  [ "$dlrc" -eq 0 ] && ! relsiggate "${apppath}.new" sh "downloaded IOCMON $label script v$(ondiskversion "${apppath}.new")" && dlrc=254
 
   if [ "$dlrc" -eq 0 ]; then
     if ! mv "${apppath}.new" "$apppath"; then
@@ -613,11 +637,14 @@ downloadiocmonupdate()
       return 3
     fi
     chmod 755 "$apppath"
+    [ "$relsiggaterc" = "0" ] && relsigsavebackup
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: IOCMON updated to the $label track successfully." >> "$logfile"
     return 0
   else
     rm -f "${apppath}.new"
-    if [ "$dlrc" -eq 255 ]; then
+    if [ "$dlrc" -eq 254 ]; then
+      return 4
+    elif [ "$dlrc" -eq 255 ]; then
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: The downloaded IOCMON $label script failed validation and was not installed." >> "$logfile"
     else
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: IOCMON $label update download failed." >> "$logfile"
@@ -662,12 +689,16 @@ scriptfilevalid()
 
 checkscriptreplaced()
 {
-  local diskver reason sizebefore
+  local diskver reason sizebefore diskhash pendingrestore=0
 
   [ -f "$updatingfile" ] && return 0
   diskver="$(ondiskversion)"
   if [ -f "$restartpendingfile" ]; then
     reason="a newer IOCMON version was downloaded by an update"
+    if [ "$(head -n 1 "$restartpendingfile" 2>/dev/null)" = "restored" ]; then
+      reason="an altered IOCMON script was replaced with the last verified copy"
+      pendingrestore=1
+    fi
   elif [ -n "$diskver" ] && [ "$diskver" != "$version" ]; then
     reason="the IOCMON script on disk was replaced (running v$version, on disk v$diskver)"
   else
@@ -684,11 +715,25 @@ checkscriptreplaced()
     fi
     return 0
   fi
+  diskhash="$(md5sum < "$apppath" 2>/dev/null | cut -d' ' -f1)"
+  [ -n "$relsigrefused" ] && [ "$relsigrefused" = "$diskhash" ] && return 0
+  if [ ! -f "$restartpendingfile" ] && ! relsiggate "$apppath" sh "IOCMON script v$diskver found on disk" restore "" ondisk; then
+    rm -f "$restartpendingfile"
+    if [ "$relsigrestoredok" = "1" ]; then
+      relsigrefused=""
+    else
+      relsigrefused="$diskhash"
+      relsiglog "WARNING" "Staying on the running IOCMON v$version until a correctly signed copy is installed."
+    fi
+    return 0
+  fi
 
   rm -f "$restartpendingfile"
   echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Detected that $reason - restarting into v${diskver} now." >> "$logfile"
   clear
-  if [ "$diskver" = "$version" ]; then
+  if [ "$pendingrestore" -eq 1 ]; then
+    echo -e "${CGreen}An altered copy of IOCMON was replaced with the last verified copy (v${diskver}) - restarting into it...${CClear}"
+  elif [ "$diskver" = "$version" ]; then
     echo -e "${CGreen}An updated copy of IOCMON v${diskver} was installed - restarting into it...${CClear}"
   else
     echo -e "${CGreen}IOCMON v${diskver} was installed while v$version was running - restarting into the new version...${CClear}"
@@ -696,6 +741,422 @@ checkscriptreplaced()
   sleep 2
   exec sh "$apppath" -noswitch
 }
+
+# ===== Release signature: IOCMON's own script and web page =====
+
+# -------------------------------------------------------------------------------------------------------------------------
+# releasepubkeys prints the IOCMON release public key(s); the signing tool writes them here, and Astraea reads them too
+
+releasepubkeys()
+{
+  cat <<'IOCMONKEYS'
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGzro3IzeUaM8MtRs8Q6HzIV9EtOD
+T5B6NSALL88fLmRYMaSOokJU9i50RnKM7gvcB/I1SSK0WbGhSPNFaeSUuw==
+-----END PUBLIC KEY-----
+IOCMONKEYS
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigopenssl prints the first openssl found for the release signature check (any version can check ECDSA)
+
+relsigopenssl()
+{
+  local b
+  for b in $relsigopensslpaths; do
+    [ -x "$b" ] && { echo "$b"; return 0; }
+  done
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigkeysfrom prints the public key blocks written in the signed part of file $1
+
+relsigkeysfrom()
+{
+  local n
+  n="$(grep -n '^#-----BEGIN SIGNATURE-----$' "$1" 2>/dev/null | head -n 1 | cut -d: -f1)"
+  if [ -n "$n" ]; then head -n "$((n - 1))" "$1"; else cat "$1"; fi 2>/dev/null | awk '/^-----BEGIN PUBLIC KEY-----$/ { p = 1 } p { print } /^-----END PUBLIC KEY-----$/ { p = 0 }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# releasesigverify $1=file $2=sh|asp $3=key file returns 0 valid, 1 not valid, 2 no openssl, 3 no signature, 4 no key, setting relsigfp/relsigsigned/relsigerr
+
+releasesigverify()
+{
+  local f="$1" t="$2" keys="$3" o n start d="/tmp/iocmon_relsig.$$" i rc=1
+  relsigfp=""; relsigsigned=""; relsigerr=""
+  grep -q '^-----BEGIN PUBLIC KEY-----$' "$keys" 2>/dev/null || { relsigerr="this copy of IOCMON holds no release key"; return 4; }
+  n="$(grep -n '^#-----BEGIN SIGNATURE-----$' "$f" 2>/dev/null | head -n 1 | cut -d: -f1)"
+  [ -n "$n" ] || { relsigerr="it has no release signature"; return 3; }
+  o="$(relsigopenssl)" || { relsigerr="no openssl on this router can check it"; return 2; }
+  start="$n"
+  [ "$t" = "asp" ] && start=$((n - 1))
+  rm -rf "$d"
+  mkdir -p "$d" || { relsigerr="could not create $d"; return 1; }
+  relsigerr="its signature block is damaged or followed by other content"
+  if [ "$start" -ge 1 ]; then
+    head -n "$((start - 1))" "$f" > "$d/body"
+    tail -n "+$start" "$f" > "$d/block"
+    if [ "$t" = "asp" ]; then
+      [ "$(head -n 1 "$d/block")" = "<!--" ] && [ "$(tail -n 1 "$d/block")" = "-->" ] && sed '1d;$d' "$d/block" > "$d/inner"
+    else
+      cp "$d/block" "$d/inner"
+    fi
+    if [ -s "$d/inner" ] && ! grep -qv '^#' "$d/inner" && [ "$(tail -n 1 "$d/inner")" = "#-----END SIGNATURE-----" ] && cat "$d/body" "$d/block" | cmp -s - "$f"; then
+      sed '1d;$d;s/^#//' "$d/inner" | "$o" base64 -d > "$d/sig" 2>/dev/null
+      awk -v d="$d" '/^-----BEGIN PUBLIC KEY-----$/ { c++ } c { print > (d "/k" c) }' "$keys"
+      relsigerr="its signature does not match: it was changed after signing, or was not signed with the IOCMON release key"
+      for i in 1 2 3 4 5 6; do
+        [ -s "$d/k$i" ] || break
+        if [ -s "$d/sig" ] && "$o" dgst -sha256 -verify "$d/k$i" -signature "$d/sig" "$d/body" >/dev/null 2>&1; then
+          rc=0
+          relsigerr=""
+          relsigfp="$("$o" pkey -pubin -in "$d/k$i" -outform DER 2>/dev/null | "$o" dgst -sha256 2>/dev/null | tr -d '\r' | sed 's/.*= *//')"
+          relsigsigned="$(tail -n 1 "$d/body" | tr -d '\r' | sed -n 's/^#Signed: \(.*\)$/\1/p; s/^<!-- Signed: \(.*\) -->$/\1/p')"
+          break
+        fi
+      done
+    fi
+  fi
+  rm -rf "$d"
+  return "$rc"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsiglog $1=level $2=message appends one line to the activity log, with the message printed as text
+
+relsiglog()
+{
+  printf '%s %s IOCMON[%s] - %s: %s\n' "$(date +'%b %d %Y %X')" "$(_GetLAN_HostName_)" "$$" "$1" "$2" >> "$logfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsiggate $1=new file $2=sh|asp $3=description [$4=restore $5=fallback copy $6=kind] checks a new copy with this copy's key(s): 1 = refused
+
+relsiggate()
+{
+  local f="$1" t="$2" what="$3" keys="/tmp/iocmon_relsigkeys.$$" rc h detail
+  relsigrestoredok=0
+  releasepubkeys > "$keys"
+  releasesigverify "$f" "$t" "$keys"
+  rc=$?
+  rm -f "$keys"
+  relsiggaterc="$rc"
+  case "$rc" in
+    0) relsiglog "INFO" "The $what passed the release signature check (key $(printf '%.16s' "$relsigfp")..., signed ${relsigsigned:-at an unknown time})."
+       return 0 ;;
+    1) h="$(md5sum < "$f" 2>/dev/null | cut -d' ' -f1)"
+       if [ "$4" != "restore" ]; then
+         relsiglog "ERROR" "The $what failed the release signature check and was refused: $relsigerr. It may have been altered - install IOCMON only from $iocmonhomeurl."
+         detail="The $what failed the IOCMON release signature check and was refused (it may have been altered)"
+       elif relsigrestore "$5"; then
+         relsigrestoredok=1
+         relsigmarkrestored "$6"
+         relsiglog "ERROR" "The $what failed the release signature check ($relsigerr) and was replaced with the last verified copy (v$(ondiskversion))."
+         detail="The $what failed the IOCMON release signature check and was replaced with the last verified copy (v$(ondiskversion))"
+       else
+         relsiglog "ERROR" "The $what failed the release signature check ($relsigerr), and no verified copy was available to put back. Reinstall IOCMON from $iocmonhomeurl."
+         detail="The $what failed the IOCMON release signature check and no verified copy could be put back - reinstall IOCMON from $iocmonhomeurl"
+       fi
+       raisealert "fsintegrity" "$f" "iocmon-signature" "$detail" "$f-$h"
+       return 1 ;;
+    2) relsiglog "WARNING" "The $what was installed without a signature check: $relsigerr." ;;
+    3) relsiglog "WARNING" "The $what has no release signature, so it can't be authenticated - installed anyway." ;;
+  esac
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigrestore puts the last verified copy (or fallback copy $1) back in place of the script; 0 when restored
+
+relsigrestore()
+{
+  local src="$relsigbackup"
+  if [ ! -s "$src" ] || ! scriptfilevalid "$src"; then src="$1"; fi
+  [ -n "$src" ] && [ -s "$src" ] && scriptfilevalid "$src" || return 1
+  cp -f "$src" "$apppath.restore.$$" && mv -f "$apppath.restore.$$" "$apppath" || { rm -f "$apppath.restore.$$"; return 1; }
+  chmod 755 "$apppath"
+  relsiglog "INFO" "Restored IOCMON v$(ondiskversion) from $src."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigsavebackup keeps the installed script as the last verified copy, writing JFFS only when it changed
+
+relsigsavebackup()
+{
+  [ -s "$apppath" ] || return 1
+  cmp -s "$apppath" "$relsigbackup" 2>/dev/null && return 0
+  cp -f "$apppath" "$relsigbackup.$$" && mv -f "$relsigbackup.$$" "$relsigbackup" || { rm -f "$relsigbackup.$$"; return 1; }
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigmarkrestored $1=altered|ondisk|update records in RAM that an altered copy was replaced, owned by the running loop (or the next to start)
+
+relsigmarkrestored()
+{
+  local owner
+  owner="$(cat "$addonsdir/iocmon.pid" 2>/dev/null)"
+  case "$owner" in ''|*[!0-9]*) owner="next" ;; *) [ "$owner" = "$$" ] || iocmonpid "$owner" || owner="next" ;; esac
+  relsigrestver="$(ondiskversion)"; relsigrestwhen="$(date +'%b %d %Y %X')"; relsigrestkind="$1"
+  relsigrestoredwrite "$owner" 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigrestoredwrite $1=owner $2=acknowledged 0/1 writes the restored record from relsigrestver/when/kind
+
+relsigrestoredwrite()
+{
+  printf '%s|%s|%s|%s|%s\n' "$1" "$relsigrestver" "$relsigrestwhen" "$relsigrestkind" "$2" > "$relsigrestoredfile.$$" && mv -f "$relsigrestoredfile.$$" "$relsigrestoredfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigrestoredactive succeeds while that record exists (removing a damaged one), setting relsigrestowner/ver/when/kind/ack
+
+relsigrestoredactive()
+{
+  local rec
+  relsigrestowner=""; relsigrestwhen=""; relsigrestver=""; relsigrestkind=""; relsigrestack=0
+  [ -s "$relsigrestoredfile" ] || return 1
+  rec="$(head -n 1 "$relsigrestoredfile" 2>/dev/null)"
+  relsigrestowner="${rec%%|*}"
+  relsigrestver="$(echo "$rec" | cut -d'|' -f2)"
+  relsigrestwhen="$(echo "$rec" | cut -d'|' -f3)"
+  relsigrestkind="$(echo "$rec" | cut -d'|' -f4)"
+  relsigrestack="$(echo "$rec" | cut -d'|' -f5)"
+  case "$relsigrestowner" in next) ;; ''|*[!0-9]*) rm -f "$relsigrestoredfile"; relsigrestack=0; return 1 ;; esac
+  case "$relsigrestack" in 0|1) ;; *) rm -f "$relsigrestoredfile"; relsigrestack=0; return 1 ;; esac
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigrestoredstartup keeps the notice through a restart in the same process, claims one left for the next start, and drops any other
+
+relsigrestoredstartup()
+{
+  relsigrestoredactive || return 0
+  if [ "$relsigrestowner" = "next" ]; then
+    relsigrestoredwrite "$$" "$relsigrestack"
+  elif [ "$relsigrestowner" != "$$" ]; then
+    rm -f "$relsigrestoredfile"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigrestoredack $1=optional text naming where hides the restored banner; the Authenticity status keeps [restored] until a restart
+
+relsigrestoredack()
+{
+  relsigrestoredactive && [ "$relsigrestack" = "0" ] || return 0
+  relsigrestoredwrite "$relsigrestowner" 1
+  relsiglog "INFO" "Authenticity warning acknowledged$1 - the Authenticity status shows [restored] until IOCMON is restarted."
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigsave $1=name $2=md5 $3=state $4=signed $5=fingerprint $6=reason replaces that name's line in the state file
+
+relsigsave()
+{
+  { grep -v "^$1|" "$relsigstate" 2>/dev/null; printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" "$5" "$(printf '%s' "$6" | tr '|' '/')" "$(date +'%H:%M')"; } > "$relsigstate.$$"
+  mv -f "$relsigstate.$$" "$relsigstate"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigfield $1=script|page $2=field number prints that field of the last check (3 state, 4 signed, 5 key, 6 reason, 7 time)
+
+relsigfield()
+{
+  grep "^$1|" "$relsigstate" 2>/dev/null | tail -n 1 | cut -d'|' -f"$2"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigcheck $1=script|page checks the installed copy once per change, logging, alerting and saving the verified backup when that changes
+
+relsigcheck()
+{
+  local name="$1" f t label keys="/tmp/iocmon_relsigkeys.$$" h rec oldh olds st rc restored=0
+  if [ "$name" = "script" ]; then f="$apppath"; t="sh"; label="IOCMON script"; else f="$webuipagefile"; t="asp"; label="IOCMON web page"; fi
+  if [ "$name" = "page" ] && { [ "${enablewebui:-0}" != "1" ] || [ ! -f "$f" ]; }; then
+    [ "$(relsigfield page 3)" = "off" ] || relsigsave page "" off "" "" ""
+    return 0
+  fi
+  [ -f "$f" ] || return 1
+  h="$(md5sum < "$f" | cut -d' ' -f1)"
+  rec="$(grep "^$name|" "$relsigstate" 2>/dev/null | tail -n 1)"
+  oldh="$(echo "$rec" | cut -d'|' -f2)"
+  olds="$(echo "$rec" | cut -d'|' -f3)"
+  [ -n "$rec" ] && [ "$oldh" = "$h" ] && [ "$olds" != "noossl" ] && return 0
+  if [ "$name" = "script" ] && [ -s "$relsigbackup" ] && relsigkeysfrom "$relsigbackup" > "$keys" && [ -s "$keys" ]; then :; else releasepubkeys > "$keys"; fi
+  releasesigverify "$f" "$t" "$keys"
+  rc=$?
+  rm -f "$keys"
+  case "$rc" in 0) st="ok" ;; 1) st="bad" ;; 2) st="noossl" ;; 3) st="unsigned" ;; *) st="nokey" ;; esac
+  relsigsave "$name" "$h" "$st" "$relsigsigned" "$relsigfp" "$relsigerr"
+  [ "$name" = "script" ] && [ "$st" = "ok" ] && relsigsavebackup
+  if [ "$name" = "script" ] && [ "$st" = "bad" ] && [ -s "$relsigbackup" ] && ! cmp -s "$f" "$relsigbackup" && relsigrestore ""; then
+    restored=1
+    relsigmarkrestored altered
+    echo "restored" > "$restartpendingfile"
+  fi
+  [ "$oldh" = "$h" ] && [ "$olds" = "$st" ] && return 0
+  case "$st" in
+    ok) relsiglog "INFO" "The $label passed its release signature check (key $(printf '%.16s' "$relsigfp")..., signed ${relsigsigned:-at an unknown time})." ;;
+    noossl) relsiglog "WARNING" "The $label could not be authenticated: $relsigerr." ;;
+    bad|unsigned)
+      if [ "$restored" -eq 1 ]; then
+        relsiglog "WARNING" "The $label at $f failed its release signature check ($relsigerr) and was replaced with the last verified copy (v$(ondiskversion)); any edits to it were undone. IOCMON restarts into the verified copy now."
+      else
+        relsiglog "WARNING" "The $label at $f could not be authenticated and may have been altered: $relsigerr. Reinstall IOCMON from $iocmonhomeurl."
+      fi
+      if ! grep -qx "$name|$h" "$relsigalerted" 2>/dev/null; then
+        { tail -n 19 "$relsigalerted" 2>/dev/null; echo "$name|$h"; } > "$relsigalerted.$$" && mv -f "$relsigalerted.$$" "$relsigalerted"
+        if [ "$restored" -eq 1 ]; then
+          raisealert "fsintegrity" "$f" "iocmon-signature" "The $label failed its release signature check and was replaced with the last verified copy (v$(ondiskversion)) - any edits to iocmon.sh were undone" "$f-$h"
+        elif [ "$st" = "bad" ]; then
+          raisealert "fsintegrity" "$f" "iocmon-signature" "The $label failed its release signature check and may have been altered - reinstall it from $iocmonhomeurl" "$f-$h"
+        else
+          raisealert "fsintegrity" "$f" "iocmon-unsigned" "The $label has no release signature and could not be authenticated - reinstall it from $iocmonhomeurl" "$f-$h"
+        fi
+      fi ;;
+  esac
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigcheckall checks the script and the web page; run at main-loop startup and once per cycle
+
+relsigcheckall()
+{
+  relsigcheck script
+  relsigcheck page
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigword $1=state $2=c|plain prints the dashboard word for a signature state, coloured unless $2 is plain
+
+relsigword()
+{
+  local w c
+  case "$1" in
+    ok) w="ok"; c="$CGreen" ;;
+    bad) w="invalid"; c="${InvRed}${CWhite}" ;;
+    unsigned) w="unsigned"; c="${InvRed}${CWhite}" ;;
+    restored) w="restored"; c="${InvRed}${CWhite}" ;;
+    noossl) w="unchecked"; c="$CYellow" ;;
+    nokey) w="no key"; c="$CDkGray" ;;
+    off) w="off"; c="$CDkGray" ;;
+    *) w="pending"; c="$CDkGray" ;;
+  esac
+  if [ "$2" = "plain" ]; then printf '%s' "$w"; else printf '%b%s%b' "$c" "$w" "$CClear"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigshort $1=script|page $2=state prints a short reason (under 58 characters) for a state that isn't ok
+
+relsigshort()
+{
+  local who="Script"
+  [ "$1" = "page" ] && who="Web UI"
+  case "$2" in
+    bad) echo "$who signature does not match - may be altered" ;;
+    unsigned) echo "$who has no release signature" ;;
+    noossl) echo "$who: no openssl here to check signatures" ;;
+    nokey) echo "$who: this copy holds no release key" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigdashprep sets relsigr1-3, the dashboard's three Authenticity lines beside Filesystem Integrity
+
+relsigdashprep()
+{
+  local ss ps sd sf st sw
+  ss="$(relsigfield script 3)"; ps="$(relsigfield page 3)"
+  sd="$(relsigfield script 4)"; sf="$(relsigfield script 5)"; st="$(relsigfield script 7)"
+  sw="$ss"
+  case "$ss" in bad|unsigned) ;; *) relsigrestoredactive && sw="restored" ;; esac
+  relsigr1="${CWhite}IOCMON Authenticity:${CClear} script [$(relsigword "$sw")] | web ui [$(relsigword "$ps")]"
+  relsigr2=""; relsigr3=""
+  if [ "$sw" = "restored" ]; then
+    if [ "$relsigrestkind" = "update" ]; then relsigr2="${CRed}Bad AMTM update replaced ${relsigrestwhen}${CClear}"; else relsigr2="${CRed}Altered copy replaced ${relsigrestwhen}${CClear}"; fi
+    [ "$ss" = "ok" ] && relsigr3="${CWhite}Signed:${CClear} ${CGreen}${sd:-unknown}${CClear}"
+  elif [ "$ss" = "ok" ]; then
+    relsigr2="${CWhite}Signed:${CClear} ${CGreen}${sd:-unknown}${CClear}"
+    relsigr3="${CWhite}Key:${CClear} ${CGreen}$(printf '%.16s' "$sf")...${CClear} (checked ${st:-n/a})"
+  elif [ -n "$ss" ]; then
+    case "$ss" in bad|unsigned) relsigr2="${CRed}$(relsigshort script "$ss")${CClear}" ;; *) relsigr2="${CDkGray}$(relsigshort script "$ss")${CClear}" ;; esac
+  fi
+  case "$ps" in
+    bad|unsigned) relsigr3="${CRed}$(relsigshort page "$ps")${CClear}" ;;
+    noossl) [ "$ss" = "ok" ] || relsigr3="${CYellow}$(relsigshort page "$ps")${CClear}" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigbannerblock $1=heading $2=detail $3=closing line prints one three-line authenticity banner
+
+relsigbannerblock()
+{
+  echo -e "${InvGreen} ${CClear}"
+  echo -en "${InvRed}${CWhite} "; padright "$1" 137; echo -e "${CClear}"
+  echo -e " ${CWhite}$2${CClear}"
+  echo -en "${InvRed}${CWhite} "; padright "$3" 137; echo -e "${CClear}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigbanner prints the authenticity warnings: an invalid or unsigned copy (permanent), or an altered copy replaced (until acknowledged)
+
+relsigbanner()
+{
+  local ss ps shown=1 detail
+  ss="$(relsigfield script 3)"; ps="$(relsigfield page 3)"
+  case "$ss" in
+    bad|unsigned)
+      relsigbannerblock "!!! AUTHENTICITY WARNING: This copy of IOCMON could not be authenticated and may have been altered !!!" \
+        "Script: $(relsigword "$ss" plain) | Web UI: $(relsigword "$ps" plain) - reinstall IOCMON from the official source: ${iocmonhomeurl}" \
+        "This warning can't be acknowledged. It clears once a correctly signed copy is installed."
+      return 0 ;;
+  esac
+  if relsigrestoredactive && [ "$relsigrestack" = "0" ]; then
+    if [ "$relsigrestkind" = "update" ]; then
+      detail="An IOCMON update downloaded by AMTM on $relsigrestwhen failed its signature check, so the last verified copy (v$relsigrestver) was put back."
+    else
+      detail="Found $relsigrestwhen - IOCMON v$relsigrestver from the last verified copy is running, and any edits to iocmon.sh were undone."
+    fi
+    relsigbannerblock "!!! AUTHENTICITY WARNING: An altered copy of IOCMON was replaced with the last verified copy !!!" "$detail" \
+      "Press (A) to Acknowledge - the Authenticity status keeps showing [restored] until IOCMON is restarted."
+    shown=0
+  fi
+  case "$ps" in
+    bad|unsigned)
+      relsigbannerblock "!!! AUTHENTICITY WARNING: The IOCMON web page could not be authenticated and may have been altered !!!" \
+        "Script: $(relsigword "$ss" plain) | Web UI: $(relsigword "$ps" plain) - reinstall IOCMON from the official source: ${iocmonhomeurl}" \
+        "This warning can't be acknowledged. It clears once a correctly signed copy is installed."
+      shown=0 ;;
+  esac
+  return "$shown"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# relsigpublish prints the signature status lines for the web page's status.htm
+
+relsigpublish()
+{
+  echo "sig_script=$(relsigfield script 3)"
+  echo "sig_page=$(relsigfield page 3)"
+  echo "sig_signed=$(relsigfield script 4)"
+  echo "sig_key=$(relsigfield script 5 | cut -c1-16)"
+  echo "sig_checked=$(relsigfield script 7)"
+  echo "sig_url=$iocmonhomeurl"
+  if relsigrestoredactive; then
+    echo "sig_restored=$relsigrestwhen"
+    echo "sig_restored_ver=$relsigrestver"
+    echo "sig_restored_kind=$relsigrestkind"
+    echo "sig_restored_ack=$relsigrestack"
+  fi
+}
+
+# ===== Release signature: end =====
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Preparebar and Progressbar provide the standard IOCMON key+Enter progress prompt (adapted from TAILMON)
@@ -1021,7 +1482,7 @@ migratesharedhosts()
 
 excsnapshot()
 {
-  excsnapdns="$dnsexceptions"; excsnapip="$ipexceptions"; excsnapfile="$fsexcludefiles"; excsnapcron="$cronexceptions"; excsnapped=1
+  excsnapdns="$dnsexceptions"; excsnapip="$ipexceptions"; excsnapfile="$fsexcludefiles"; excsnapcron="$cronexceptions"; excsnapipnotes="$ipexceptionnotes"; excsnapped=1
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1035,7 +1496,46 @@ excmergedisk()
   if [ "$ipexceptions" = "$excsnapip" ]; then d="$(. "$config"; printf '%s.' "$ipexceptions")"; ipexceptions="${d%.}"; fi
   if [ "$fsexcludefiles" = "$excsnapfile" ]; then d="$(. "$config"; printf '%s.' "$fsexcludefiles")"; fsexcludefiles="${d%.}"; fi
   if [ "$cronexceptions" = "$excsnapcron" ]; then d="$(. "$config"; printf '%s.' "$cronexceptions")"; cronexceptions="${d%.}"; fi
+  if [ "$ipexceptionnotes" = "$excsnapipnotes" ]; then d="$(. "$config"; printf '%s.' "$ipexceptionnotes")"; ipexceptionnotes="${d%.}"; fi
   excsnapshot
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ipnoteget prints the note saved for IP/CIDR exception $1, if any
+
+ipnoteget()
+{
+  [ -n "$ipexceptionnotes" ] || return 0
+  printf '%s\n' "$ipexceptionnotes" | awk -v k="$1" 'index($0, k "|") == 1 { print substr($0, length(k) + 2); exit }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ipnoteclean prints note $1 without control characters or "|", trimmed and cut to 64 characters
+
+ipnoteclean()
+{
+  printf '%s' "$1" | tr -d '\000-\037\177|' | sed 's/^ *//; s/ *$//' | awk '{ print substr($0, 1, 64) }'
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ipnoteset saves note $2 for IP/CIDR exception $1, replacing any old one (an empty note removes it)
+
+ipnoteset()
+{
+  local kept nl="
+"
+  kept="$(printf '%s\n' "$ipexceptionnotes" | awk -v k="$1" 'NF && index($0, k "|") != 1')"
+  [ -n "$2" ] && kept="${kept:+$kept$nl}$1|$2"
+  ipexceptionnotes="$kept"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# ipnoteprune drops notes whose entry is no longer on the IP/CIDR exceptions list
+
+ipnoteprune()
+{
+  [ -n "$ipexceptionnotes" ] || return 0
+  ipexceptionnotes="$(printf '%s\n' "$ipexceptionnotes" | awk -v l=" $ipexceptions " 'NF { k = $0; sub(/[|].*$/, "", k); if (index(l, " " k " ")) print }')"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1045,6 +1545,7 @@ saveconfig()
 {
   excmergedisk
   migratealertlevel
+  ipnoteprune
   { echo 'timerloop='$timerloop
     echo 'feedupdatehrs='$feedupdatehrs
     echo 'fsintegrityhrs='$fsintegrityhrs
@@ -1094,6 +1595,7 @@ saveconfig()
     echo 'phincludeblocked='$phincludeblocked
     echo 'enableconntrackwatch='$enableconntrackwatch
     echo 'ipexceptions="'"$ipexceptions"'"'
+    printf "ipexceptionnotes='%s'\n" "$(printf '%s' "$ipexceptionnotes" | sed "s/'/'\\\\''/g")"
     echo 'enableskynetimport='$enableskynetimport
     echo 'skynetimportqfeeds='$skynetimportqfeeds
     echo 'enablefwlogwatch='$enablefwlogwatch
@@ -1629,6 +2131,7 @@ validdomainentry()
 veditlist()
 {
   local varname="$1" title="$2" hint="${3:-absolute path}" desc1="$4" desc2="$5" list count entry idx sel newval delnum newlist overlapmsg
+  local note newnote entrywidth badge
 
   excmergedisk
   while true; do
@@ -1647,6 +2150,19 @@ veditlist()
     set -- $list
     if [ "$#" -eq 0 ]; then
       echo -e "${InvGreen} ${CClear} ${CDkGray}(no entries configured)${CClear}"
+    elif [ "$varname" = "ipexceptions" ]; then
+      entrywidth=0
+      for entry in "$@"; do [ "${#entry}" -gt "$entrywidth" ] && entrywidth="${#entry}"; done
+      for entry in "$@"; do
+        count=$((count+1))
+        badge="$(printf "(%${##}d)" "$count")"
+        note="$(ipnoteget "$entry")"
+        if [ -n "$note" ]; then
+          printf "%b %b %b%s%b : %b%-${entrywidth}s%b | %s\n" "${InvGreen}" "${CClear}" "${InvDkGray}${CWhite}" "$badge" "${CClear}" "${CGreen}" "$entry" "${CClear}" "$note"
+        else
+          printf '%b %b %b%s%b : %b%s%b\n' "${InvGreen}" "${CClear}" "${InvDkGray}${CWhite}" "$badge" "${CClear}" "${CGreen}" "$entry" "${CClear}"
+        fi
+      done
     else
       for entry in "$@"; do
         count=$((count+1))
@@ -1686,6 +2202,10 @@ veditlist()
             continue
           fi
           [ "$varname" = "dnssharedhosts" ] && newval="$(echo "$newval" | tr 'A-Z' 'a-z')"
+          if [ "$varname" = "ipexceptions" ]; then
+            read -r -p "Short note describing this entry (up to 64 characters, Enter for none): " newnote
+            ipnoteset "$newval" "$(ipnoteclean "$newnote")"
+          fi
           eval "$varname=\"\${$varname:+\$$varname }\$newval\""
           saveconfig
         fi
@@ -1714,6 +2234,26 @@ veditlist()
           eval "entry=\"\${$sel}\""
           echo -e "Current: ${CGreen}${entry}${CClear}"
           read -p "New value (blank to keep current): " newval
+          if [ "$varname" = "ipexceptions" ]; then
+            [ -z "$newval" ] && newval="$entry"
+            if ! validipcidr "$newval"; then
+              echo ""
+              echo -e "${CRed}Invalid entry - expected a single IP (e.g. 204.44.63.22) or a CIDR range (e.g. 204.44.0.0/16, prefix 0-32).${CClear}"
+              sleep 3
+              continue
+            fi
+            note="$(ipnoteget "$entry")"
+            printf 'Current note: %s\n' "${note:-(none)}"
+            read -r -p "New note (up to 64 characters, blank to keep current, - to remove it): " newnote
+            case "$newnote" in
+              "") newnote="$note" ;;
+              -) newnote="" ;;
+              *) newnote="$(ipnoteclean "$newnote")" ;;
+            esac
+            [ "$newval" = "$entry" ] && [ "$newnote" = "$note" ] && continue
+            ipnoteset "$entry" ""
+            ipnoteset "$newval" "$newnote"
+          fi
           if [ -n "$newval" ]; then
             if [ "$varname" = "ipexceptions" ] && ! validipcidr "$newval"; then
               echo ""
@@ -3367,7 +3907,7 @@ lookuphistory()
 
 lookupexceptions()
 {
-  local hit=""
+  local hit="" note=""
   lookupsection "Exception Lists"
   if [ "$1" = "ip" ]; then
     ispublicip "$2" || lookuprow "Address" "private or reserved - conntrack only matches public destinations" "$CYellow"
@@ -3380,7 +3920,8 @@ lookupexceptions()
           if (split(e[i], p, "/") == 2 && p[2] + 0 >= 0 && p[2] + 0 <= 32) { d = 2 ^ (32 - p[2]); if (int(t / d) == int(toint(p[1]) / d)) { print e[i]; exit } }
         }
       }')"
-    if [ -n "$hit" ]; then lookuprow "IP/CIDR exceptions" "yes, covered by $hit - conntrack never alerts on it" "$CYellow"
+    note="$(ipnoteget "$hit")"
+    if [ -n "$hit" ]; then lookuprow "IP/CIDR exceptions" "yes, covered by $hit${note:+ ($note)} - conntrack never alerts on it" "$CYellow"
     else lookuprow "IP/CIDR exceptions" "no"; fi
   else
     for hit in $dnsexceptions; do case "$2" in "$hit"|*".$hit") break ;; esac; hit=""; done
@@ -5945,7 +6486,7 @@ reputationstatus()
 isfeedmatchsource()
 {
   case "$1" in
-    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule|etc-critical-new|etc-critical-modified|etc-critical-deleted|addon-signature) return 1 ;;
+    dns-tunnel-heuristic|dropbear|httpd|nvram-change|ssh-directory-change|startup-script-edit|router-config-override|new-executable|startup-script-deleted|router-config-deleted|permission-escalation|cru|entware-cron|nat-rule|etc-critical-new|etc-critical-modified|etc-critical-deleted|addon-signature|iocmon-signature|iocmon-unsigned) return 1 ;;
     *) return 0 ;;
   esac
 }
@@ -9150,6 +9691,7 @@ clearalertpending()
     rm -f "$stateroot/alert_pending"
     echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Security alert banner acknowledged$1." >> "$logfile"
   fi
+  relsigrestoredack "$1"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -9700,6 +10242,10 @@ webuifetchpage()
   [ "$track" = "1" ] && url="$iocmonrepobeta/iocmon.asp"
   curl --silent --retry 3 --connect-timeout 10 --max-time 60 --retry-delay 1 --retry-all-errors --fail "$url" -o "$tmpfile"
   if [ "$?" -eq 0 ] && grep -qF "$webuimarker" "$tmpfile" 2>/dev/null; then
+    if ! relsiggate "$tmpfile" asp "downloaded IOCMON web page"; then
+      rm -f "$tmpfile"
+      return 1
+    fi
     mv -f "$tmpfile" "$webuipagefile"
     return 0
   fi
@@ -9951,6 +10497,7 @@ webpublish()
     echo "cron=$cronscheduled"
     echo "storage=$(stripansi "$drivestatus")"
     echo "drivefree=$drivefreespace"
+    relsigpublish
   } | webescape > "$webuidir/.status.tmp"
   mv -f "$webuidir/.status.tmp" "$webuidir/status.htm"
   webpublishlogs
@@ -10118,6 +10665,7 @@ webjobupdate()
     0) ;;
     2) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed validation. IOCMON v$version was left in place."; return 1 ;;
     3) rm -f "$updatingfile" "$backup"; webjobmsg="The new script could not be put in place. IOCMON v$version was left in place."; return 1 ;;
+    4) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed its release signature check and was refused (it may have been altered). IOCMON v$version was left in place."; return 1 ;;
     *) rm -f "$updatingfile" "$backup"; webjobmsg="The download failed. IOCMON v$version was left in place."; return 1 ;;
   esac
   if ! scriptfilevalid "$apppath"; then
@@ -10289,7 +10837,11 @@ webpublishexceptions()
       echo "iocmon=1"
       while IFS='|' read -r tok list crit val; do
         on=0; webexcin "$list" "$val" && on=1
-        printf '%s|%s|%s|%s|%s\n' "$tok" "$list" "$on" "$crit" "$val"
+        if [ "$list" = "ip" ]; then
+          printf '%s|%s|%s|%s|%s|%s\n' "$tok" "$list" "$on" "$crit" "$val" "$(ipnoteget "$val")"
+        else
+          printf '%s|%s|%s|%s|%s\n' "$tok" "$list" "$on" "$crit" "$val"
+        fi
       done < "$tmp.c" | webescape
     } > "$tmp"
   )
@@ -10446,7 +10998,8 @@ geoipupdate()
   [ $((now - last)) -lt 21600 ] && return 2
   echo "$now" > "$feedsroot/meta/geoip.try"
   if [ "$mode" = "cycle" ]; then
-    echo -e "  ${CGreen}[Updating Country IP Location Lookup Database]${CClear}"
+    echo ""
+    echo -e "${CGreen}[Updating Country IP Location Lookup Database]${CClear}"
   else
     inlinestatus "Country lookup: fetching"
   fi
@@ -10773,7 +11326,7 @@ webaction()
   case "$1" in
     iocmonack)
       clearalertpending " from the web interface"
-      sed -i -e 's/^pendingcount=.*/pendingcount=/' -e 's/^pendingsummary=.*/pendingsummary=/' "$webuidir/status.htm" 2>/dev/null
+      sed -i -e 's/^pendingcount=.*/pendingcount=/' -e 's/^pendingsummary=.*/pendingsummary=/' -e 's/^sig_restored_ack=.*/sig_restored_ack=1/' "$webuidir/status.htm" 2>/dev/null
       return ;;
     iocmonautocheck) webautocheck; return ;;
     iocmontv) webtvbeat; return ;;
@@ -10853,7 +11406,7 @@ applyimportedconfig()
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
   local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keepphcred="$phcred" keepphcred2="$phcred2" keptkeys=""
 
-  alertlevel=""; alertfeedonly=0; dnssharedhostsrev=1
+  alertlevel=""; alertfeedonly=0; dnssharedhostsrev=1; ipexceptionnotes=""
   . "$importfile"
   migratealertlevel
 
@@ -11080,13 +11633,24 @@ vupdate()
       [Yy])
         echo ""
         echo -e "Downloading IOCMON ${CGreen}${remotelabel}${CClear}..."
-        if downloadiocmonupdate "$remoteurl" "$remotelabel"; then
+        downloadiocmonupdate "$remoteurl" "$remotelabel"
+        dlresult=$?
+        if [ "$dlresult" -eq 0 ]; then
+          case "$relsiggaterc" in
+            0) echo -e "Signature: ${CGreen}verified${CClear} (key $(printf '%.16s' "$relsigfp")..., signed ${relsigsigned:-at an unknown time})" ;;
+            2) echo -e "Signature: ${CYellow}not checked - no openssl on this router${CClear}" ;;
+            3) echo -e "Signature: ${CYellow}none - this copy can't be authenticated${CClear}" ;;
+          esac
           echo -e "${CGreen}Download successful.${CClear}"
           echo ""
           read -rsp $'Press any key to restart IOCMON...\n' -n1 key
           exec sh "$apppath" -noswitch
-        elif [ "$?" -eq 3 ]; then
+        elif [ "$dlresult" -eq 3 ]; then
           echo -e "${CRed}ERROR: The new script could not replace $apppath - IOCMON v$version was left in place. See the log.${CClear}"
+          echo ""
+          read -rsp $'Press any key to continue...\n' -n1 key
+        elif [ "$dlresult" -eq 4 ]; then
+          echo -e "${CRed}ERROR: The download failed its release signature check and was refused (it may have been altered) - IOCMON v$version was left in place.${CClear}"
           echo ""
           read -rsp $'Press any key to continue...\n' -n1 key
         else
@@ -11515,7 +12079,7 @@ if [ "$1" == "-autoupdate" ]; then
     betacheck
     if [ "$updateiocm" -eq 1 ]; then
       resolveupdatesource
-      if [ -n "$remoteversion" ] && [ "$version" != "$remoteversion" ]; then
+      if [ -n "$remoteversion" ] && [ "$(vercompare "$remoteversion" "$version")" = "gt" ]; then
         echo > "$updatingfile"
         if downloadiocmonupdate "$remoteurl" "$remotelabel"; then
           touch "$restartpendingfile"
@@ -11714,9 +12278,11 @@ fi
 checktimeoutbin
 webuirefreshpage
 migrateiocseverity
-rm -f "$addonsigstate"
+rm -f "$addonsigstate" "$relsigstate"
+relsigrestoredstartup
 tvrunning || tvrules del
 addoncheckall
+relsigcheckall
 
 # Check for updates
 updatecheck
@@ -11770,6 +12336,26 @@ collectstatus()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# fsdashline prints one Filesystem Integrity row, with the next Authenticity line beside it when the row is short enough
+
+fsdashline()
+{
+  local right="" plain
+  plain="$(stripansi "$1")"
+  fsdashrow=$((fsdashrow + 1))
+  case "$fsdashrow" in 1) right="$relsigr1" ;; 2) right="$relsigr2" ;; 3) right="$relsigr3" ;; esac
+  if [ -z "$right" ]; then
+    [ -z "$1" ] && return 0
+    echo -e "${InvGreen} ${CClear} $1"
+  elif [ "${#plain}" -gt 73 ]; then
+    echo -e "${InvGreen} ${CClear} $1"
+    fsdashrow=$((fsdashrow - 1))
+  else
+    echo -en "${InvGreen} ${CClear} "; padright "$1" 75; echo -e "$right"
+  fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # renderdashboard paints the whole dashboard screen from current state; no detection logic of its own.
 
 renderdashboard()
@@ -11792,6 +12378,7 @@ renderdashboard()
   echo -e "${InvDkGray}${titleleft}$(printf '%*s' "$titlemidpadl" '')${CWhite}${titlemid}${InvDkGray}$(printf '%*s' "$titlemidpadr" '')${titleright}${CClear}"
 
   resolvestateroot
+  [ "$alertbanneratbottom" -ne 1 ] && relsigbanner
   if [ "$alertbanneratbottom" -ne 1 ] && [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     renderalertbanner
   fi
@@ -11866,19 +12453,22 @@ renderdashboard()
   echo -en "${InvGreen} ${CClear} "; padright "${CDkGray}${routeruptime}${CClear}" 75; echo -e "${CWhite}Drive free: ${CGreen}${drivefreespace}${CClear}"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
-  echo -e "${InvGreen} ${CClear} ${CWhite}Filesystem Integrity${CClear}"
+  relsigdashprep
+  fsdashrow=0
+  fsdashline "${CWhite}Filesystem Integrity${CClear}"
   if [ "$enablefsintegrity" -ne 1 ]; then
-    echo -e "${InvGreen} ${CClear}   Disabled."
+    fsdashline "  Disabled."
   elif [ -n "$stateroot" ] && [ -f "$stateroot/fs_scan_summary.txt" ]; then
     while IFS= read -r summaryline; do
-      echo -e "${InvGreen} ${CClear}   ${summaryline}"
+      fsdashline "  ${summaryline}"
     done < "$stateroot/fs_scan_summary.txt"
     if [ -s "$stateroot/fs_scan_errors.txt" ]; then
-      echo -e "${InvGreen} ${CClear}   ${CRed}$(wc -l < "$stateroot/fs_scan_errors.txt" | tr -d ' ') scan error(s) - first: $(head -n1 "$stateroot/fs_scan_errors.txt")${CClear}"
+      fsdashline "  ${CRed}$(wc -l < "$stateroot/fs_scan_errors.txt" | tr -d ' ') scan error(s) - first: $(head -n1 "$stateroot/fs_scan_errors.txt")${CClear}"
     fi
   else
-    echo -e "${InvGreen} ${CClear}   ${CYellow}No scan has run yet (next check due within ${fsintegrityhrs}h, or press (I) to run one now).${CClear}"
+    fsdashline "  ${CYellow}No scan has run yet (next check due within ${fsintegrityhrs}h, or press (I) to run one now).${CClear}"
   fi
+  while [ "$fsdashrow" -lt 3 ]; do fsdashline ""; done
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
 
   if [ "$alertviewmode" = "dropbear" ]; then
@@ -11953,6 +12543,7 @@ renderdashboard()
     fi
   fi
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
+  [ "$alertbanneratbottom" -eq 1 ] && relsigbanner
   if [ "$alertbanneratbottom" -eq 1 ] && [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     renderalertbanner
   fi
@@ -11982,6 +12573,7 @@ while true; do
   geoipupdate cycle
   checklogrotate
   addoncheckall
+  relsigcheckall
 
   scanbulletprinted=0
 
@@ -12078,3 +12670,8 @@ done
 
 exit 0
 
+#Signed: 2026-11-21 14:12:24 UTC (v2.0.28)
+#-----BEGIN SIGNATURE-----
+#MEYCIQCnyRK5eAkRUr+o2KSNa/ob/5pD7YIz+g3rc4MkHGPG5wIhAKcyumuxkti2
+#1Ro5MiRENb8QbLqrCA/QdCr0PvioR7wb
+#-----END SIGNATURE-----
