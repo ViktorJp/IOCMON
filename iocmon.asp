@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.5.8 -->
+<!-- IOCMON-WebUI v1.6.4 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -44,8 +44,8 @@
 #ioc .hdr .right { margin-left: auto; text-align: right; color: var(--dim); white-space: nowrap; }
 #ioc .hdr .right b { color: var(--text); font-weight: 600; }
 #ioc .banner { margin-top: 10px; padding: 8px 12px; overflow-wrap: anywhere; }
-#ioc #b_alert, #ioc #b_update { align-items: center; gap: 12px; }
-#ioc #b_alert_t, #ioc #b_update_t { flex: 1; min-width: 0; }
+#ioc #b_alert, #ioc #b_update, #ioc #b_auth { align-items: center; gap: 12px; }
+#ioc #b_alert_t, #ioc #b_update_t, #ioc #b_auth_x { flex: 1; min-width: 0; }
 #ioc .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 #ioc .btn { flex: 1; text-align: center; white-space: nowrap; padding: 7px 10px; background: var(--button); border-bottom: 2px solid var(--cyan); color: var(--text) !important;
             cursor: pointer; text-decoration: none; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
@@ -60,6 +60,10 @@
 @keyframes iocsweep { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 #ioc .banner.red { background: #4a1d1b; border-left: 4px solid var(--red); color: #ffd9d5; }
 #ioc .banner.amber { background: #453517; border-left: 4px solid var(--amber); color: #ffe7b8; }
+#ioc #b_auth b { display: block; color: #fff; letter-spacing: 1px; }
+#ioc .auth .aok { color: var(--green); }
+#ioc .auth .abad { background: var(--red); color: #fff; padding: 0 3px; }
+#ioc .auth .awarn { color: var(--amber); }
 #ioc .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
 #ioc .tile { background: var(--panel); padding: 9px 11px; min-width: 0; clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%); }
 #ioc .tile .k { color: var(--dim); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; }
@@ -140,6 +144,8 @@
 #ioc .xsw.wait { opacity: 0.6; cursor: default; }
 #ioc .excitem { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid #2c333a; }
 #ioc .excitem .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 11px; }
+#ioc .excitem .excip { flex: 0 0 140px; }
+#ioc .excitem .excnote { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--dim); }
 #ioc .modal { position: fixed; left: 0; top: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
 #ioc .modal .mbox { background: var(--panel); border-left: 4px solid var(--cyan); padding: 14px 16px; width: 460px; max-width: 90%; overflow-wrap: anywhere; }
 #ioc .modal .mt { font-weight: 600; margin-bottom: 8px; }
@@ -167,8 +173,10 @@
 #ioc .tvlegend i { display: inline-block; width: 16px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 4px; }
 #ioc .tvtip { position: absolute; z-index: 4; display: none; background: rgba(15, 21, 26, .95); border: 1px solid #1d4955; border-left: 3px solid var(--cyan);
               padding: 7px 10px; font-size: 11px; width: 300px; max-height: 260px; overflow: auto; }
-#ioc .tvtip .tt { font-weight: 600; color: var(--text); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; }
-#ioc .tvtip .tt a { color: var(--dim) !important; cursor: pointer; text-decoration: none; }
+#ioc .tvtip .tt { font-weight: 600; color: var(--text); display: flex; justify-content: space-between; align-items: center; gap: 8px;
+                  position: sticky; top: -7px; z-index: 1; margin: -7px -10px 4px -10px; padding: 7px 22px 4px 10px; background: rgb(15, 21, 26); }
+#ioc .tvtip .tt a { color: var(--dim) !important; cursor: pointer; text-decoration: none; font-size: 13px; line-height: 1; padding: 2px 5px; }
+#ioc .tvtip .tt a:hover { color: var(--text) !important; }
 #ioc .tvtip .ip { padding: 3px 0; border-top: 1px solid #2c333a; }
 #ioc .tvtip .ip .links a { margin-right: 8px; }
 #ioc .tvcounts { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; }
@@ -224,10 +232,27 @@
 #ioc .tv.full .tvdrawbtn:hover { background: #146271; }
 @media (prefers-reduced-motion: reduce) { #ioc .tv.full .tvpanel { transition: none; } }
 @media (max-width: 700px) { #ioc .tvcounts { grid-template-columns: repeat(3, 1fr); } }
+#ioc .tvcal { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 20; background: radial-gradient(ellipse at 50% 45%, #03140a 0%, #010603 75%); cursor: pointer;
+            overflow: hidden; opacity: 1; transition: opacity .8s; font-family: "Courier New", Courier, monospace; animation: tvcalflicker 5s infinite; }
+#ioc .tvcal.out { opacity: 0; animation: none; }
+#ioc .tvcal canvas { position: absolute; left: 0; top: 0; display: block; }
+#ioc .tvcal::after { content: ""; position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none;
+                   background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .28) 0, rgba(0, 0, 0, .28) 1px, transparent 1px, transparent 3px),
+                               radial-gradient(ellipse at 50% 50%, transparent 60%, rgba(0, 0, 0, .55) 100%); }
+#ioc .tvcalterm { position: absolute; left: 6%; top: 7%; right: 4%; color: #39ff6a; text-shadow: 0 0 6px rgba(57, 255, 106, .65); line-height: 1.25;
+                letter-spacing: 1px; font-weight: bold; }
+#ioc .tvcalrow { white-space: pre; min-height: 1.25em; }
+#ioc .tvcalrow.cur::after { content: ""; display: inline-block; width: .6em; height: 1em; margin-left: 2px; vertical-align: -2px; background: #39ff6a;
+                          animation: tvcalblink 1s steps(1) infinite; }
+#ioc .tvcalterm .inv { background: #39ff6a; color: #011a07; text-shadow: none; }
+#ioc .tvcalhint { position: absolute; right: 10px; bottom: 6px; color: rgba(57, 255, 106, .5); font-size: 10px; letter-spacing: 2px; z-index: 1; }
+@keyframes tvcalblink { 50% { opacity: 0; } }
+@keyframes tvcalflicker { 0%, 100% { opacity: 1; } 48% { opacity: 1; } 50% { opacity: .96; } 52% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #ioc .tvcal, #ioc .tvcalrow.cur::after { animation: none; } #ioc .tvcal { transition: none; } }
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.5.8", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.6.4", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 10;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var exc = {}, excpend = {}, askdone = null, curexc = "dns";
@@ -289,6 +314,7 @@ function showstatus(d) {
   put("h_ver", "v" + d.version + (d.track === "1" ? " beta" : ""));
   put("h_router", d.model + " (" + d.hostname + ")");
   put("h_uptime", d.uptime ? "Up " + d.uptime : "");
+  showauth(d);
 
   byid("b_alert").style.display = pending > 0 ? "flex" : "none";
   byid("b_alert").className = simonly ? "banner amber" : "banner red";
@@ -331,6 +357,42 @@ function showstatus(d) {
 
   byid("fs_err").style.display = d.fserrcount && d.fserrcount !== "0" ? "block" : "none";
   put("fs_err", d.fserrcount + " scan error(s) - first: " + d.fserrfirst);
+}
+
+function authword(st) {
+  var w = { ok: ["ok", "aok"], bad: ["invalid", "abad"], unsigned: ["unsigned", "abad"], noossl: ["unchecked", "awarn"], nokey: ["no key", ""], off: ["off", ""] };
+  return w[st] || ["pending", ""];
+}
+
+function showauth(d) {
+  var h = byid("h_auth"), s = authword(d.sig_script), p = authword(d.sig_page), badscript, badpage, restored, showrest, t;
+  badscript = d.sig_script === "bad" || d.sig_script === "unsigned";
+  badpage = d.sig_page === "bad" || d.sig_page === "unsigned";
+  restored = !badscript && !!d.sig_restored;
+  showrest = restored && d.sig_restored_ack !== "1";
+  if (restored) s = ["restored", "abad"];
+  clearnode(h);
+  if (d.sig_script === undefined) { byid("b_auth").style.display = "none"; return; }
+  h.appendChild(document.createTextNode("IOCMON Authenticity: script ["));
+  h.appendChild(make("span", s[1], s[0]));
+  h.appendChild(document.createTextNode("] | web ui ["));
+  h.appendChild(make("span", p[1], p[0]));
+  h.appendChild(document.createTextNode("]"));
+  h.title = d.sig_script === "ok" ? "Signed " + (d.sig_signed || "at an unknown time") + ", key " + (d.sig_key || "?") + "..., checked " + (d.sig_checked || "n/a") : "";
+  if (restored) h.title = (d.sig_restored_kind === "update" ? "Bad AMTM update replaced " : "Altered copy replaced ") + d.sig_restored + " - shown until IOCMON is restarted";
+  byid("b_auth").style.display = badscript || badpage || showrest ? "flex" : "none";
+  byid("a_authack").style.display = showrest ? "" : "none";
+  if (!badscript && !badpage && !showrest) return;
+  if (badscript || !showrest) {
+    put("b_auth_h", badscript ? "AUTHENTICITY WARNING: This copy of IOCMON could not be authenticated and may have been altered." : "AUTHENTICITY WARNING: This IOCMON web page could not be authenticated and may have been altered.");
+    put("b_auth_t", "Script: " + s[0] + " | Web UI: " + p[0] + ". Reinstall IOCMON from the official source: " + (d.sig_url || "the IOCMON GitHub page") + ". This warning can't be acknowledged; it clears once a correctly signed copy is installed.");
+    return;
+  }
+  put("b_auth_h", "AUTHENTICITY WARNING: An altered copy of IOCMON was replaced with the last verified copy.");
+  t = d.sig_restored_kind === "update" ? "An IOCMON update downloaded by AMTM on " + d.sig_restored + " failed its signature check, so the last verified copy (v" + (d.sig_restored_ver || "?") + ") was put back."
+    : "Found " + d.sig_restored + ". IOCMON v" + (d.sig_restored_ver || "?") + " from the last verified copy is running, and any edits to iocmon.sh were undone.";
+  if (badpage) t += " The web page could not be authenticated either (Web UI: " + p[0] + ") - reinstall IOCMON from " + (d.sig_url || "the IOCMON GitHub page") + ".";
+  put("b_auth_t", t + " Acknowledge hides this warning; the Authenticity status keeps showing [restored] until IOCMON is restarted.");
 }
 
 function checkpage(d) {
@@ -439,10 +501,11 @@ function finishfull() {
 function drawfull() { put("l_full", full[curlog] ? "Recent Only" : "Full History"); }
 function acknowledge() {
   put("a_ack", "Acknowledging...");
+  put("a_authack", "Acknowledging...");
   postaction("iocmonack");
   clearTimeout(acktimer);
   setTimeout(poll, 2000);
-  acktimer = setTimeout(function () { poll(); put("a_ack", "Acknowledge"); }, 6000);
+  acktimer = setTimeout(function () { poll(); put("a_ack", "Acknowledge"); put("a_authack", "Acknowledge"); }, 6000);
 }
 function loadupdate() { fetchdata("update.htm", function (text) { updateinfo = text ? parsestatus(text) : null; }); }
 
@@ -518,7 +581,8 @@ function loadexc() {
     for (i = 0; i < a.length; i++) {
       f = a[i].split("|");
       if (f.length < 5 || !/^[0-9a-f]{8}$/.test(f[0])) continue;
-      m[f[0]] = { list: f[1], on: f[2] === "1", crit: f[3] === "1", value: f.slice(4).join("|") };
+      m[f[0]] = f[1] === "ip" ? { list: f[1], on: f[2] === "1", crit: f[3] === "1", value: f[4], note: f.slice(5).join("|") }
+        : { list: f[1], on: f[2] === "1", crit: f[3] === "1", value: f.slice(4).join("|"), note: "" };
     }
     exc = m;
     for (t in excpend) if ((exc[t] ? exc[t].on : false) === excpend[t].on || Date.now() - excpend[t].at > 20000) delete excpend[t];
@@ -587,7 +651,10 @@ function drawexc() {
   items = excitems(curexc);
   for (i = 0; i < items.length; i++) {
     row = make("div", "excitem");
-    row.appendChild(make("span", "mono", exc[items[i]].value));
+    if (curexc === "ip") {
+      row.appendChild(make("span", "mono excip", exc[items[i]].value));
+      row.appendChild(make("span", "excnote", exc[items[i]].note || ""));
+    } else row.appendChild(make("span", "mono", exc[items[i]].value));
     row.appendChild(excswitch(items[i]));
     box.appendChild(row);
   }
@@ -1338,7 +1405,7 @@ function tvtab(name) {
 function tvfilter() { tvdrawfeed(); if (tv.tab === "top") tvdrawtop(); tvcounts(); }
 
 function tvtipfor(cc, xy) {
-  var tip = byid("tv_tip"), ips = {}, i, j, e, k, list = [], c = tv.cc[cc], box, row, l, x, y, t;
+  var tip = byid("tv_tip"), ips = {}, i, j, e, k, list = [], c = tv.cc[cc], box, row, l, x, y, t, tw, th;
   if (!cc) return;
   for (i = 0; i < tv.samples.length; i++) for (j = 0; j < tv.samples[i].ev.length; j++) {
     e = tv.samples[i].ev[j];
@@ -1365,8 +1432,11 @@ function tvtipfor(cc, xy) {
     tip.appendChild(row);
   }
   if (!xy && c) xy = { x: tvx(c.lon), y: tvy(c.lat) };
-  x = xy ? Math.min(Math.max(4, xy.x + 12), tv.W - 310) : 8; y = xy ? Math.min(Math.max(4, xy.y - 20), tv.H - 120) : 8;
-  tip.style.left = x + "px"; tip.style.top = y + "px"; tip.style.display = "block"; tv.tipcc = cc;
+  tip.style.maxHeight = Math.max(80, Math.min(260, tv.H - 8)) + "px";
+  tip.style.left = "0px"; tip.style.top = "0px"; tip.style.display = "block"; tip.scrollTop = 0;
+  tw = tip.offsetWidth; th = tip.offsetHeight;
+  x = xy ? Math.min(xy.x + 12, tv.W - tw - 4) : 8; y = xy ? Math.min(xy.y - 20, tv.H - th - 4) : 8;
+  tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px"; tv.tipcc = cc;
 }
 function tvclick(ev) {
   var r = byid("tv_fx").getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top, best = "", bd = 144, cc, d, k, list = {};
@@ -1477,6 +1547,316 @@ function tvinitpage() {
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && tv.full && !document.fullscreenElement) tvexpand(); });
   try { if (sessionStorage.getItem("iocmon_tv") === "1") tvopen(); } catch (e) { }
 }
+(function () {
+  function tvcalstr(b) { var s = atob(b), o = "", i; for (i = 0; i < s.length; i++) o += String.fromCharCode(s.charCodeAt(i) ^ (0x5a + i % 7)); return o.split("\n"); }
+  function tvcalh(s) { var v = 5381, i; for (i = 0; i < s.length; i++) v = (v * 33 + s.charCodeAt(i)) % 4294967296; return v; }
+  var S = tvcalstr("ExQfEBERQA4TDhgfC0AMEhkKfnJACB4REgoaQA4eDhAXESEWUR8SEBElGQ8VEhB/JQkPHR8SFjMSHhhXEhAnFRVmfRQQMxIOHVcXGyUUDxUJB38jFRUaFAwSJR51VhUbEywVd3wcGhIpFBIPCQweNBUJcldgfywTCAh9GR4tHwhWHAgeKRYaHhEbfycbFhkOZFVeegkJE34YLBUZHRF+CygIHh0JfgwpFw4QHAoWLxRRGxERHSEWewgVDBohDnsPFBMKLBsPFRIQVTMTFnweEhAjEXtWGRsZIxUVVgkXHE0OGh9wChAlUAgfGBAeMhMUD2d+VUB6e3x9CRYuFB4ODmR/UFAfDhwJVTMTFgkRHwspFRV8HhESMBYeCBhwVS4VewsUEBEpFBx8Dh0aLhsJFRJ+GS8PFRhzVA0lGRQREBsRJBsPFRIQZUARHhkNfgYvDwl8CRYNJRsPfBsbGiQJex8IDA0lFA9yVxsMI3oUDn0dEykZEHwJEX8lAhIIVxo2Eyo3PSR+KwUpL3J9Di0FKSh8GC08ASo+fDIsfwM2Mj82fisPejgwMi06TlALHR4VGjR6Dx0aVBkpCB4LHBITQBkTGQ4NVSIVDxIYCn8oDxUIVxoRM3oTFRkbfyEUH3wOGxorUAsTDwp/MxkaEn0cFi4dFFYHGw0vdx8dBH4PLxEeDlcdDS8UexYSHH8zFRcVCR8WMh9RFBwNF0AZFBARFwwpFRV8DxEKLB8PCBg=");
+  var E = { on: false, buf: "", taps: [], timers: [], raf: 0, box: null, cv: null, cx: null, term: null, map: null, still: false,
+    W: 0, H: 0, s: 1, ox: 0, oy: 0, fs: 13, phase: "", t0: 0, tracks: [], lv: 5, flash: 0, frozen: 0, boards: [], stage: 0, scen: 0, fade: 0, last: 0 };
+  var L = [S[20], S[21], S[22], S[23], S[24], S[25],
+    S[26], S[27], S[11], S[8]];
+  var sites = ["US", "CA", "MX", "BR", "AR", "GB", "FR", "DE", "TR", "RU", "EG", "ZA", "IN", "CN", "KR", "JP", "AU"];
+  var lines3 = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+  var green = "57,255,106";
+  var Q = [{ n: 1, step: 260, dur: 3300 }, { n: 8, step: 85, dur: 2500 }, { n: 18, step: 35, dur: 2600 }];
+
+  function tvcalsafe(f) { return function () { try { return f.apply(this, arguments); } catch (e) { tvcalend(); } }; }
+  function tvcalat(ms, f) { E.timers.push(setTimeout(tvcalsafe(f), ms)); }
+  function tvcalnow() { return Date.now(); }
+  function tvcalx(lon) { return E.ox + (lon + 180) * E.s; }
+  function tvcaly(lat) { return E.oy + (tvmap.top - lat) * E.s; }
+  function tvcalrgba(rgb, a) { return "rgba(" + rgb + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")"; }
+
+  function tvcalstart() {
+    var st;
+    if (E.on || typeof tv === "undefined" || !tv.open || !tv.coast) return;
+    st = document.getElementById("tv_stage");
+    if (!st) return;
+    E.on = true; E.still = !!tv.still; E.buf = ""; E.taps = []; E.tracks = []; E.boards = []; E.scen = 0; E.lv = 5; E.frozen = 0; E.fade = 0;
+    E.box = document.createElement("div"); E.box.className = "tvcal";
+    E.box.setAttribute("role", "dialog"); E.box.setAttribute("aria-label", S[19]);
+    E.cv = document.createElement("canvas"); E.box.appendChild(E.cv);
+    E.term = document.createElement("div"); E.term.className = "tvcalterm"; E.box.appendChild(E.term);
+    E.hint = document.createElement("div"); E.hint.className = "tvcalhint"; E.hint.textContent = S[18]; E.box.appendChild(E.hint);
+    E.box.addEventListener("click", function (ev) { ev.stopPropagation(); tvcalend(); });
+    st.appendChild(E.box);
+    E.W = E.H = 0; tvcalsize();
+    E.phase = "p1"; E.t0 = tvcalnow();
+    tvcalat(90000, tvcalend);
+    tvcalintro();
+    E.raf = window.requestAnimationFrame(tvcalsafe(tvcalframe));
+  }
+
+  function tvcalend() {
+    var i;
+    try {
+      for (i = 0; i < E.timers.length; i++) clearTimeout(E.timers[i]);
+      if (E.raf) window.cancelAnimationFrame(E.raf);
+      if (E.box && E.box.parentNode) E.box.parentNode.removeChild(E.box);
+    } catch (e) { }
+    E.timers = []; E.raf = 0; E.box = E.cv = E.cx = E.term = E.map = null; E.on = false; E.phase = ""; E.tracks = []; E.boards = [];
+  }
+
+  function tvcalsize() {
+    var st = E.box.parentNode, w = st.clientWidth, h = st.clientHeight, d = window.devicePixelRatio || 1;
+    if (w === E.W && h === E.H) return;
+    E.W = w; E.H = h;
+    E.cv.width = Math.round(w * d); E.cv.height = Math.round(h * d); E.cv.style.width = w + "px"; E.cv.style.height = h + "px";
+    E.cx = E.cv.getContext("2d"); E.cx.setTransform(d, 0, 0, d, 0, 0);
+    E.s = Math.min(w / 360, (h - 24) / (tvmap.rows * tvmap.step));
+    E.ox = (w - 360 * E.s) / 2; E.oy = (h - tvmap.rows * tvmap.step * E.s) / 2 + 8;
+    E.fs = Math.max(10, Math.min(18, Math.floor(h / 19)));
+    E.term.style.fontSize = E.fs + "px";
+    E.map = null; E.tracks = [];
+  }
+
+  function tvcallines(list, done) {
+    var i = 0, el;
+    E.term.textContent = "";
+    function next() {
+      var row, txt, k = 0;
+      if (i >= list.length) { if (done) done(); return; }
+      txt = list[i++];
+      row = document.createElement("div"); row.className = "tvcalrow"; E.term.appendChild(row);
+      if (el) el.className = "tvcalrow";
+      el = row;
+      if (E.still || txt === "") { row.textContent = txt; tvcalat(E.still ? 260 : 120, next); return; }
+      row.className = "tvcalrow cur";
+      (function tvcaltyperow() {
+        row.textContent = txt.slice(0, ++k);
+        if (k < txt.length) tvcalat(txt.charAt(k - 1) === " " ? 55 : 32, tvcaltyperow); else tvcalat(320, next);
+      })();
+    }
+    next();
+  }
+
+  function tvcalintro() {
+    tvcallines([S[0], S[1], "", S[2], S[3], "",
+      S[4], "", S[5]], function () { tvcalat(500, tvcalseq); });
+  }
+
+  function tvcalseq() {
+    var rows = [], i, r, pick = 0;
+    E.term.textContent = "";
+    r = document.createElement("div"); r.className = "tvcalrow"; r.textContent = S[6]; E.term.appendChild(r);
+    r = document.createElement("div"); r.className = "tvcalrow"; r.textContent = ""; E.term.appendChild(r);
+    for (i = 0; i < L.length; i++) {
+      r = document.createElement("div"); r.className = "tvcalrow";
+      r.textContent = (i < 9 ? " " : "") + (i + 1) + ".  ";
+      r.appendChild(document.createElement("span")).textContent = L[i];
+      r.style.visibility = "hidden"; E.term.appendChild(r); rows.push(r);
+    }
+    function reveal() {
+      if (pick < rows.length) { rows[pick++].style.visibility = ""; tvcalat(E.still ? 60 : 110, reveal); return; }
+      pick = E.still ? rows.length - 1 : 0; step();
+    }
+    function step() {
+      var j;
+      for (j = 0; j < rows.length; j++) rows[j].firstElementChild.className = j === pick ? "inv" : "";
+      if (pick < rows.length - 1) { pick++; tvcalat(230, step); return; }
+      tvcalat(E.still ? 900 : 1100, function () {
+        r = document.createElement("div"); r.className = "tvcalrow"; E.term.appendChild(r);
+        r = document.createElement("div"); r.className = "tvcalrow"; E.term.appendChild(r);
+        if (E.still) { r.textContent = S[7]; tvcalat(1200, tvcalrun); return; }
+        var t = S[7], k = 0;
+        r.className = "tvcalrow cur";
+        (function tvcaltypecmd() { r.textContent = t.slice(0, ++k); if (k < t.length) tvcalat(34, tvcaltypecmd); else tvcalat(900, tvcalrun); })();
+      });
+    }
+    reveal();
+  }
+
+  function tvcalrun() {
+    var i;
+    E.term.textContent = ""; E.phase = "p2"; E.t0 = tvcalnow(); E.spawned = 0; E.lv = 5; E.flash = E.t0;
+    for (i = 1; i <= 4; i++) (function (d) { tvcalat(i * 2200, function () { E.lv = d; E.flash = tvcalnow(); }); })(5 - i);
+    if (E.still) for (i = 0; i < 26; i++) tvcalspawn(E.t0 - 5000);
+    tvcalat(10600, function () { E.frozen = tvcalnow(); });
+    tvcalat(11800, tvcalgrid);
+  }
+
+  function tvcalsite() {
+    var c = tv.cc[sites[Math.floor(Math.random() * sites.length)]];
+    return c ? { x: tvcalx(c.lon + (Math.random() - 0.5) * c.r * 2), y: tvcaly(c.lat + (Math.random() - 0.5) * c.r) } : null;
+  }
+  function tvcalspawn(t) {
+    var a = tvcalsite(), b = tvcalsite(), k;
+    if (!a || !b || Math.abs(a.x - b.x) + Math.abs(a.y - b.y) < 30) return;
+    k = Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+    E.tracks.push({ a: a, b: b, c: { x: (a.x + b.x) / 2, y: Math.max(6, (a.y + b.y) / 2 - Math.min(k * 0.45, E.H * 0.45)) }, t0: t,
+      dur: 1500 + Math.random() * 1200, col: Math.random() < 0.5 ? "255,82,82" : "79,195,255" });
+  }
+  function tvcalpt(tr, p) { var q = 1 - p; return { x: q * q * tr.a.x + 2 * q * p * tr.c.x + p * p * tr.b.x, y: q * q * tr.a.y + 2 * q * p * tr.c.y + p * p * tr.b.y }; }
+
+  function tvcalmapcache() {
+    var c, k, j, pts, lx, d = window.devicePixelRatio || 1, lon, lat;
+    E.map = document.createElement("canvas"); E.map.width = Math.round(E.W * d); E.map.height = Math.round(E.H * d);
+    c = E.map.getContext("2d"); c.setTransform(d, 0, 0, d, 0, 0);
+    c.strokeStyle = tvcalrgba(green, 0.07); c.lineWidth = 1; c.beginPath();
+    for (lon = -180; lon <= 180; lon += 30) { c.moveTo(tvcalx(lon), tvcaly(tvmap.top)); c.lineTo(tvcalx(lon), tvcaly(tvmap.top - tvmap.rows * tvmap.step)); }
+    for (lat = 60; lat >= -50; lat -= 30) { c.moveTo(tvcalx(-180), tvcaly(lat)); c.lineTo(tvcalx(180), tvcaly(lat)); }
+    c.stroke();
+    c.strokeStyle = tvcalrgba(green, 0.6); c.lineWidth = 1; c.shadowColor = tvcalrgba(green, 0.9); c.shadowBlur = 5; c.beginPath();
+    for (k = 0; k < tv.coast.length; k++) {
+      pts = tv.coast[k]; lx = null;
+      for (j = 0; j < pts.length; j++) {
+        if (lx === null || Math.abs(pts[j][0] - lx) > 180) c.moveTo(tvcalx(pts[j][0]), tvcaly(pts[j][1])); else c.lineTo(tvcalx(pts[j][0]), tvcaly(pts[j][1]));
+        lx = pts[j][0];
+      }
+    }
+    c.stroke();
+  }
+
+  function tvcalpaintrun(now, alpha, hud) {
+    var c = E.cx, keep = [], i, tr, p, j, q, r, e = (now - E.t0) / 1000, n, rate, cw, x0, lit;
+    if (!E.frozen && !E.still && E.phase === "p2") {
+      n = Math.floor(1.2 * e + 0.95 * e * e);
+      while (E.spawned < n) { E.spawned++; if (E.tracks.length < 150) tvcalspawn(now - Math.random() * 300); }
+    }
+    c.save(); c.globalAlpha = alpha; c.lineCap = "round";
+    for (i = 0; i < E.tracks.length; i++) {
+      tr = E.tracks[i]; p = Math.min(1, (now - tr.t0) / tr.dur);
+      c.strokeStyle = tvcalrgba(tr.col, 0.85); c.lineWidth = 1.3; c.beginPath(); c.moveTo(tr.a.x, tr.a.y);
+      for (j = 1; j <= 18; j++) { q = tvcalpt(tr, p * j / 18); c.lineTo(q.x, q.y); }
+      c.stroke();
+      if (p < 1) { q = tvcalpt(tr, p); c.fillStyle = "rgba(255,255,255,0.95)"; c.beginPath(); c.arc(q.x, q.y, 1.8, 0, 6.2832); c.fill(); keep.push(tr); continue; }
+      r = (now - tr.t0 - tr.dur) / 700;
+      if (E.still) { keep.push(tr); continue; }
+      if (r < 1) { c.strokeStyle = tvcalrgba(tr.col, 1 - r); c.lineWidth = 1.5; c.beginPath(); c.arc(tr.b.x, tr.b.y, 2 + r * 11, 0, 6.2832); c.stroke(); keep.push(tr); }
+    }
+    if (!E.frozen) E.tracks = keep;
+    if (!hud) { c.restore(); return; }
+    c.font = "bold " + E.fs + "px 'Courier New', Courier, monospace"; c.textBaseline = "top";
+    c.fillStyle = tvcalrgba(green, 0.95);
+    c.fillText(S[8], 10, 8);
+    c.fillText(S[9] + tvcalclock(E.frozen ? E.frozen - E.t0 : now - E.t0), 10, 10 + E.fs * 1.3);
+    cw = Math.round(E.fs * 1.7); x0 = E.W - 10 - cw * 5 - 4 * 4;
+    c.fillText(S[10], x0, 8);
+    for (i = 0; i < 5; i++) {
+      n = 5 - i; lit = n === E.lv && (E.still || (now - E.flash) > 900 || Math.floor((now - E.flash) / 150) % 2 === 0);
+      c.strokeStyle = tvcalrgba(n === 1 ? "255,82,82" : green, 0.9); c.lineWidth = 1;
+      c.strokeRect(x0 + i * (cw + 4) + 0.5, 10 + E.fs * 1.3 + 0.5, cw, cw);
+      if (lit) { c.fillStyle = tvcalrgba(E.lv === 1 ? "255,82,82" : green, 0.9); c.fillRect(x0 + i * (cw + 4) + 2, 12 + E.fs * 1.3, cw - 3, cw - 3); }
+      c.fillStyle = lit ? "#011a07" : tvcalrgba(green, 0.9);
+      c.fillText(String(n), x0 + i * (cw + 4) + cw / 2 - E.fs * 0.3, 10 + E.fs * 1.3 + (cw - E.fs) / 2);
+    }
+    c.restore();
+  }
+  function tvcalclock(ms) {
+    var s = Math.floor(ms * 0.36), z = function (v) { return ("0" + v).slice(-2); };
+    return z(Math.floor(s / 3600) % 100) + ":" + z(Math.floor(s / 60) % 60) + ":" + z(s % 60);
+  }
+
+  function tvcalperm() {
+    var tries, m, i, j, b, ok, t, l;
+    for (tries = 0; tries < 400; tries++) {
+      m = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+      for (i = 8; i > 0; i--) { j = Math.floor(Math.random() * (i + 1)); t = m[i]; m[i] = m[j]; m[j] = t; }
+      b = []; ok = true;
+      for (i = 0; i < 9 && ok; i++) {
+        b[m[i]] = i % 2 ? "O" : "X";
+        for (l = 0; l < 8; l++) if (b[lines3[l][0]] && b[lines3[l][0]] === b[lines3[l][1]] && b[lines3[l][1]] === b[lines3[l][2]]) ok = false;
+      }
+      if (ok) return m;
+    }
+    return [0, 4, 8, 2, 6, 3, 5, 7, 1];
+  }
+  function tvcalgrid() {
+    E.phase = "p3"; E.fade = tvcalnow(); E.stage = 0; tvcalstage();
+  }
+  function tvcalstage() {
+    var st = Q[E.stage], i, now = tvcalnow();
+    E.boards = [];
+    for (i = 0; i < st.n; i++) E.boards.push({ m: tvcalperm(), k: E.still ? 9 : 0, next: now + i * 23, done: E.still ? now : 0 });
+    if (E.still) E.scen += st.n;
+    tvcalat(st.dur, function () { E.stage++; if (E.stage < Q.length) tvcalstage(); else tvcaloutro(); });
+  }
+  function tvcalpaintgrid(now) {
+    var c = E.cx, st = Q[E.stage] || Q[Q.length - 1], n = E.boards.length, cols, rows, top = E.fs * 3.2, aw = E.W * 0.92, ah = E.H - top - E.fs * 1.8, sz, i, b, bx, by, cs, k, cell, cx, cy, t;
+    cols = Math.max(1, Math.min(n, Math.round(Math.sqrt(n * aw / ah)))); rows = Math.ceil(n / cols);
+    sz = Math.min(aw / cols, ah / rows) * 0.78; cs = sz / 3;
+    c.save(); c.lineCap = "round";
+    c.font = "bold " + E.fs + "px 'Courier New', Courier, monospace"; c.textBaseline = "top"; c.fillStyle = tvcalrgba(green, 0.95);
+    c.fillText(S[11], 10, 8);
+    t = S[12] + E.scen + S[13]; c.fillText(t, E.W - 10 - c.measureText(t).width, 8);
+    for (i = 0; i < n; i++) {
+      b = E.boards[i];
+      while (!E.still && b.k < 9 && now >= b.next) { b.k++; b.next += st.step; if (b.k === 9) { b.done = now; E.scen++; } }
+      if (!E.still && b.done && now - b.done > Math.max(450, st.step * 6)) { b.m = tvcalperm(); b.k = 0; b.done = 0; b.next = now; }
+      bx = (E.W - cols * (aw / cols)) / 2 + (i % cols) * (aw / cols) + (aw / cols - sz) / 2;
+      by = top + Math.floor(i / cols) * (ah / rows) + (ah / rows - sz) / 2;
+      c.strokeStyle = tvcalrgba(green, 0.75); c.lineWidth = Math.max(1, sz / 60); c.beginPath();
+      for (k = 1; k < 3; k++) { c.moveTo(bx + k * cs, by + 3); c.lineTo(bx + k * cs, by + sz - 3); c.moveTo(bx + 3, by + k * cs); c.lineTo(bx + sz - 3, by + k * cs); }
+      c.stroke();
+      c.lineWidth = Math.max(1.2, sz / 40);
+      for (k = 0; k < b.k; k++) {
+        cell = b.m[k]; cx = bx + (cell % 3 + 0.5) * cs; cy = by + (Math.floor(cell / 3) + 0.5) * cs;
+        c.strokeStyle = k % 2 ? tvcalrgba("79,195,255", 0.95) : tvcalrgba(green, 0.95); c.beginPath();
+        if (k % 2) c.arc(cx, cy, cs * 0.3, 0, 6.2832); else { c.moveTo(cx - cs * 0.28, cy - cs * 0.28); c.lineTo(cx + cs * 0.28, cy + cs * 0.28); c.moveTo(cx + cs * 0.28, cy - cs * 0.28); c.lineTo(cx - cs * 0.28, cy + cs * 0.28); }
+        c.stroke();
+      }
+      if (b.k === 9 && sz > 44) { c.fillStyle = tvcalrgba(green, 0.9); c.font = Math.max(9, Math.round(sz / 7)) + "px 'Courier New', Courier, monospace"; t = S[14]; c.fillText(t, bx + sz / 2 - c.measureText(t).width / 2, by + sz + 2); c.font = "bold " + E.fs + "px 'Courier New', Courier, monospace"; }
+    }
+    c.restore();
+  }
+
+  function tvcaloutro() {
+    E.phase = "p4"; E.boards = []; E.tracks = [];
+    tvcallines([S[15], S[16], "", S[17]], function () {
+      tvcalat(3200, function () {
+        if (!E.box) return;
+        E.box.className = "tvcal out";
+        tvcalat(E.still ? 0 : 900, tvcalend);
+      });
+    });
+  }
+
+  function tvcalframe() {
+    var c, now = tvcalnow(), a;
+    E.raf = 0;
+    if (!E.on) return;
+    if (typeof tv === "undefined" || !tv.open || !E.box || !E.box.parentNode || !E.box.parentNode.clientWidth) { tvcalend(); return; }
+    tvcalsize();
+    c = E.cx; c.clearRect(0, 0, E.W, E.H);
+    if (E.phase === "p2" || E.phase === "p3") {
+      if (!E.map) tvcalmapcache();
+      a = E.phase === "p3" ? Math.max(0.15, 1 - (now - E.fade) / 2000) : 1;
+      c.globalAlpha = a; c.drawImage(E.map, 0, 0, E.W, E.H); c.globalAlpha = 1;
+      if (E.phase === "p2" || a > 0.16) tvcalpaintrun(E.frozen && E.phase === "p2" ? E.frozen : now, E.phase === "p3" ? a - 0.15 : 1, E.phase === "p2");
+      if (E.phase === "p3") { c.fillStyle = "rgba(1,6,3," + Math.min(0.55, (now - E.fade) / 2000).toFixed(2) + ")"; c.fillRect(0, 0, E.W, E.H); tvcalpaintgrid(now); }
+    }
+    E.last = now;
+    E.raf = window.requestAnimationFrame(tvcalsafe(tvcalframe));
+  }
+
+  function tvcalkey(e) {
+    var t, k;
+    if (E.on) {
+      if (e.key === "Escape" || e.key === "Esc") { e.stopPropagation(); e.preventDefault(); tvcalend(); }
+      return;
+    }
+    if (typeof tv === "undefined" || !tv.open || e.ctrlKey || e.metaKey || e.altKey) return;
+    t = e.target || {};
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "") || t.isContentEditable) return;
+    k = e.key || "";
+    if (!/^[a-z]$/i.test(k)) { E.buf = ""; return; }
+    E.buf = (E.buf + k.toLowerCase()).slice(-6);
+    if (tvcalh(E.buf) === 121327823) { E.buf = ""; tvcalstart(); }
+  }
+  function tvcaltap(e) {
+    var r, x, y, now = tvcalnow(), i, keep = [];
+    if (E.on || !e.target || e.target.id !== "tv_fx" || typeof tv === "undefined" || !tv.open || !tv.homepos) return;
+    r = e.target.getBoundingClientRect(); x = e.clientX - r.left; y = e.clientY - r.top;
+    if (Math.pow(x - tvx(tv.homepos.lon), 2) + Math.pow(y - tvy(tv.homepos.lat), 2) > 18 * 18) { E.taps = []; return; }
+    for (i = 0; i < E.taps.length; i++) if (now - E.taps[i] < 3000) keep.push(E.taps[i]);
+    keep.push(now); E.taps = keep;
+    if (E.taps.length >= 5) { E.taps = []; tvcalstart(); }
+  }
+  try {
+    window.addEventListener("keydown", tvcalsafe(tvcalkey), true);
+    document.addEventListener("click", tvcalsafe(tvcaltap), true);
+  } catch (e) { }
+})();
 function initial() {
   try { excopen = localStorage.getItem("iocmon_excshow") === "1"; } catch (e) { }
   excshowapply();
@@ -1526,8 +1906,9 @@ function initial() {
 <div class="hdr" id="hdr">
   <div class="dot"></div>
   <div><div class="state" id="h_state">LOADING</div><div class="sub" id="h_sub">Reading IOCMON status...</div></div>
-  <div class="right"><b>IOCMON <span id="h_ver"></span></b><br/><span id="h_router"></span><br/><span id="h_uptime"></span></div>
+  <div class="right"><b>IOCMON <span id="h_ver"></span></b><br/><span id="h_router"></span><br/><span id="h_uptime"></span><br/><span class="auth" id="h_auth"></span></div>
 </div>
+<div class="banner red" id="b_auth" style="display:none"><div id="b_auth_x"><b id="b_auth_h"></b><span id="b_auth_t"></span></div><a class="btn ack" id="a_authack" onclick="acknowledge();" style="display:none">Acknowledge</a></div>
 <div class="banner red" id="b_alert" style="display:none"><span id="b_alert_t"></span><a class="btn ack" id="a_ack" onclick="acknowledge();">Acknowledge</a></div>
 <div class="banner amber" id="b_update" style="display:none"><span id="b_update_t"></span><a class="btn ack" onclick="installupdate();">Install Update</a></div>
 <div class="banner amber" id="b_page" style="display:none"></div>
@@ -1699,3 +2080,10 @@ function initial() {
 <div id="footer"></div>
 </body>
 </html>
+<!-- Signed: 2026-11-21 14:12:20 UTC (v1.6.4) -->
+<!--
+#-----BEGIN SIGNATURE-----
+#MEUCIF5h6JCgDIajkDw55R2BC/Us+hsuwDbtLiIyaG3geYYSAiEA/Nvst+eWwZ4b
+#TDIJbWZHC0sG+1bn5nEbOjmsg7wsBEg=
+#-----END SIGNATURE-----
+-->
