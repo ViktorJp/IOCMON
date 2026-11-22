@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.0.28
+# Version: 2.1.0
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-21
+# Last Updated: 2026-Nov-22
 # ============================================================================================================================
 #
 # Description:
@@ -121,7 +121,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.0.28"
+version="2.1.0"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -139,7 +139,7 @@ relsigopensslpaths="/usr/sbin/openssl /usr/bin/openssl /opt/bin/openssl"  # wher
 iocmonhomeurl="https://github.com/ViktorJp/IOCMON"  # official source named in the authenticity warning
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.6.4"  # web interface page version this script expects
+webuiversion="1.6.5"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -6287,7 +6287,7 @@ selfqfiles()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# kairosactive succeeds while Kairos's state is known: its status file written in the last 3 minutes, or for an older Kairos, kairos_time in nvram
+# kairosactive succeeds while Kairos runs: its status file written in the last 3 minutes with any time state, or for an older Kairos, kairos_time in nvram
 
 kairosactive()
 {
@@ -6301,11 +6301,11 @@ kairosactive()
     done < "$kairosstatusfile"
     validateint "$updated" 0 || return 1
     [ $(( $(date +%s) - updated )) -le 180 ] || return 1
-  else
-    nvramget kairos_time || return 1
-    t="$nvramval"
+    case "$t" in ''|*[!a-z-]*) return 1 ;; esac
+    return 0
   fi
-  case "$t" in booting|synced|degraded) return 0 ;; esac
+  nvramget kairos_time || return 1
+  case "$nvramval" in booting|synced|degraded) return 0 ;; esac
   return 1
 }
 
@@ -12670,8 +12670,8 @@ done
 
 exit 0
 
-#Signed: 2026-11-21 14:12:24 UTC (v2.0.28)
+#Signed: 2026-11-22 16:48:00 UTC (v2.1.0)
 #-----BEGIN SIGNATURE-----
-#MEYCIQCnyRK5eAkRUr+o2KSNa/ob/5pD7YIz+g3rc4MkHGPG5wIhAKcyumuxkti2
-#1Ro5MiRENb8QbLqrCA/QdCr0PvioR7wb
+#MEYCIQDVEMilL/rCEN6obiIzxZ3erckypRKjYz0VMN5SPFmbfAIhAN2krchqIgZJ
+#Esi6vZBdtoooSx86PEx0RtkxsS6BFg7m
 #-----END SIGNATURE-----
