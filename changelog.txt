@@ -1,3 +1,61 @@
+v2.1.0    - (November 22, 2026)
+          - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
+            same naming convention and functionality from tainting possible results. This also helps keeps
+            IOCMON more stable and secure by not relying on other similar forks that may break functionality.
+          - MINOR: Pi-hole v6 as a DNS watch source (Configuration Menu 10.2, item 11, option 4) is now
+            supported, reading it either through its API (an app password is recommended) or from its
+            pihole.log, which also gives AbuseIPDB the IP each domain was answered with. A Pi-hole on the
+            router itself (the Entware port) is found automatically. A second Pi-hole can be added and is read
+            every cycle alongside the first, and blocked queries can optionally be checked too. IOCMON gives
+            clear warnings for a wrong password, two-factor login, too many API sessions, an unreachable or
+            unsupported (v5) Pi-hole, or a Pi-hole that only sees the router, so the device behind each lookup
+            can't be identified. Passwords are stored encoded, never placed on a command line, and left out of
+            exports unless you choose to include them. @ryosuke @Ripshod
+          - PATCH: The IOCMON web UI can now clear logs and manage exceptions without needing to use the main
+            terminal. A Clear Log button at the bottom of each log page, just above Prev/Next, erases the log
+            you're viewing and its rotated copies after a confirmation, exactly like the (R) hotkey. IoC 
+            Detections rows now have an Exception switch that adds the item to its exception list: the base
+            domain for DNS alerts, the destination IP for connection alerts, the file for filesystem alerts,
+            and the entry for cron alerts. Startup scripts, .ssh and .conf.add files get a clear warning
+            first, since IOCMON will stop watching them for tampering. A new Exceptions panel lists every DNS,
+            IP, file and cron exception, including ones added in the menus, each with a switch to remove it.
+            The page never sends the item itself to the router, only a short code that IOCMON checks against
+            its own log, so nothing in a log entry can be turned into a command and only items IOCMON actually
+            logged can be added. @JB_1366 @Radon
+          - MINOR: The web interface (v1.5.3) has a new Threat View button that opens a live world map of your
+            router's traffic: inbound connections and blocked attempts, outbound connections, DNS lookups and
+            addresses Skynet blocked. Countries come from DB-IP's free country database, which IOCMON downloads
+            and then refreshes monthly along with the feeds. Addresses that raised an alert are drawn as red
+            (Critical) or yellow (Warning) arcs until you acknowledge them. Live counters, filters, a Live Feed,
+            Top Countries and a 15-minute Replay sit alongside the map, and clicking a country, row or address
+            shows its details and lookup links. Expand and Fullscreen give a full-width map, with the feed in a
+            drawer you open from the left edge. Sampling only runs while the page is open and stops 2 minutes
+            after it closes.
+          - PATCH: Fixes and improvements: Exception switches now appear on existing IoC rows right after an
+            upgrade, and no longer flip back on their own while the monitor is running. The Exceptions panel
+            has a tab for each list, starts hidden behind a Show/Hide button and shows the total item count in
+            its heading. Log pages show 10 rows instead of 25, so the page is shorter. Google and YouTube
+            domains are now on the shared-hosting list, so a feed listing for them (such as malware using
+            YouTube for its settings) is logged as Info instead of raising a Critical alert. A DNS match whose
+            address AbuseIPDB marks as whitelisted is also logged as Info. On the main screen, (E) now detaches
+            from SCREEN and leaves IOCMON running, and (X) exits after asking first. @Mutzli @Ripshod @jksmurf
+          - PATCH: Connection and DNS alerts now name the local device, for example 192.168.50.82 [DesktopXYZ]
+            ->www.youtube.com, for wired and wireless devices. The name comes from the router's own client list.
+            It is saved with the alert, shown on the log, emails, the web page and Threat View. @SashaSolitaire
+          - PATCH: Fixed the web page's Exception switch on log rows, and now adds their contents to the
+            correct exception list. @dj600 @JB_1366 @SashaSolitaire
+          - PATCH: IOCMON and its web page are now digitally signed, so your router can tell a genuine release
+            from a modified copy or a fork. Updates are checked before they run, and a download whose signature
+            doesn't match is refused or replaced by the last verified copy. Automatic updates now only move to
+            newer versions. The dashboard and web page show IOCMON Authenticity: script [ok] | web ui [ok], and
+            an unauthenticated copy keeps a red warning on screen and sends one alert email. Astraea also now
+            shows IOCMON as signed.
+          - PATCH: IP/CIDR exceptions can now carry a short note, shown in its own column, in Research lookups
+            and on the web page. @XIII
+          - PATCH: In Threat View's normal (not expanded) size, a country's popup no longer runs off the bottom
+            of the map or hides its close button under the scrollbar. @K3r1m0
+          - PATCH: A few more Threat Map enhancements and bug fixes.
+
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
             add-ons make their own DNS lookups from the router. IOCMON now recognises those lookups, so they

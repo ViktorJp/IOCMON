@@ -1,7 +1,7 @@
-# IOCMON v2.0.8
+# IOCMON v2.1.0
 Asus-Merlin IDS/IPS Security Intelligence Monitor
 
-Modified: Nov-14-2026
+Modified: Nov-22-2026
 
 > **License:** GPLv3 with additional terms (§7c/§7e) — see [`NOTICE.md`](./NOTICE.md). The code is free to fork and modify; the name **IOCMON** is reserved for this project — see [`TRADEMARK.md`](./TRADEMARK.md) before publishing a rebrand or fork.
 
@@ -74,6 +74,18 @@ then reuses the last value it read for that setting. If `timeout` is missing whe
 60-second countdown runs. When the countdown ends without an answer, or if you decline, IOCMON
 carries on without it, logs a warning, and asks again at the next start. It can also be installed at any time from
 Configuration Menu item 9, Optional Entware Components (item 4).
+
+## Release signing
+
+  Every release of `iocmon.sh` and `iocmon.asp` is signed (ECDSA P-256, SHA-256). IOCMON checks each update against the
+  key built into the copy you already run, and shows the result on its dashboard as
+  `IOCMON Authenticity: script [ok] | web ui [ok]`.
+
+  Release key fingerprint (SHA-256 of the public key):
+
+  ```
+  9165994b1eaaee8b6875a0109a4986eb90923fb64887ca486862d2e44f7f37bf
+  ```
 
 ### 2. First run — initial setup
 
