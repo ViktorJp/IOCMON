@@ -1,7 +1,7 @@
 PLANNED IOCMON ENHANCEMENTS
 
 To-Do:
-
+- Add row counts to the log buttons in the web UI - @JB_1366
 
 Done:
 - Ability to clear logs from Web UI (@JB_1366)
