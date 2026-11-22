@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.6.4 -->
+<!-- IOCMON-WebUI v1.6.5 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -252,7 +252,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.6.4", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.6.5", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 10;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var exc = {}, excpend = {}, askdone = null, curexc = "dns";
@@ -1405,7 +1405,7 @@ function tvtab(name) {
 function tvfilter() { tvdrawfeed(); if (tv.tab === "top") tvdrawtop(); tvcounts(); }
 
 function tvtipfor(cc, xy) {
-  var tip = byid("tv_tip"), ips = {}, i, j, e, k, list = [], c = tv.cc[cc], box, row, l, x, y, t, tw, th;
+  var tip = byid("tv_tip"), ips = {}, i, j, e, k, list = [], c = tv.cc[cc], box, row, l, x, y, t, tw, th, d, lo, hi, rr, lr;
   if (!cc) return;
   for (i = 0; i < tv.samples.length; i++) for (j = 0; j < tv.samples[i].ev.length; j++) {
     e = tv.samples[i].ev[j];
@@ -1431,12 +1431,18 @@ function tvtipfor(cc, xy) {
     box = make("div", "links"); addlinks(box, e.ip); row.appendChild(box);
     tip.appendChild(row);
   }
-  if (!xy && c) xy = { x: tvx(c.lon), y: tvy(c.lat) };
+  d = c ? { x: tvx(c.lon), y: tvy(c.lat) } : xy;
+  if (!xy) xy = d;
   tip.style.maxHeight = Math.max(80, Math.min(260, tv.H - 8)) + "px";
-  tip.style.left = "0px"; tip.style.top = "0px"; tip.style.display = "block"; tip.scrollTop = 0;
-  tw = tip.offsetWidth; th = tip.offsetHeight;
-  x = xy ? Math.min(xy.x + 12, tv.W - tw - 4) : 8; y = xy ? Math.min(xy.y - 20, tv.H - th - 4) : 8;
-  tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px"; tv.tipcc = cc;
+  tip.style.width = ""; tip.style.left = "0px"; tip.style.top = "0px"; tip.style.display = "block"; tip.scrollTop = 0;
+  tw = tip.offsetWidth; th = tip.offsetHeight; x = 8; y = 8;
+  if (d) {
+    lo = Math.min(d.x, xy.x) - 22; hi = Math.max(d.x, xy.x) + 22; rr = tv.W - 4 - hi; lr = lo - 4;
+    if (tw > rr && tw > lr) { tip.style.width = Math.max(140, parseFloat(getComputedStyle(tip).width) - tw + Math.max(rr, lr)) + "px"; tw = tip.offsetWidth; th = tip.offsetHeight; }
+    x = tw <= rr ? hi : tw <= lr ? lo - tw : rr >= lr ? hi : lo - tw;
+    y = Math.min(Math.min(d.y, xy.y) - 20, tv.H - th - 4);
+  }
+  tip.style.left = Math.max(4, Math.min(x, tv.W - tw - 4)) + "px"; tip.style.top = Math.max(4, y) + "px"; tv.tipcc = cc;
 }
 function tvclick(ev) {
   var r = byid("tv_fx").getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top, best = "", bd = 144, cc, d, k, list = {};
@@ -2080,10 +2086,10 @@ function initial() {
 <div id="footer"></div>
 </body>
 </html>
-<!-- Signed: 2026-11-21 14:12:20 UTC (v1.6.4) -->
+<!-- Signed: 2026-11-22 16:47:56 UTC (v1.6.5) -->
 <!--
 #-----BEGIN SIGNATURE-----
-#MEUCIF5h6JCgDIajkDw55R2BC/Us+hsuwDbtLiIyaG3geYYSAiEA/Nvst+eWwZ4b
-#TDIJbWZHC0sG+1bn5nEbOjmsg7wsBEg=
+#MEUCIBJvk60T7w3R6pAuJ90P7jnGgB06z1VaTPbANIjZ7uvxAiEAqyUtAEuOryeA
+#c8booqtb1ila8SDOeNnOl/0/nwIK0vQ=
 #-----END SIGNATURE-----
 -->
