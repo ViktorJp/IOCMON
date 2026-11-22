@@ -1,4 +1,4 @@
-v2.0.28   - (BETA)
+v2.1.0    - (November 22, 2026)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
             same naming convention and functionality from tainting possible results. This also helps keeps
             IOCMON more stable and secure by not relying on other similar forks that may break functionality.
@@ -54,6 +54,7 @@ v2.0.28   - (BETA)
             and on the web page. @XIII
           - PATCH: In Threat View's normal (not expanded) size, a country's popup no longer runs off the bottom
             of the map or hides its close button under the scrollbar. @K3r1m0
+          - PATCH: A few more Threat Map enhancements and bug fixes.
 
 v2.0.8    - (November 14, 2026)
           - PATCH: When Kairos or Astraea is installed, IOCMON works alongside them automatically. Both these
