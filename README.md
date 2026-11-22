@@ -1,7 +1,7 @@
-# IOCMON v2.0.28
+# IOCMON v2.1.0
 Asus-Merlin IDS/IPS Security Intelligence Monitor
 
-Modified: Nov-21-2026
+Modified: Nov-22-2026
 
 > **License:** GPLv3 with additional terms (§7c/§7e) — see [`NOTICE.md`](./NOTICE.md). The code is free to fork and modify; the name **IOCMON** is reserved for this project — see [`TRADEMARK.md`](./TRADEMARK.md) before publishing a rebrand or fork.
 
