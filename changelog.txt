@@ -1,3 +1,24 @@
+v2.1.2A   - (TBA)
+          - IOCMON now notices when the USB drive becomes read-only, which often happens after drive or
+            filesystem errors. Before, it kept trying to write to the drive and filled the log with errors.
+            Now it logs one error naming the drive and how to check it, and shows a red banner on screen
+            and a red bar on the web page. @Mutzli
+          - If IOCMON determines the drive is in a read-only status, connections and DNS lookups are still
+            checked against the threat feeds already on the drive. Feed updates, file scans and alert history
+            pause until the drive can be written again, and an alert isn't repeated in the meantime. While
+            the drive is read-only or missing, the activity log is kept on JFFS and moved back to the drive
+            once it can be written to again. IOCMON now also sends an email when the drive becomes read-only
+            or unavailable, and another when it is writable again.
+          - A Skynet import that hasn't finished after 15 minutes is stopped, and a rule removal after 3
+            minutes. Before, a stuck import could freeze IOCMON for hours, leaving the web page on "Monitor
+            not responding". The previous bans stay in force, and the import is tried again at the next feed
+            refresh. The log, the (F) key, the web page and Start Monitor now say how long a feed refresh has
+            been running. After 60 minutes the log warns that it may be stuck. @Radon
+          - The dashboard shows "[Calculating Stats...]" while it gathers its figures, so the screen no longer
+            seems to hang between redraws.
+          - Each log tab on the web UI shows how many entries it holds, such as "IoC Detections (104)". The
+            web page also keeps showing the logs while the drive is unavailable. @JB_1366
+
 v2.1.0    - (November 22, 2026)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
             same naming convention and functionality from tainting possible results. This also helps keeps
