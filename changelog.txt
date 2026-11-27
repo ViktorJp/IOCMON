@@ -21,9 +21,10 @@ v2.1.3B   - (TBA)
           - MINOR: Added Technitium DNS Server as a source for DNS watch, alongside dnsmasq, AdGuard Home and
             Pi-hole. To use it, set DNS query source (Configuration Menu 10.2, item 11) to Technitium, then
             enter the server's address and an API token in items 24-25. A user with only the Logs: View
-            permission is enough, and Technitium needs a query-log app such as "Query Logs (Sqlite)". IOCMON
-            reads the query log through Technitium's API and checks every lookup against its threat feeds. An
-            optional backup server is read every cycle alongside the primary. @ryosuke @GiaMisu 
+            permission is enough, and Technitium needs a query-log app such as "Query Logs (Sqlite)" (install
+            it from Technitium's web console under Apps → App Store). IOCMON reads the query log through
+            Technitium's API and checks every lookup against its threat feeds. An optional backup server is
+            read every cycle alongside the primary. @ryosuke @GiaMisu 
 
 v2.1.0    - (November 22, 2026)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
