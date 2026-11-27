@@ -1,5 +1,5 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<!-- IOCMON-WebUI v1.6.5 -->
+<!-- IOCMON-WebUI v1.6.8 -->
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta http-equiv="X-UA-Compatible" content="IE=Edge"/>
@@ -252,7 +252,7 @@
 @media (max-width: 700px) { #ioc .tiles { grid-template-columns: 1fr 1fr; } #ioc .grid { grid-template-columns: 1fr; } }
 </style>
 <script type="text/javascript">
-var pagever = "1.6.5", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
+var pagever = "1.6.8", datapath = "/ext/iocmon/", lastts = "", lastchange = 0, routerage = null, lastlogkey = "";
 var logs = { ioc: [], dropbear: [], hash: [], reputation: [] }, curlog = "ioc", curpage = 0, pagesize = 10;
 var job = { id: "", state: "" }, waiting = null, jobchain = false, jobstale = false, updateinfo = null, acktimer = null, updatelatest = "";
 var exc = {}, excpend = {}, askdone = null, curexc = "dns";
@@ -331,14 +331,15 @@ function showstatus(d) {
   put("t_last", d.lastalert || "none yet");
   put("t_rep", d.reputation || "AbuseIPDB off");
 
-  var failover = d.dnsstate === "adguardhome" || d.dnsstate === "pihole" ? d.dnsfailover : "0";
-  var dnsname = d.dnsstate === "pihole" ? "Pi-hole" : "AdGuard Home";
+  var multi = d.dnsstate === "pihole" || d.dnsstate === "technitium";
+  var failover = d.dnsstate === "adguardhome" || multi ? d.dnsfailover : "0";
+  var dnsname = d.dnsstate === "pihole" ? "Pi-hole" : d.dnsstate === "technitium" ? "Technitium" : "AdGuard Home";
   setrow("w_conn", onoff(d.conntrackon === "1", plural(d.conntrackchecked || "0", "dst ip") + ", checked " + (d.conntracklast || "n/a")));
   if (d.dnsstate === "off") setrow("w_dns", { t: "off", c: "v off" });
   else if (d.dnsstate === "waiting") setrow("w_dns", { t: "awaiting query-log setup", c: "v warn" });
   else if (d.dnsstate === "nologin") setrow("w_dns", { t: "skipped, AdGuard Home login missing", c: "v warn" });
   else if (failover === "2") setrow("w_dns", { t: dnsname + " not answering, last checked " + (d.dnslast || "n/a"), c: "v warn" });
-  else setrow("w_dns", { t: (failover === "1" ? (d.dnsstate === "pihole" ? "Pi-hole, one unreadable, " : "AdGuard Home backup, ") : d.dnsstate === "adguardhome" || d.dnsstate === "pihole" ? dnsname + ", " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: failover === "1" ? "v warn" : "v on" });
+  else setrow("w_dns", { t: (failover === "1" ? (multi ? dnsname + ", one unreadable, " : "AdGuard Home backup, ") : d.dnsstate === "adguardhome" || multi ? dnsname + ", " : "") + (d.dnschecked || "0") + " checked at " + (d.dnslast || "n/a"), c: failover === "1" ? "v warn" : "v on" });
   put("w_dnslog", d.dnslog || "-", d.dnsstate === "nologin" || failover === "1" || failover === "2" ? "v warn" : d.dnslog && d.dnsstate !== "off" ? "v on" : "v off");
   setrow("w_auth", onoff(d.authon === "1", "+" + (d.authchecked || "0") + " new, checked " + (d.authlast || "n/a")));
   setrow("w_nvram", onoff(d.nvramon === "1", d.nvramvars + " vars, checked " + (d.nvramlast || "n/a")));
@@ -349,7 +350,11 @@ function showstatus(d) {
   showfeeds(d);
   setrow("s_email", d.email === "1" ? { t: "on, limit " + (d.ratelimit === "0" ? "unlimited" : d.ratelimit + "/h"), c: "v on" } : { t: "off", c: "v off" });
   setrow("s_cron", d.cron === "1" ? { t: "scheduled", c: "v on" } : { t: "not scheduled", c: "v off" });
-  put("s_storage", d.storage || "-");
+  var drivebad = d.drivestate === "readonly" || d.drivestate === "missing";
+  put("s_storage", d.storage || "-", drivebad ? "v bad" : d.drivestate === "jffs" ? "v warn" : "v");
+  byid("b_drive").style.display = drivebad ? "flex" : "none";
+  put("b_drive_t", d.drivestate === "readonly" ? "Storage problem: the external drive is read-only, usually after a drive or filesystem error. IOCMON keeps running and still matches the feeds already on the drive, but feed updates, file integrity scans and new alert history are paused, and the logs below show their last published copy. See the IOCMON log."
+    : "Storage problem: the external drive is not mounted. IOCMON keeps running, but feed matching, feed updates, file integrity scans and new alert history are paused, and the logs below show their last published copy.");
   put("s_free", d.drivefree || "n/a");
   put("s_time", d.time);
   routerdate = d.time || "";
@@ -570,7 +575,17 @@ function loadlog(name) {
   if (full[name]) return;
   fetchdata(name + ".htm", function (text) { if (!full[name]) storelog(name, text); });
 }
+function loadrows() {
+  fetchdata("logrows.htm", function (text) {
+    var d = text ? parsestatus(text) : {}, names = ["ioc", "dropbear", "hash", "reputation"], i, n;
+    for (i = 0; i < names.length; i++) {
+      n = d[names[i]];
+      put("tab_" + names[i], lognames[names[i]] + (/^\d+$/.test(n || "") ? " (" + Number(n).toLocaleString() + ")" : ""));
+    }
+  });
+}
 function loadlogs() {
+  loadrows();
   loadlog(curlog);
   if (curlog !== "ioc") loadlog("ioc");
   loadexc();
@@ -1915,6 +1930,7 @@ function initial() {
   <div class="right"><b>IOCMON <span id="h_ver"></span></b><br/><span id="h_router"></span><br/><span id="h_uptime"></span><br/><span class="auth" id="h_auth"></span></div>
 </div>
 <div class="banner red" id="b_auth" style="display:none"><div id="b_auth_x"><b id="b_auth_h"></b><span id="b_auth_t"></span></div><a class="btn ack" id="a_authack" onclick="acknowledge();" style="display:none">Acknowledge</a></div>
+<div class="banner red" id="b_drive" style="display:none"><span id="b_drive_t"></span></div>
 <div class="banner red" id="b_alert" style="display:none"><span id="b_alert_t"></span><a class="btn ack" id="a_ack" onclick="acknowledge();">Acknowledge</a></div>
 <div class="banner amber" id="b_update" style="display:none"><span id="b_update_t"></span><a class="btn ack" onclick="installupdate();">Install Update</a></div>
 <div class="banner amber" id="b_page" style="display:none"></div>
@@ -2086,10 +2102,10 @@ function initial() {
 <div id="footer"></div>
 </body>
 </html>
-<!-- Signed: 2026-11-22 16:47:56 UTC (v1.6.5) -->
+<!-- Signed: 2026-11-27 17:36:39 UTC (v1.6.8) -->
 <!--
 #-----BEGIN SIGNATURE-----
-#MEUCIBJvk60T7w3R6pAuJ90P7jnGgB06z1VaTPbANIjZ7uvxAiEAqyUtAEuOryeA
-#c8booqtb1ila8SDOeNnOl/0/nwIK0vQ=
+#MEYCIQDDJhpsvsLbbmkfqDkpYXGazkstJWxZtm6mqCVF+4ijfAIhAOaeX+x6mNV0
+#eQxvjFtUNPAkdaBNQRnCXjrCUDfKafZ0
 #-----END SIGNATURE-----
 -->
