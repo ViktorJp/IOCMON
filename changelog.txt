@@ -1,9 +1,8 @@
 v2.1.3B   - (TBA)
           - PATCH: IOCMON now notices when the USB drive becomes read-only, which could happen after
-            experiencing
-            drive or filesystem errors, or even a firmware update. Before, it kept trying to write to the
-            drive and filled the log with errors. Now it logs one error naming the drive and how to check it,
-            and shows a red banner on screen and a red bar on the web page. @Mutzli
+            experiencing drive or filesystem errors, or even a firmware update. Before, it kept trying to
+            write to the drive and filled the log with errors. Now it logs one error naming the drive and how
+            to check it, and shows a red banner on screen and a red bar on the web page. @Mutzli
           - PATCH: If IOCMON determines the drive is in a read-only status, connections and DNS lookups are
             still checked against the threat feeds already on the drive. Feed updates, file scans and alert
             history pause until the drive can be written again, and an alert isn't repeated in the meantime.
