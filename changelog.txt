@@ -1,8 +1,9 @@
-v2.1.2A   - (TBA)
-          - IOCMON now notices when the USB drive becomes read-only, which often happens after drive or
-            filesystem errors. Before, it kept trying to write to the drive and filled the log with errors.
-            Now it logs one error naming the drive and how to check it, and shows a red banner on screen
-            and a red bar on the web page. @Mutzli
+v2.1.3B   - (TBA)
+          - PATCH: IOCMON now notices when the USB drive becomes read-only, which could happen after
+            experiencing
+            drive or filesystem errors, or even a firmware update. Before, it kept trying to write to the
+            drive and filled the log with errors. Now it logs one error naming the drive and how to check it,
+            and shows a red banner on screen and a red bar on the web page. @Mutzli
           - If IOCMON determines the drive is in a read-only status, connections and DNS lookups are still
             checked against the threat feeds already on the drive. Feed updates, file scans and alert history
             pause until the drive can be written again, and an alert isn't repeated in the meantime. While
@@ -18,6 +19,12 @@ v2.1.2A   - (TBA)
             seems to hang between redraws.
           - Each log tab on the web UI shows how many entries it holds, such as "IoC Detections (104)". The
             web page also keeps showing the logs while the drive is unavailable. @JB_1366
+          - MINOR: Added Technitium DNS Server as a source for DNS watch, alongside dnsmasq, AdGuard Home and
+            Pi-hole. To use it, set DNS query source (Configuration Menu 10.2, item 11) to Technitium, then
+            enter the server's address and an API token in items 24-25. A user with only the Logs: View
+            permission is enough, and Technitium needs a query-log app such as "Query Logs (Sqlite)". IOCMON
+            reads the query log through Technitium's API and checks every lookup against its threat feeds. An
+            optional backup server is read every cycle alongside the primary. @ryosuke @GiaMisu 
 
 v2.1.0    - (November 22, 2026)
           - PATCH: Implemented checks for Kairos/Astraea authenticity to prevent forks and clones using the
