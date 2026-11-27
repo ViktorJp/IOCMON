@@ -1,9 +1,9 @@
 #!/bin/sh
 # ============================================================================================================================
 # iocmon.sh - Asus-Merlin Firmware Security-Intelligence Monitor
-# Version: 2.1.0
+# Version: 2.1.3
 # Sibling to BACKUPMON, STUNMON, TAILMON, VPNMON-R3, RTRMON, KILLMON, ECLIPSEMON, WXMON and PWRMON
-# Last Updated: 2026-Nov-22
+# Last Updated: 2026-Nov-27
 # ============================================================================================================================
 #
 # Description:
@@ -37,6 +37,9 @@
 #   /tmp/mnt/<extdrivelabel>/iocmon.d/state/pihole(2)_offset, _anchor   : byte offset and last line read from each Pi-hole log file (Pi-hole DNS source)
 #   /tmp/iocmon_pihole_sid.1, .2                                        : Pi-hole API session ids, reused until Pi-hole ends them (RAM only, root only)
 #   /tmp/iocmon_agh_replies                                             : recent AdGuard Home "domain|ip" answers for the reputation lookup (RAM only)
+#   /tmp/mnt/<extdrivelabel>/iocmon.d/state/technitium_cursor(2)        : newest query time (and its address) already read from each Technitium API
+#   /tmp/iocmon_td_cursor.1, .2                                         : the same Technitium read positions when there is no state folder (RAM only)
+#   /tmp/iocmon_td_replies                                              : recent Technitium "domain|ip" answers for the reputation lookup (RAM only)
 #   /tmp/astraea/selfq, /tmp/kairos/selfq                               : read only - the router's own lookups for Astraea/Kairos, set aside by DNS watch
 #   /tmp/kairos/status                                                  : read only - Kairos's state; its selfq is used only while this was written in the last 3 minutes
 #   /tmp/iocmon_selfq_seen, /tmp/iocmon_astraea_intel                   : set-aside lookups already logged, and recent Astraea verdicts for emails (RAM)
@@ -121,7 +124,7 @@ doScriptUpdateFromAMTM=true
 
 # -------------------------------------------------------------------------------------------------------------------------
 # Static Variables - please do not change
-version="2.1.0"
+version="2.1.3"
 apppath="/jffs/scripts/iocmon.sh"  # this script's own deployed path
 addonsdir="/jffs/addons/iocmon.d"  # JFFS-side control/config directory
 config="/jffs/addons/iocmon.d/iocmon.cfg"  # persisted key=value config file
@@ -139,7 +142,13 @@ relsigopensslpaths="/usr/sbin/openssl /usr/bin/openssl /opt/bin/openssl"  # wher
 iocmonhomeurl="https://github.com/ViktorJp/IOCMON"  # official source named in the authenticity warning
 dropbearseenfile="/jffs/addons/iocmon.d/dropbear_seen.db"  # ledger of dropbear failure lines already logged/counted - stays on JFFS deliberately
 httpdseenfile="/jffs/addons/iocmon.d/httpd_seen.db"  # ledger of httpd auth-failure lines already counted
-webuiversion="1.6.5"  # web interface page version this script expects
+drivestatefile="/tmp/iocmon_drivestate"  # last external drive state logged (ok/missing/readonly), so each change logs once across IOCMON processes
+drivenotifyfile="/tmp/iocmon_drivenotify"  # drive state changes waiting for their email, sent by the main loop or a cron one-shot
+seenalertsramfile="/tmp/iocmon_seen_alerts.db"  # alert dedup records kept in RAM while the drive's state folder can't be written
+skynetimportlimit=900  # seconds a Skynet import may run before IOCMON stops it
+skynetremovelimit=180  # seconds one Skynet rule removal may run before IOCMON stops it
+feedslockwarnmins=60  # minutes after which a skipped refresh logs the running one as possibly stuck
+webuiversion="1.6.8"  # web interface page version this script expects
 webuirecentdays=14  # days of each log published for the page's normal view
 webuirecentrows=2000  # most rows of each log published for the normal view
 webuifullrows=20000  # most rows loaded by Full History
@@ -229,7 +238,7 @@ dnsquerylogkeep=2               # how many rotated generations (dnsmasq_queries.
 enablednstunnel=0               # behavioral DNS-tunneling/exfiltration heuristic (query volume/name-length patterns, not feed-based) - off by default
 dnstunnelsubthreshold=20        # distinct subdomains under one base domain from one source IP, within a single check tick, to flag as possible tunneling
 dnstunnelnamelen=60             # a single query name at or above this length (chars) is flagged on its own, regardless of repetition
-dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome | pihole
+dnssource="auto"                # auto = AdGuard Home when it is running and owns port 53, else dnsmasq | dnsmasq | adguardhome | pihole | technitium
 aghurl=""                       # AdGuard Home web/API base URL - blank = read from AdGuardHome.yaml (http.address)
 aghurl2=""                      # backup AdGuard Home base URL, read only when the first one fails - blank = no backup
 aghcred2=""                     # backup AdGuard Home "user:password" login, encoded the same way as aghcred
@@ -274,6 +283,15 @@ phlogpaths="/opt/var/log/pihole/pihole.log /var/log/pihole/pihole.log"  # pihole
 phsidfile="/tmp/iocmon_pihole_sid"  # Pi-hole API session id, .1/.2 per Pi-hole, RAM only, root only
 phpagesize=500                  # queries fetched per Pi-hole API call
 phmaxpages=20                   # most Pi-hole API pages read per cycle before warning about a gap
+tdurl=""                        # primary Technitium DNS Server API base URL, e.g. http://192.168.50.5:5380
+tdcred=""                       # primary Technitium API token, base64-encoded with openssl (encoded, not encrypted)
+tdurl2=""                       # backup Technitium API base URL - blank = none; read every cycle alongside the primary
+tdcred2=""                      # backup Technitium API token, encoded the same way as tdcred
+tdincludeblocked=0              # 1 = also check queries Technitium already blocked (they never left the network)
+tdpagesize=500                  # queries fetched per Technitium API call
+tdmaxpages=20                   # most Technitium API pages read per cycle before warning about a gap
+tdreplyfile="/tmp/iocmon_td_replies"  # "domain|ip" answers Technitium logged recently, RAM only, for dnsreplyip
+tdcursorram="/tmp/iocmon_td_cursor"  # Technitium read position, .1/.2 per server, used only when there is no state folder
 enableconntrackwatch=1          # poll nf_conntrack for IP matches
 ipexceptions=""                 # space-separated single IPs or CIDR ranges never matched against a feed by checkconntrack
 ipexceptionnotes=""             # newline-separated "<entry>|<note>" lines, a short note per ipexceptions entry
@@ -1593,6 +1611,11 @@ saveconfig()
     echo 'phcred2="'"$phcred2"'"'
     echo 'phlogpath2="'"$phlogpath2"'"'
     echo 'phincludeblocked='$phincludeblocked
+    echo 'tdurl="'"$tdurl"'"'
+    echo 'tdcred="'"$tdcred"'"'
+    echo 'tdurl2="'"$tdurl2"'"'
+    echo 'tdcred2="'"$tdcred2"'"'
+    echo 'tdincludeblocked='$tdincludeblocked
     echo 'enableconntrackwatch='$enableconntrackwatch
     echo 'ipexceptions="'"$ipexceptions"'"'
     printf "ipexceptionnotes='%s'\n" "$(printf '%s' "$ipexceptionnotes" | sed "s/'/'\\\\''/g")"
@@ -1798,21 +1821,141 @@ checkdrivealive()
   if [ -z "$extdrivelabel" ]; then
     driveavailable=0
     drivestatus="${CYellow}Degraded: JFFS-only (no external drive configured)${CClear}"
+    drivelaststate="jffs"
     return
   fi
 
   if [ ! -d "$iocmonroot" ]; then
     driveavailable=0
     drivestatus="${CRed}Drive Missing: label=$extdrivelabel is not mounted${CClear}"
-    if [ "$driveunmountedalerted" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Configured external drive (label=$extdrivelabel) is not mounted. Feed/hash operations paused." >> "$logfile"
-      driveunmountedalerted=1
-    fi
+    drivesetstate missing
+  elif ! drivewritable; then
+    driveavailable=0
+    drivestatus="${CRed}Drive Read-only: label=$extdrivelabel - writes paused${CClear}"
+    drivesetstate readonly
   else
     driveavailable=1
     drivestatus="${CGreen}$iocmonroot${CClear}"
-    driveunmountedalerted=0
+    drivesetstate ok
   fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# drivewritable creates and removes a probe file in iocmonroot, once per main-loop cycle or process (drivewritetested resets it)
+
+drivewritable()
+{
+  local probe="$iocmonroot/.iocmon_rw.$$"
+  if [ "$drivewritetested" != "$iocmonroot" ]; then
+    drivewriteok=0
+    { true > "$probe"; } 2>/dev/null && rm -f "$probe" 2>/dev/null && drivewriteok=1
+    drivewritetested="$iocmonroot"
+  fi
+  [ "$drivewriteok" = "1" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# drivesetstate records the drive state in drivelaststate and logs a change once, comparing with drivestatefile: $1 = ok|missing|readonly
+
+drivesetstate()
+{
+  local prev=""
+  [ "$1" = "$drivelaststate" ] && return 0
+  drivelaststate="$1"
+  [ -f "$drivestatefile" ] && read -r prev < "$drivestatefile"
+  [ "$1" = "$prev" ] && return 0
+  echo "$1" > "$drivestatefile"
+  case "$1" in
+    missing) echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Configured external drive (label=$extdrivelabel) is not mounted. Feed/hash operations paused." >> "$logfile" ;;
+    readonly) echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Configured external drive (label=$extdrivelabel) at $iocmonroot is read-only, usually because the router remounted it after a drive or filesystem error. Detection keeps matching the feeds already on the drive; feed updates, file integrity scans and alert history are paused until it is writable again. To check: grep /tmp/mnt /proc/mounts; dmesg | grep -iE 'I/O error|EXT4-fs|remount'" >> "$logfile" ;;
+    ok) [ -n "$prev" ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Configured external drive (label=$extdrivelabel) is mounted and writable again. Feed/hash operations resumed." >> "$logfile" ;;
+  esac
+  case "$1" in missing|readonly) ;; ok) [ -n "$prev" ] || return 0 ;; *) return 0 ;; esac
+  printf '%s|%s|%s\n' "$1" "$prev" "$(date +'%b %d %Y %X')" >> "$drivenotifyfile"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# drivebanner prints a red three-line notice while the configured drive is missing or read-only
+
+drivebanner()
+{
+  case "$drivelaststate" in
+    readonly)
+      relsigbannerblock "!!! STORAGE WARNING: The external drive (label=$extdrivelabel) is read-only - IOCMON is running with reduced function !!!" \
+        "Detection still matches the feeds on the drive. Feed updates, file integrity scans and alert history are paused: see the log." \
+        "It clears by itself once the drive is writable again (check it with fsck from AMTM's disk check, or replace the drive)." ;;
+    missing)
+      relsigbannerblock "!!! STORAGE WARNING: The external drive (label=$extdrivelabel) is not mounted - IOCMON is running with reduced function !!!" \
+        "Feed matching, feed updates, file integrity scans and alert history are paused until the drive is back." \
+        "It clears by itself once the drive is mounted again." ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# drivenotifyflush emails the waiting drive state changes once, claiming drivenotifyfile with mv so only one process sends
+
+drivenotifyflush()
+{
+  local claim="$drivenotifyfile.$$" state prev when
+  [ -s "$drivenotifyfile" ] || return 0
+  mv -f "$drivenotifyfile" "$claim" 2>/dev/null || return 0
+  if [ "$enablealertemail" = "1" ]; then
+    IFS='|' read -r state prev when <<EOF
+$(tail -n 1 "$claim")
+EOF
+    sendmessage 1 drive "$state" "$prev" "$claim"
+  fi
+  rm -f "$claim"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# driveemailbody prints the drive notice email body: $1 = new state, $2 = file of "state|previous|date" changes
+
+driveemailbody()
+{
+  local state prev when n
+  n="$(wc -l < "$2" | tr -d ' ')"
+  IFS='|' read -r state prev when <<EOF
+$(tail -n 1 "$2")
+EOF
+  case "$1" in
+    readonly)
+      emailsection "External drive is read-only"
+      emailrow "Drive" "label=$extdrivelabel${iocmonroot:+ ($iocmonroot)}"
+      emailrow "Since" "$when"
+      emailrow "Cause" "The router remounted the drive read-only, usually after a drive or filesystem error."
+      emailrow "Working" "Detection keeps matching the feeds already on the drive, plus the brute-force, NVRAM, cron and firewall watches."
+      emailrow "Paused" "Feed updates, file integrity scans, alert history and the web page's logs."
+      emailrow "To check" "grep /tmp/mnt /proc/mounts; dmesg | grep -iE 'I/O error|EXT4-fs|remount'"
+      emailrow "To fix" "Run a filesystem check (AMTM's disk check) or replace the drive. IOCMON resumes by itself and emails again." ;;
+    missing)
+      emailsection "External drive is not available"
+      emailrow "Drive" "label=$extdrivelabel"
+      emailrow "Since" "$when"
+      emailrow "Cause" "The drive is unplugged, has failed, or is not mounted."
+      emailrow "Working" "The brute-force, NVRAM, cron and firewall watches."
+      emailrow "Paused" "Feed matching (the feed lists are on the drive), feed updates, file integrity scans and alert history."
+      emailrow "To fix" "Reconnect or replace the drive. IOCMON resumes by itself and emails again." ;;
+    *)
+      emailsection "External drive is writable again"
+      emailrow "Drive" "label=$extdrivelabel${iocmonroot:+ ($iocmonroot)}"
+      emailrow "Since" "$when"
+      case "$prev" in
+        readonly) emailrow "Was" "read-only" ;;
+        missing) emailrow "Was" "not available" ;;
+      esac
+      emailrow "" "IOCMON is running with full function again: feed updates, file integrity scans and alert history have resumed." ;;
+  esac
+  if [ "$n" -gt 1 ]; then
+    printf "\n"
+    emailrow "" "Changes since the last notice:" b
+    while IFS='|' read -r state prev when; do
+      case "$state" in readonly) state="read-only" ;; missing) state="not available" ;; ok) state="writable" ;; esac
+      emailrow "$when" "$state"
+    done < "$2"
+  fi
+  emaildivider
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -1822,7 +1965,7 @@ resolvelogfile()
 {
   if [ -z "$logfilepath" ] || [ "$logfilepath" = "$jffslogfile" ]; then
     logfile="$jffslogfile"
-  elif [ -d "${logfilepath%/*}" ]; then
+  elif [ -d "${logfilepath%/*}" ] && { true >> "$logfilepath"; } 2>/dev/null; then
     logfile="$logfilepath"
     if [ -f "$jffslogfile" ] || [ -f "$jffslogfile.1" ]; then
       logall "$jffslogfile" >> "$logfile" && rm -f "$jffslogfile" && logremoverotated "$jffslogfile"
@@ -1832,7 +1975,7 @@ resolvelogfile()
   else
     logfile="$jffslogfile"
     if [ "$logfilefallback" != "1" ]; then
-      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Activity log location $logfilepath is unavailable (drive not mounted?) - logging to $jffslogfile until it returns." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Activity log location $logfilepath is unavailable (drive not mounted or read-only?) - logging to $jffslogfile until it returns." >> "$logfile"
       logfilefallback=1
     fi
   fi
@@ -2895,6 +3038,107 @@ phmenupassword()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# tdmenurows $1=1 while Technitium is the DNS source prints the Technitium rows (24-28) in 10.2
+
+tdmenurows()
+{
+  local on="$1" a v tag="" on2=0
+  tdslot=1
+  a="<none>"; [ -n "$tdurl" ] && a="${CGreen}$(phshort "$tdurl" 56)${CClear}"
+  menurow "(24)" "  Technitium API address, e.g. http://192.168.50.5:5380" "$a" 68 "$on"
+  v="<none>"; [ "$on" -eq 1 ] && v="${CYellow}<none - required for Technitium>${CClear}"
+  if [ -n "$tdcred" ]; then
+    v="${CGreen}<set>${CClear}"
+    [ "$on" -eq 1 ] && [ -n "$tdurl" ] && tag="$(tdstatustag "$(tdstatus)")"
+  fi
+  menurow "(25)" "  Technitium API token (a user with Logs: View is enough)" "$v${tag:+ | $tag}" 68 "$on"
+  a="<none>"; [ -n "$tdurl2" ] && a="${CGreen}$(phshort "$tdurl2" 56)${CClear}"
+  menurow "(26)" "  Backup Technitium API address (optional, read every cycle)" "$a" 68 "$on"
+  [ "$on" -eq 1 ] && [ -n "$tdurl2" ] && on2=1
+  tdslot=2; tag=""; v="<none>"
+  if [ -n "$tdcred2" ]; then
+    v="${CGreen}<set>${CClear}"
+    [ "$on2" -eq 1 ] && tag="$(tdstatustag "$(tdstatus)")"
+  fi
+  menurow "(27)" "  Backup Technitium API token" "$v${tag:+ | $tag}" 68 "$on2"
+  tdslot=1
+  menurow "(28)" "  Also check queries Technitium already blocked" "$(booleantoyesno "$tdincludeblocked")" 68 "$on"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdmenuedit $1=1|2 asks for that Technitium server's API address, then tests it
+
+tdmenuedit()
+{
+  local val cur
+  tdslot="$1"
+  cur="$(tdcur url)"
+  echo ""
+  echo -e "Current: ${CGreen}${cur:-none}${CClear}"
+  echo -e "Technitium's web console and API share one address: port 5380 for HTTP, or 53443 for HTTPS when that is turned on."
+  echo ""
+  if [ "$1" = "2" ]; then read -p "Backup Technitium address, e.g. http://192.168.50.6:5380 (blank keeps current, 'none' removes it): " val
+  else read -p "Technitium address, e.g. http://192.168.50.5:5380 (blank keeps current, 'none' removes it): " val; fi
+  if [ "$val" = "none" ]; then
+    if [ "$1" = "2" ]; then tdurl2=""; else tdurl=""; fi
+  elif [ -n "$val" ]; then
+    if val="$(aghnormurl "$val")"; then
+      if [ "$1" = "2" ]; then tdurl2="$val"; else tdurl="$val"; fi
+    else
+      echo -e "${CRed}Please enter an address like http://192.168.50.5:5380 (letters, digits and . : / _ - only).${CClear}"; sleep 3; val=""
+    fi
+  fi
+  if [ -n "$val" ]; then
+    dnslogannounced=""; saveconfig
+    tdslot="$1"
+    if [ -n "$(tdapiurl)" ] && [ -n "$(tdcur cred)" ]; then echo ""; echo -e "Testing: $(tdstatus)"; fi
+    echo ""
+    read -rsp $'Press any key to continue...\n' -n1 key
+  fi
+  tdslot=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdmenutoken $1=1|2 asks for that Technitium server's API token, stores it base64-encoded, and tests it
+
+tdmenutoken()
+{
+  local t new
+  tdslot="$1"
+  echo ""
+  echo -e "IOCMON reads Technitium's query log with an API token, which doesn't expire and isn't affected by two-factor login. To make one, sign in"
+  echo -e "to Technitium's web console, open the user menu at the top right and choose Create API Token. A user with only Logs: View permission is"
+  echo -e "enough. Technitium also needs a query-log app such as 'Query Logs (Sqlite)' (Apps - App Store)."
+  echo -e "The token is stored base64-encoded in ${CGreen}${config}${CClear} (readable by root only) and never passed on a command line."
+  echo ""
+  read -rsp "$(tdname) API token (blank keeps the current one, 'none' removes it): " t; echo ""
+  if [ "$t" = "none" ]; then
+    if [ "$1" = "2" ]; then tdcred2=""; else tdcred=""; fi
+    saveconfig; tdslot="$1"
+    aghlog "INFO" "$(tdname) API token removed."
+  elif [ -n "$t" ]; then
+    if ! tdtokenok "$t"; then
+      echo -e "${CRed}That doesn't look like an API token (letters, digits and . _ ~ + / = - only), so it was not saved.${CClear}"
+    else
+      new="$(aghencode "$t")"
+      if [ -n "$new" ]; then
+        if [ "$1" = "2" ]; then tdcred2="$new"; else tdcred="$new"; fi
+        new=""; saveconfig; tdslot="$1"
+        aghlog "INFO" "$(tdname) API token updated."
+      else
+        echo -e "${CRed}The token could not be encoded with openssl, so it was not saved.${CClear}"
+      fi
+    fi
+  fi
+  t=""
+  eval "tdappcache$1=\"\""
+  if [ -n "$(tdapiurl)" ] && [ -n "$(tdcur cred)" ]; then echo ""; echo -e "Testing: $(tdstatus)"; fi
+  echo ""
+  read -rsp $'Press any key to continue...\n' -n1 key
+  tdslot=1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # vadvanceddns: feed-based DNS matching (checkdns) plus the behavioral DNS-tunneling/exfiltration heuristic.
 
 vadvanceddns()
@@ -2906,16 +3150,18 @@ vadvanceddns()
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear} Controls matching DNS lookups against known-malicious-domain feeds, exceptions to that matching, and the separate behavioral heuristic${CClear}"
     echo -e "${InvGreen} ${CClear} for tunneling/exfiltration. Lookups come from dnsmasq's query log, from AdGuard Home's query log through its API when AdGuard Home${CClear}"
-    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 11; a backup in items 14 and 15 is read only when the first fails), or from Pi-hole v6 through its API${CClear}"
-    echo -e "${InvGreen} ${CClear} or its pihole.log (items 17-23), where a backup Pi-hole is read every cycle alongside the primary.${CClear}"
+    echo -e "${InvGreen} ${CClear} answers DNS on this router (item 11; a backup in items 14 and 15 is read only when the first fails), from Pi-hole v6 through its API${CClear}"
+    echo -e "${InvGreen} ${CClear} or its pihole.log (items 17-23), or from Technitium DNS Server through its API (items 24-28). A backup Pi-hole or Technitium server${CClear}"
+    echo -e "${InvGreen} ${CClear} is read every cycle alongside the primary.${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo -e "${InvGreen} ${CClear}"
     dnswatchdisp="$(booleantoyesno "$enablednswatch")"
-    if [ "$enablednswatch" -eq 1 ] && ! dnsusesagh && ! dnsusesph && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
+    if [ "$enablednswatch" -eq 1 ] && ! dnsusesagh && ! dnsusesph && ! dnsusestd && ! dnsquerylogenabled; then dnswatchdisp="${dnswatchdisp} (awaiting dnsmasq query-log setup)"; fi
     case "$dnssource" in
       adguardhome) dnssrcdisp="${CGreen}AdGuard Home${CClear}" ;;
       dnsmasq) dnssrcdisp="${CGreen}dnsmasq${CClear}" ;;
       pihole) dnssrcdisp="${CGreen}Pi-hole${CClear}" ;;
+      technitium) dnssrcdisp="${CGreen}Technitium${CClear}" ;;
       *) if dnsusesagh; then dnssrcdisp="${CGreen}auto${CClear} (AdGuard Home detected)"; else dnssrcdisp="${CGreen}auto${CClear} (dnsmasq)"; fi ;;
     esac
     aghon=0; [ "$enablednswatch" -eq 1 ] && dnsusesagh && aghon=1
@@ -2931,6 +3177,7 @@ vadvanceddns()
     else aghdisp2="${CYellow}<set> | <not connected>${CClear}"; fi
     aghurl2disp="<none>"; [ -n "$aghurl2" ] && aghurl2disp="${CGreen}${aghurl2}${CClear}"
     phon=0; [ "$enablednswatch" -eq 1 ] && dnsusesph && phon=1
+    tdon=0; [ "$enablednswatch" -eq 1 ] && dnsusestd && tdon=1
     tunnelon=0; [ "$enablednswatch" -eq 1 ] && [ "$enablednstunnel" -eq 1 ] && tunnelon=1
     echo -en "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( 1)${CClear} : "; padright "Watch DNS lookups for known-malicious domains" 68; echo -e ": $dnswatchdisp"
     menurow "( 2)" "DNS domain exceptions (logged, never alerted/emailed)" "${CGreen}$(echo "$dnsexceptions" | wc -w | tr -d ' ')${CClear} configured" 68 "$enablednswatch"
@@ -2943,7 +3190,7 @@ vadvanceddns()
     menurow "( 8)" "Force file-based DNS query detection logging" "$(booleantoyesno "$dnsforcefilelog")" 68 "$enablednswatch"
     menurow "( 9)" "  Rotate that file once it reaches this size (KB)" "${CGreen}$dnsquerylogmaxkb${CClear}" 68 "$filelogon"
     menurow "(10)" "  Rotated generations to keep before deleting the oldest" "${CGreen}$dnsquerylogkeep${CClear}" 68 "$filelogon"
-    menurow "(11)" "DNS query source (auto / dnsmasq / AdGuard Home / Pi-hole)" "$dnssrcdisp" 68 "$enablednswatch"
+    menurow "(11)" "DNS query source (auto/dnsmasq/AdGuard Home/Pi-hole/Technitium)" "$dnssrcdisp" 68 "$enablednswatch"
     menurow "(12)" "  AdGuard Home API login" "$aghdisp" 68 "$aghon"
     menurow "(13)" "  AdGuard Home API address (auto = read from AdGuardHome.yaml)" "$aghurldisp" 68 "$aghon"
     menurow "(14)" "  Backup AdGuard Home API login (optional)" "$aghdisp2" 68 "$aghon"
@@ -2952,12 +3199,13 @@ vadvanceddns()
     phmenurows 1 "$phon"
     phmenurows 2 "$phon"
     menurow "(23)" "  Also check queries Pi-hole already blocked" "$(booleantoyesno "$phincludeblocked")" 68 "$phon"
+    tdmenurows "$tdon"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}  | ${CClear}"
     echo -e "${InvGreen} ${CClear} ${InvDkGray}${CWhite}( e)${CClear} : Return to Advanced Settings${CClear}"
     echo -e "${InvGreen} ${CClear}"
     echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
     echo ""
-    read -p "Please select? (1-23, e=Exit): " sel
+    read -p "Please select? (1-28, e=Exit): " sel
     case "$sel" in
       1) if [ "$enablednswatch" -eq 1 ]; then
            togglesetting enablednswatch
@@ -2974,6 +3222,12 @@ vadvanceddns()
              echo ""
              echo -e "Pi-hole is the DNS query source, so DNS watch reads Pi-hole (items 17-23) rather than dnsmasq's query log."
              phslot=1; echo -e "Pi-hole: ${CGreen}$(phstatus)${CClear}"
+             echo ""
+             read -rsp $'Press any key to continue...\n' -n1 key
+           elif dnsusestd; then
+             echo ""
+             echo -e "Technitium is the DNS query source, so DNS watch reads its query log through its API (items 24-28) rather than dnsmasq's."
+             tdslot=1; echo -e "Technitium: ${CGreen}$(tdstatus)${CClear}"
              echo ""
              read -rsp $'Press any key to continue...\n' -n1 key
            elif dnsusesagh; then
@@ -3051,15 +3305,17 @@ vadvanceddns()
           echo -e "  2 : dnsmasq      - always dnsmasq's query log (log-queries)"
           echo -e "  3 : AdGuard Home - always AdGuard Home's query log, through its API"
           echo -e "  4 : Pi-hole      - Pi-hole v6's queries, through its API or its pihole.log (items 17-23); never chosen by auto"
+          echo -e "  5 : Technitium   - Technitium DNS Server's query log, through its API (items 24-28); never chosen by auto"
           echo ""
-          read -p "New DNS query source (1-4, blank to keep current): " val
+          read -p "New DNS query source (1-5, blank to keep current): " val
           case "$val" in
             1) dnssource="auto" ;;
             2) dnssource="dnsmasq" ;;
             3) dnssource="adguardhome" ;;
             4) dnssource="pihole" ;;
+            5) dnssource="technitium" ;;
             "") ;;
-            *) echo -e "${CRed}Please enter 1, 2, 3 or 4.${CClear}"; sleep 2; val="" ;;
+            *) echo -e "${CRed}Please enter 1, 2, 3, 4 or 5.${CClear}"; sleep 2; val="" ;;
           esac
           [ -n "$val" ] && { dnslogannounced=""; saveconfig; }; } ;;
       12) [ "$aghon" -eq 1 ] && { echo ""
@@ -3152,6 +3408,11 @@ vadvanceddns()
       21) [ "$phon" -eq 1 ] && [ -n "$phmethod2" ] && phmenuedit 2 ;;
       22) [ "$phon" -eq 1 ] && [ "$phmethod2" = "api" ] && phmenupassword 2 ;;
       23) [ "$phon" -eq 1 ] && togglesetting phincludeblocked ;;
+      24) [ "$tdon" -eq 1 ] && tdmenuedit 1 ;;
+      25) [ "$tdon" -eq 1 ] && tdmenutoken 1 ;;
+      26) [ "$tdon" -eq 1 ] && tdmenuedit 2 ;;
+      27) [ "$tdon" -eq 1 ] && [ -n "$tdurl2" ] && tdmenutoken 2 ;;
+      28) [ "$tdon" -eq 1 ] && togglesetting tdincludeblocked ;;
       [Ee]) break ;;
       [Ee]!) exitallmenus=1; break ;;
       *) ;;
@@ -4329,9 +4590,14 @@ resolvefeedsroot()
 {
   checkdrivealive
 
+  feedsreadonly=0
   if [ -n "$extdrivelabel" ] && [ "$driveavailable" -eq 1 ]; then
     feedsroot="$iocmonroot/feeds"
     feedsdegraded=0
+  elif [ -n "$extdrivelabel" ] && [ "$drivelaststate" = "readonly" ] && [ -d "$iocmonroot/feeds" ]; then
+    feedsroot="$iocmonroot/feeds"
+    feedsdegraded=0
+    feedsreadonly=1
   elif [ -z "$extdrivelabel" ]; then
     feedsroot="$addonsdir/feeds-degraded"
     feedsdegraded=1
@@ -4844,15 +5110,21 @@ skynetimportids()
 
 removeskynetimports()
 {
-  local id removed=0
+  local id removed=0 rc out="/tmp/iocmon_skynet_remove.$$"
   skynetremovedcount=0
   for id in ${1-$(skynetimportids)}; do
-    if sh /jffs/scripts/firewall rules remove "$id" >/dev/null 2>&1; then
+    runlimited "$skynetremovelimit" "$out" - sh /jffs/scripts/firewall rules remove "$id"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
       removed=$((removed + 1))
+    elif [ "$rc" -eq 124 ]; then
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Skynet did not finish removing import rule $id within $skynetremovelimit seconds and was stopped. Other removals skipped; check Skynet with 'sh /jffs/scripts/firewall debug info'." >> "$logfile"
+      break
     else
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Failed to remove Skynet import rule $id." >> "$logfile"
     fi
   done
+  rm -f "$out"
   skynetremovedcount="$removed"
   [ "$removed" -gt 0 ] && echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Removed $removed existing IOCMON-tagged Skynet import rule(s)." >> "$logfile"
 }
@@ -4908,6 +5180,49 @@ buildskynetimportfile()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
+# killtree sends signal $1 to process $2 and every process below it, found through /proc
+
+killtree()
+{
+  local kid kids
+  kids="$(cat /proc/[0-9]*/stat 2>/dev/null | awk -v p="$2" '{ s = $0; sub(/.*\) /, "", s); split(s, f, " "); if (f[2] == p) print $1 }')"
+  for kid in $kids; do killtree "$1" "$kid"; done
+  kill -"$1" "$2" 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# runlimited runs a command with output to $2, stopping it after $1 seconds (returns 124); $3 is a command run every 5 s with the seconds so far, or -
+
+runlimited()
+{
+  local limit="$1" out="$2" tick="$3" pid waited=0
+  shift 3
+  "$@" > "$out" 2>&1 < /dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$limit" ]; then
+      killtree TERM "$pid"
+      sleep 5
+      kill -0 "$pid" 2>/dev/null && killtree KILL "$pid"
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    waited=$((waited + 1))
+    [ "$tick" != "-" ] && [ $((waited % 5)) -eq 0 ] && $tick "$waited"
+  done
+  wait "$pid"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# skynetimporttick redraws the import progress line with the time it has taken so far ($1 seconds)
+
+skynetimporttick()
+{
+  skynetprogress 5 6 "Importing $skynettickcount entries into Skynet, ${1}s"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
 # skynetcleanoutput strips screen codes, Skynet's #-framed banner and lines without text from firewall output on stdin
 
 skynetcleanoutput()
@@ -4929,7 +5244,8 @@ skynetimportfailure()
   rotatelogfile "$file" "$logsize"
   cleaned="$(printf '%s\n' "$3" | skynetcleanoutput | tail -n 40)"
   {
-    printf '%s Import attempt %s of 3 failed (exit %s):\n' "$(date +'%b %d %Y %X')" "$1" "$2"
+    if [ "$2" -eq 124 ]; then printf '%s Import attempt %s of 3 stopped after %s seconds (Skynet did not finish):\n' "$(date +'%b %d %Y %X')" "$1" "$skynetimportlimit"
+    else printf '%s Import attempt %s of 3 failed (exit %s):\n' "$(date +'%b %d %Y %X')" "$1" "$2"; fi
     if [ -n "$cleaned" ]; then printf '%s\n' "$cleaned" | sed 's/^/    /'; else echo "    (no output)"; fi
   } >> "$file"
 }
@@ -4970,7 +5286,7 @@ syncskynetimport()
     skynetprogress 5 6 "Removing previous IOCMON-tagged rule(s)"
     removeskynetimports
     rm -f "$importfile"
-    echo "$newhash" > "$hashfile"
+    { echo "$newhash" > "$hashfile"; } 2>/dev/null
     return 1
   fi
 
@@ -4978,22 +5294,33 @@ syncskynetimport()
   previmports="$(skynetimportids)"
 
   skynetprogress 5 6 "Importing $entrycount entries into Skynet"
-  local importattempt=0 importrc=1 importoutput=""
+  local importattempt=0 importrc=1 importoutput="" importout="/tmp/iocmon_skynet_out.$$"
+  skynettickcount="$entrycount"
   while [ "$importattempt" -lt 3 ]; do
     if [ "$importattempt" -gt 0 ]; then
       skynetprogress 5 6 "Import failed, retrying in $((importattempt * 30))s (attempt $((importattempt + 1)) of 3)"
       sleep $((importattempt * 30))
       skynetprogress 5 6 "Importing $entrycount entries into Skynet (attempt $((importattempt + 1)) of 3)"
     fi
-    importoutput="$(sh /jffs/scripts/firewall import blacklist "$importfile" "IOCMON Threat Feed Import ($entrycount entries)" 2>&1)"
+    runlimited "$skynetimportlimit" "$importout" skynetimporttick sh /jffs/scripts/firewall import blacklist "$importfile" "IOCMON Threat Feed Import ($entrycount entries)"
     importrc=$?
+    importoutput="$(cat "$importout" 2>/dev/null)"
     [ "$importrc" -eq 0 ] && break
     importattempt=$((importattempt + 1))
     skynetimportfailure "$importattempt" "$importrc" "$importoutput"
+    # A stopped import isn't retried: a hung Skynet would hold the feed refresh three times as long.
+    [ "$importrc" -eq 124 ] && break
   done
+  rm -f "$importout"
+
+  if [ "$importrc" -eq 124 ]; then
+    rm -f "$importfile"
+    echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - ERROR: Skynet did not finish importing $entrycount indicator(s) within $skynetimportlimit seconds and was stopped. The previous IOCMON bans stay in force, and the import is tried again at the next refresh. Check Skynet with 'sh /jffs/scripts/firewall debug info'." >> "$logfile"
+    return 3
+  fi
 
   if [ "$importrc" -eq 0 ]; then
-    echo "$newhash" > "$hashfile"
+    { echo "$newhash" > "$hashfile"; } 2>/dev/null
     rm -f "$importfile"
     # Only once a new rule exists: a failed import keeps the old bans in force.
     if [ "$(skynetimportids)" != "$previmports" ]; then
@@ -5019,6 +5346,12 @@ syncskynetimport()
 updatefeeds()
 {
   local okcount=0 failcount=0 qrc skrc
+
+  if [ "${feedsreadonly:-0}" = "1" ]; then
+    echo -e "  ${CYellow}*${CClear} Feed refresh skipped: the external drive is read-only, so detection uses the feeds already on it"
+    feedokcount=0; feedfailcount=0
+    return
+  fi
 
   mkdir -m 755 -p "$feedsroot/meta"
 
@@ -5144,14 +5477,23 @@ updatefeeds()
 
 feedslock()
 {
-  local lockpid
-  if [ -f "$feedslockfile" ]; then
-    lockpid="$(cat "$feedslockfile" 2>/dev/null)"
-    if [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && iocmonpid "$lockpid"; then
-      return 1
-    fi
-  fi
-  echo "$$" > "$feedslockfile"
+  feedslockheld && return 1
+  echo "$$ $(date +%s)" > "$feedslockfile"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# feedslockheld succeeds while another live IOCMON process holds the feed lock, setting feedslockpid and feedslockmins (minutes held)
+
+feedslockheld()
+{
+  local lockpid lockstart
+  feedslockpid=""; feedslockmins=0
+  [ -f "$feedslockfile" ] || return 1
+  read -r lockpid lockstart 2>/dev/null < "$feedslockfile"
+  { [ -n "$lockpid" ] && [ "$lockpid" != "$$" ] && iocmonpid "$lockpid"; } || return 1
+  feedslockpid="$lockpid"
+  validateint "$lockstart" 0 && feedslockmins=$((($(date +%s) - lockstart) / 60))
   return 0
 }
 
@@ -5167,7 +5509,7 @@ checkfeedupdate()
 {
   resolvefeedsroot
 
-  if [ -z "$feedsroot" ]; then
+  if [ -z "$feedsroot" ] || [ "${feedsreadonly:-0}" -eq 1 ]; then
     return
   fi
 
@@ -5186,8 +5528,10 @@ checkfeedupdate()
       updatefeeds
       echo "$nowepoch" > "$stampfile"
       feedsunlock
+    elif [ "$feedslockmins" -ge "$feedslockwarnmins" ]; then
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: Feed refresh skipped - the refresh started by IOCMON[$feedslockpid] has been running for $feedslockmins minutes and may be stuck." >> "$logfile"
     else
-      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Feed refresh skipped - another refresh is already in progress." >> "$logfile"
+      echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - INFO: Feed refresh skipped - another refresh (IOCMON[$feedslockpid], $feedslockmins min so far) is already in progress." >> "$logfile"
     fi
   fi
 }
@@ -5205,6 +5549,8 @@ forcefeeds()
 
   if [ -z "$feedsroot" ]; then
     echo -e "${CRed}ERROR: No feed storage location is available right now (external drive missing). Refresh skipped.${CClear}"
+  elif [ "${feedsreadonly:-0}" -eq 1 ]; then
+    echo -e "${CRed}ERROR: The external drive is read-only, so the feeds can't be refreshed. Detection keeps using the feeds already on it.${CClear}"
   else
     mkdir -m 755 -p "$feedsroot/meta"
     if feedslock; then
@@ -5214,7 +5560,7 @@ forcefeeds()
       echo ""
       echo -e "${CGreen}Feed refresh complete.${CClear}"
     else
-      echo -e "${CYellow}A feed refresh is already in progress - try again in a moment.${CClear}"
+      echo -e "${CYellow}A feed refresh is already in progress (IOCMON[$feedslockpid], $feedslockmins min so far) - try again in a moment.${CClear}"
     fi
   fi
 
@@ -5628,13 +5974,21 @@ sendmessage()
       auth) emailSubject="WARNING: Possible brute-force login attempts from $indicator" ;;
       fsintegrity) emailSubject="ALERT: Filesystem-integrity event - $indicator" ;;
       cron) emailSubject="ALERT: Unexpected new cron entry detected" ;;
+      drive)
+        case "$indicator" in
+          readonly) emailSubject="WARNING: IOCMON's external drive is read-only - running with reduced function" ;;
+          missing) emailSubject="WARNING: IOCMON's external drive is not available - running with reduced function" ;;
+          *) emailSubject="INFO: IOCMON's external drive is writable again - full function resumed" ;;
+        esac ;;
       *) emailSubject="ALERT: IOCMON detected a security event ($kind)" ;;
     esac
     emailBodyTitle="$emailSubject"
 
     {
       printf "<b>Date/Time:</b> %s\n\n" "$(date +'%b %d %Y %X')"
-      if [ "$kind" = "test" ]; then
+      if [ "$kind" = "drive" ]; then
+        driveemailbody "$indicator" "$detail"
+      elif [ "$kind" = "test" ]; then
         emailrow "" "This is a test email requested via 'iocmon.sh -email' to confirm AMTM email notifications are configured correctly. If you received this, IOCMON's email pipeline is working."
       else
         emailalertbody "$kind" "$indicator" "$source" "$detail"
@@ -5800,6 +6154,7 @@ dnsreplyip()
   local dom="$1" logf="${dnslogresolved:-/tmp/syslog.log}"
   if dnsusesagh; then aghreplyip "$dom"; return; fi
   if dnsusesph; then phreplyip "$dom"; return; fi
+  if dnsusestd; then tdreplyip "$dom"; return; fi
   dnsreplyipfrom "$logf" "$dom"
 }
 
@@ -5982,6 +6337,8 @@ reputationlookup()
         reason="Pi-hole's API does not report the IP it answered with, so there is no IP to check"
       elif [ -z "$ip" ] && dnsusesph; then
         reason="no public IP for this domain in Pi-hole's reply log"
+      elif [ -z "$ip" ] && dnsusestd; then
+        reason="no public IP for this domain in Technitium's recent answers"
       elif [ -z "$ip" ]; then
         reason="no public IP for this domain in dnsmasq's reply log"
       elif ! ispublicip "$ip"; then
@@ -6576,21 +6933,25 @@ raisealert()
   resolvestateroot
   nowepoch=$(date +%s)
 
+  local dbfile="$seenalertsramfile"
   if [ -n "$stateroot" ]; then
     mkdir -m 755 -p "$stateroot"
-    local dbfile="$stateroot/seen_alerts.db"
+    dbfile="$stateroot/seen_alerts.db"
     [ -f "$dbfile" ] || : > "$dbfile"
-
-    lastepoch="$(awk -F'\t' -v k="$key" '$1==k{print $2}' "$dbfile" | tail -n1)"
-    [ -z "$lastepoch" ] && lastepoch=0
-
-    if [ "$((nowepoch - lastepoch))" -lt "$cooldownsec" ]; then
-      return
-    fi
-
-    { awk -F'\t' -v k="$key" -v c="$((nowepoch - cooldownsec))" '$1!=k && $2>=c' "$dbfile"; printf '%s\t%s\n' "$key" "$nowepoch"; } > "${dbfile}.tmp"
-    mv "${dbfile}.tmp" "$dbfile"
+    # records kept in RAM while the drive couldn't be written join the drive's file once it can
+    [ -s "$seenalertsramfile" ] && cat "$seenalertsramfile" >> "$dbfile" && rm -f "$seenalertsramfile"
   fi
+  [ -f "$dbfile" ] || : > "$dbfile"
+
+  lastepoch="$(awk -F'\t' -v k="$key" '$1==k{print $2}' "$dbfile" | tail -n1)"
+  [ -z "$lastepoch" ] && lastepoch=0
+
+  if [ "$((nowepoch - lastepoch))" -lt "$cooldownsec" ]; then
+    return
+  fi
+
+  { awk -F'\t' -v k="$key" -v c="$((nowepoch - cooldownsec))" '$1!=k && $2>=c' "$dbfile"; printf '%s\t%s\n' "$key" "$nowepoch"; } > "${dbfile}.tmp"
+  mv "${dbfile}.tmp" "$dbfile"
 
   case "$kind" in conntrack|dns) indicator="$(devnametag "$indicator")" ;; esac
   [ -n "$stateroot" ] && reputationlookup "$kind" "$indicator" "$source"
@@ -6790,7 +7151,7 @@ dnsusesagh()
 {
   case "$dnssource" in
     adguardhome) return 0 ;;
-    dnsmasq|pihole) return 1 ;;
+    dnsmasq|pihole|technitium) return 1 ;;
   esac
   aghrunning || return 1
   netstat -lnup 2>/dev/null | awk '$4 ~ /:53$/ { print $NF }' | grep -q 'AdGuardHome' && return 0
@@ -7077,18 +7438,19 @@ aghreadlog()
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
-# aghreplyip $1=domain echoes the last public IP AdGuard Home answered for $1 or a subdomain (never resolves itself)
+# aghreplyip $1=domain [$2=answers file] echoes the last public IP answered for $1 or a subdomain (never resolves itself)
 
 aghreplyip()
 {
-  [ -n "$1" ] && [ -f "$aghreplyfile" ] || return
+  local f="${2:-$aghreplyfile}"
+  [ -n "$1" ] && [ -f "$f" ] || return
   awk -F'|' -v d="$1" '
     function usable(v) {
       if (v ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return (v !~ /^(0|10|127)\./ && v !~ /^192\.168\./ && v !~ /^172\.(1[6-9]|2[0-9]|3[01])\./)
       return (v ~ /^[23][0-9a-fA-F]*:[0-9a-fA-F:]+$/)
     }
     ($1 == d || substr($1, length($1) - length(d)) == "." d) && usable($2) { ip = $2 }
-    END { if (ip != "") print ip }' "$aghreplyfile"
+    END { if (ip != "") print ip }' "$f"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -7493,18 +7855,26 @@ phlogpairs()
 
 phrouteronlycheck()
 {
+  dnsrouteronlycheck "$1" "$(phname)" "Pi-hole" "phrouterwarned${phslot:-1}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsrouteronlycheck $1=pairs file $2=server name $3=product $4=flag variable warns once when nearly all queries come from this router
+
+dnsrouteronlycheck()
+{
   local total own w top r
   total="$(wc -l < "$1" | tr -d ' ')"
   [ "$total" -ge 20 ] || return 0
   r=" $(routeraddrs | tr '\n' ' ') "
   own="$(awk -F'|' -v r="$r" 'index(r, " " $2 " ") { c++ } END { print c + 0 }' "$1")"
-  eval "w=\"\$phrouterwarned${phslot:-1}\""
+  eval "w=\"\$$4\""
   if [ $((own * 100)) -ge $((total * 95)) ]; then
     top="$(awk -F'|' -v r="$r" 'index(r, " " $2 " ") { print $2 }' "$1" | sort | uniq -c | sort -rn | head -n 1 | awk '{ print $2 }')"
-    [ "$w" = "1" ] || aghlog "WARNING" "Nearly all of $(phname)'s queries come from this router itself ($top), so the precise origination source - the device that made each lookup - could not be identified: this router's dnsmasq forwards devices' lookups to Pi-hole, and alerts will name the router. To see device addresses, set the DNS query source to dnsmasq (Configuration Menu ${advsettingsmenunum}.2, item 11), or have DHCP hand devices the Pi-hole's own address."
-    eval "phrouterwarned${phslot:-1}=1"
+    [ "$w" = "1" ] || aghlog "WARNING" "Nearly all of $2's queries come from this router itself ($top), so the precise origination source - the device that made each lookup - could not be identified: this router's dnsmasq forwards devices' lookups to $3, and alerts will name the router. To see device addresses, set the DNS query source to dnsmasq (Configuration Menu ${advsettingsmenunum}.2, item 11), or have DHCP hand devices $2's own address."
+    eval "$4=1"
   else
-    eval "phrouterwarned${phslot:-1}=0"
+    eval "$4=0"
   fi
 }
 
@@ -7572,6 +7942,358 @@ phreplyip()
   done
   phslot=1
   [ -n "$ip" ] && echo "$ip"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# dnsusestd succeeds when Technitium DNS Server is the chosen DNS query source (10.2 item 11 = 5); auto never picks it
+
+dnsusestd()
+{
+  [ "$dnssource" = "technitium" ]
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdcur $1=url|cred echoes that setting for the Technitium server in tdslot (1 = primary, 2 = backup)
+
+tdcur()
+{
+  local s=""
+  [ "$tdslot" = "2" ] && s="2"
+  eval "printf '%s' \"\$td$1$s\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdname echoes how the Technitium server in tdslot is named in messages
+
+tdname()
+{
+  if [ "$tdslot" = "2" ]; then echo "the backup Technitium server"
+  elif [ -n "$tdurl2" ]; then echo "the primary Technitium server"
+  else echo "Technitium"; fi
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdapiurl echoes the API base URL of the Technitium server in tdslot
+
+tdapiurl()
+{
+  local u
+  u="$(tdcur url)"
+  echo "${u%/}"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdtoken echoes the plain API token of the Technitium server in tdslot
+
+tdtoken()
+{
+  local c
+  c="$(tdcur cred)"
+  [ -n "$c" ] && printf '%s\n' "$c" | openssl base64 -d -A 2>/dev/null
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdtokenok succeeds when $1 looks like an API token (no spaces, quotes or control characters)
+
+tdtokenok()
+{
+  [ -n "$1" ] || return 1
+  case "$1" in *[!A-Za-z0-9._~+/=-]*) return 1 ;; esac
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdcurl $1=API path $2=output file [curl args] echoes the HTTP code, sending the API token as a header through stdin
+
+tdcurl()
+{
+  local p="$1" o="$2" t
+  shift 2
+  t="$(tdtoken)"
+  tdtokenok "$t" || t=""
+  { [ -n "$t" ] && printf 'header = "Authorization: Bearer %s"\n' "$t"; } | curl -s -L -k --max-time 15 --connect-timeout 5 -K - -o "$o" -w '%{http_code}' "$(tdapiurl)$p" "$@" 2>/dev/null
+  t=""
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdapi $1=API path $2=output file [curl args] calls the server in tdslot; sets tdcode, tdst (reply status) and tderr on failure
+
+tdapi()
+{
+  local o="$2" jq
+  tderr=""; tdst=""
+  tdcode="$(tdcurl "$@")"
+  case "$tdcode" in
+    200) ;;
+    000|"") tderr="$(tdname) API not reachable at $(tdapiurl)"; return 1 ;;
+    404) tderr="no Technitium API at $(tdapiurl)"; return 1 ;;
+    *) tderr="$(tdname) API error (HTTP $tdcode)"; return 1 ;;
+  esac
+  jq="$(aghjqbin)" || { tderr="jq is not installed (Entware: opkg install jq)"; return 1; }
+  tdst="$("$jq" -r '.status // ""' "$o" 2>/dev/null)"
+  case "$tdst" in
+    ok) return 0 ;;
+    invalid-token) tderr="$(tdname) rejected the API token (expired, deleted or mistyped)" ;;
+    2fa-required) tderr="$(tdname) asked for a two-factor code - use an API token instead" ;;
+    error) tderr="$(tdname) refused the request: $("$jq" -r '.errorMessage // "no reason given" | tostring | split("\n") | join(" ")' "$o" 2>/dev/null | cut -c1-150)" ;;
+    *) tderr="$(tdname) answered, but not like Technitium's API - check the address and port (usually 5380)" ;;
+  esac
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdfindapp sets tdappname/tdappclass to the query-log app installed on the server in tdslot, cached per server address
+
+tdfindapp()
+{
+  local b="/tmp/iocmon_tdapps.$$" jq c line url
+  url="$(tdapiurl)"
+  eval "c=\"\$tdappcache${tdslot:-1}\""
+  if [ -n "$c" ] && [ "${c%%|*}" = "$url" ]; then
+    line="${c#*|}"; tdappname="${line%|*}"; tdappclass="${line##*|}"; return 0
+  fi
+  tdappname=""; tdappclass=""
+  jq="$(aghjqbin)" || { tderr="jq is not installed (Entware: opkg install jq)"; return 1; }
+  tdapi /api/apps/list "$b" || { rm -f "$b"; return 1; }
+  line="$("$jq" -r '[.response.apps[]? | (.name // "") as $a | .dnsApps[]? | select(.isQueryLogger == true) | "\($a)|\(.classPath // "")"] | .[0] // ""' "$b" 2>/dev/null)"
+  rm -f "$b"
+  case "$line" in
+    ?*"|"?*) ;;
+    *) tderr="$(tdname) has no query-log app installed - add 'Query Logs (Sqlite)' from its App Store (Apps section)"; return 1 ;;
+  esac
+  tdappname="${line%|*}"; tdappclass="${line##*|}"
+  eval "tdappcache${tdslot:-1}=\"\$url|\$line\""
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdquerypage $1=output file $2=page $3=entries reads one page of the query log, newest first, finding the app again once if it fails
+
+tdquerypage()
+{
+  local try=0
+  while [ "$try" -lt 2 ]; do
+    tdfindapp || return 1
+    tdapi /api/logs/query "$1" -G --data-urlencode "name=$tdappname" --data-urlencode "classPath=$tdappclass" \
+      --data-urlencode "pageNumber=$2" --data-urlencode "entriesPerPage=$3" --data-urlencode "descendingOrder=true" && return 0
+    [ "$tdst" = "error" ] || return 1
+    eval "tdappcache${tdslot:-1}=\"\""
+    try=$((try + 1))
+  done
+  return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdstatus echoes "ok" or a one-line reason for the Technitium server in tdslot, for the menu
+
+tdstatus()
+{
+  local b="/tmp/iocmon_tdst.$$"
+  aghjqbin >/dev/null || { echo "jq is not installed (Entware: opkg install jq)"; return 1; }
+  [ -n "$(tdapiurl)" ] || { echo "no address set"; return 1; }
+  [ -n "$(tdcur cred)" ] || { echo "no API token set"; return 1; }
+  if tdquerypage "$b" 1 1; then rm -f "$b"; echo "ok"; return 0; fi
+  rm -f "$b"; echo "$tderr"; return 1
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdstatustag $1=tdstatus result echoes the short menu tag for it
+
+tdstatustag()
+{
+  case "$1" in
+    ok) echo -e "${CGreen}<connected>${CClear}" ;;
+    *"jq is not"*) echo -e "${CYellow}<jq missing>${CClear}" ;;
+    *token*|*two-factor*) echo -e "${CYellow}<token rejected>${CClear}" ;;
+    *"query-log app"*) echo -e "${CYellow}<no query-log app>${CClear}" ;;
+    *refused*) echo -e "${CYellow}<refused>${CClear}" ;;
+    *) echo -e "${CYellow}<not connected>${CClear}" ;;
+  esac
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdwarn $1=message logs a WARNING for the Technitium server in tdslot once, until tdok clears it
+
+tdwarn()
+{
+  local w
+  eval "w=\"\$tdwarned${tdslot:-1}\""
+  [ "$w" = "$1" ] || aghlog "WARNING" "$1"
+  eval "tdwarned${tdslot:-1}=\"\$1\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdok logs that the Technitium server in tdslot can be read again after a tdwarn
+
+tdok()
+{
+  local w
+  eval "w=\"\$tdwarned${tdslot:-1}\""
+  [ -n "$w" ] && aghlog "INFO" "DNS watch can read $(tdname) again."
+  eval "tdwarned${tdslot:-1}=\"\""
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdjq turns one /api/logs/query reply into M|count|pages|oldest|newest, Q|epoch|name|client|qtype|blocked and A|name|answer lines
+
+tdjq='
+def ep: (.timestamp // "" | tostring) as $t
+  | (if ($t | length) > 19 and ($t[-6:-5] == "+" or $t[-6:-5] == "-") and $t[-3:-2] == ":"
+     then (try ((($t[-5:-3] | tonumber) * 3600 + ($t[-2:] | tonumber) * 60) * (if $t[-6:-5] == "-" then -1 else 1 end)) catch 0)
+     else 0 end) as $z
+  | (try ((($t[0:19] + "Z") | fromdateiso8601) - $z) catch 0) | floor;
+def flat: tostring | split("|") | join("_") | split("\n") | join(" ");
+def blocked: (.responseType // "" | tostring) as $r | $r == "Blocked" or $r == "UpstreamBlocked" or $r == "CacheBlocked";
+(.response.entries // []) as $e
+| ($e | map(ep)) as $k
+| "M|\($e | length)|\(.response.totalPages // 0)|\($k | min // 0)|\($k | max // 0)",
+  ($e[] | ep as $s | select($s >= $cur)
+   | (.qname // "" | flat | ascii_downcase | rtrimstr(".")) as $n
+   | select($n != "")
+   | "Q|\($s)|\($n)|\(.clientIpAddress // "" | flat)|\(.qtype // "" | flat)|\(if blocked then 1 else 0 end)",
+     (if (.answer // "" | tostring) != "" then "A|\($n)|\(.answer | flat)" else empty end))
+'
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdquerypairs $1=output file writes domain|client pairs logged by the Technitium server in tdslot since its saved time; 1 = error, 2 = first run
+
+tdquerypairs()
+{
+  local outfile="$1" tmp="/tmp/iocmon_td.$$" jq url curfile saved="" cur="" page=1 meta n total low high newest="" newcur reset=0 done=0
+  tdqueries=0; tdskippedblocked=0
+  : > "$outfile"; : > "$outfile.times"
+  if ! jq="$(aghjqbin)"; then
+    tdwarn "DNS watch needs jq to read Technitium's query log - install it from the Entware components menu (opkg install jq)."
+    return 1
+  fi
+  url="$(tdapiurl)"
+  if [ -z "$url" ]; then
+    tdwarn "DNS watch has no address for $(tdname) - set it under Configuration Menu ${advsettingsmenunum}.2, item $( [ "$tdslot" = "2" ] && echo 26 || echo 24)."
+    return 1
+  fi
+  if [ -z "$(tdcur cred)" ]; then
+    tdwarn "DNS watch has no API token for $(tdname) - set it under Configuration Menu ${advsettingsmenunum}.2, item $( [ "$tdslot" = "2" ] && echo 27 || echo 25)."
+    return 1
+  fi
+  if [ -n "$stateroot" ]; then curfile="$stateroot/technitium_cursor"; [ "$tdslot" = "2" ] && curfile="$stateroot/technitium_cursor2"
+  else curfile="$tdcursorram.${tdslot:-1}"; fi
+  [ -f "$curfile" ] && saved="$(head -n 1 "$curfile" 2>/dev/null)"
+  [ "${saved#* }" = "$url" ] && cur="${saved%% *}"
+  validateint "$cur" 0 || cur=""
+  mkdir -p "$tmp"; : > "$tmp/all"; : > "$tmp/seen"
+  [ -n "$cur" ] && sed 1d "$curfile" > "$tmp/seen" 2>/dev/null
+  cp "$tmp/seen" "$tmp/seen.old"
+
+  while [ "$page" -le "$tdmaxpages" ]; do
+    if ! tdquerypage "$tmp/resp" "$page" "$tdpagesize"; then
+      tdwarn "DNS watch could not read $(tdname)'s query log: $tderr."
+      rm -rf "$tmp"; return 1
+    fi
+    "$jq" -r --argjson cur "${cur:-0}" "$tdjq" "$tmp/resp" > "$tmp/page" 2>/dev/null
+    meta="$(head -n 1 "$tmp/page")"
+    case "$meta" in
+      M\|*) ;;
+      *) tdwarn "DNS watch could not parse $(tdname)'s query log reply ($(head -c 200 "$tmp/resp" 2>/dev/null | tr '\n' ' '))."
+         rm -rf "$tmp"; return 1 ;;
+    esac
+    n="$(echo "$meta" | cut -d'|' -f2)"; total="$(echo "$meta" | cut -d'|' -f3)"
+    low="$(echo "$meta" | cut -d'|' -f4)"; high="$(echo "$meta" | cut -d'|' -f5)"
+    if [ "$page" -eq 1 ]; then
+      newest="$high"
+      if [ "${n:-0}" -gt 0 ] && [ "${high:-0}" -eq 0 ]; then
+        tdwarn "DNS watch could not read the timestamps in $(tdname)'s query log ($(head -c 200 "$tmp/resp" 2>/dev/null | tr '\n' ' '))."
+        rm -rf "$tmp"; return 1
+      fi
+    fi
+    sed 1d "$tmp/page" >> "$tmp/all"
+    if [ -z "$cur" ] || [ "${n:-0}" -lt "$tdpagesize" ] || [ "$page" -ge "${total:-0}" ] || [ "${low:-0}" -lt "$cur" ]; then done=1; break; fi
+    page=$((page + 1))
+  done
+  tdok
+  [ "$done" -eq 0 ] && aghlog "WARNING" "DNS watch read $tdmaxpages pages ($((tdmaxpages * tdpagesize)) queries) of $(tdname)'s query log this cycle and stopped; older queries since the last cycle were not checked. Lower timerloop if this repeats."
+
+  newcur="${cur:-0}"; reset=0
+  if [ -n "$cur" ] && [ "${newest:-0}" -gt 0 ] && [ "$newest" -lt "$cur" ]; then
+    reset=1; newcur="$newest"; : > "$tmp/seen"
+    "$jq" -r --argjson cur "$newest" "$tdjq" "$tmp/resp" 2>/dev/null | sed 1d > "$tmp/all"
+  elif [ "${newest:-0}" -gt "$newcur" ]; then
+    newcur="$newest"; : > "$tmp/seen"
+  fi
+  awk -F'|' -v t="$newcur" '$1 == "Q" && $2 == t { print $3 "|" $4 "|" $5 "|" $6 }' "$tmp/all" >> "$tmp/seen"
+  { echo "$newcur $url"; sort -u "$tmp/seen"; } > "$curfile.t" && mv -f "$curfile.t" "$curfile"
+  if [ -z "$cur" ]; then
+    aghlog "INFO" "DNS watch is reading $(tdname)'s query log ($url), starting from now."
+    rm -rf "$tmp"; return 2
+  fi
+  if [ "$reset" -eq 1 ]; then
+    aghlog "INFO" "$(tdname)'s newest query is older than the last one read (its query log was cleared or its clock moved back) - DNS watch continues from its newest query."
+    : > "$tmp/all"
+  fi
+
+  awk -F'|' -v cur="$cur" 'FILENAME == ARGV[1] { s[$0] = 1; next } $1 == "Q" && ($2 + 0 > cur + 0 || !(($3 "|" $4 "|" $5 "|" $6) in s)) { print }' "$tmp/seen.old" "$tmp/all" | sort -u > "$tmp/new"
+  awk -F'|' '$1 == "A" { n = split($3, w, /[ ,;]+/); for (i = 1; i <= n; i++) if (w[i] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || w[i] ~ /^[0-9a-fA-F]*:[0-9a-fA-F:]+$/) print $2 "|" w[i] }' "$tmp/all" >> "$tdreplyfile"
+  [ "$(wc -l < "$tdreplyfile" 2>/dev/null || echo 0)" -gt 20000 ] && { tail -n 10000 "$tdreplyfile" > "$tdreplyfile.t" && mv -f "$tdreplyfile.t" "$tdreplyfile"; }
+
+  tdqueries="$(wc -l < "$tmp/new" | tr -d ' ')"
+  tdskippedblocked="$(grep -c '|1$' "$tmp/new")"
+  if [ "$tdincludeblocked" = "1" ]; then cat "$tmp/new"; else grep '|0$' "$tmp/new"; fi | awk -F'|' '{ print $3 "|" $4 "|" $2 }' > "$outfile.times"
+  [ "$tdincludeblocked" = "1" ] && tdskippedblocked=0
+  cut -d'|' -f1,2 "$outfile.times" | sort -u > "$outfile"
+  rm -rf "$tmp"
+  return 0
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdreadall $1=output file reads every configured Technitium server into one domain|client list plus $1.times; 0 = read, 1 = none could be, 2 = first run
+
+tdreadall()
+{
+  local out="$1" s rc any=0 fails=0 n=1
+  : > "$out"; : > "$out.times"
+  tdchecked=0; tdblockedskipped=0; tdstate=""; tdfailslot=""
+  [ -n "$tdurl2" ] && n=2
+  for s in 1 2; do
+    [ "$s" -gt "$n" ] && break
+    tdslot="$s"
+    tdquerypairs "$out.$s"; rc=$?
+    case "$rc" in
+      0) any=1
+         dnsrouteronlycheck "$out.$s" "$(tdname)" "Technitium" "tdrouterwarned$s"
+         tdchecked=$((tdchecked + tdqueries)); tdblockedskipped=$((tdblockedskipped + tdskippedblocked))
+         cat "$out.$s" >> "$out"; cat "$out.$s.times" >> "$out.times" ;;
+      2) ;;
+      *) fails=$((fails + 1)); tdfailslot="$s" ;;
+    esac
+    rm -f "$out.$s" "$out.$s.times"
+  done
+  tdslot=1
+  sort -u "$out" > "$out.t"; mv -f "$out.t" "$out"
+  if [ "$fails" -eq "$n" ]; then tdstate="none"; return 1; fi
+  if [ "$fails" -gt 0 ]; then tdstate="partial"; else tdstate="ok"; fi
+  [ "$any" -eq 1 ] && return 0
+  return 2
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tddesc [short] echoes what DNS watch reads in Technitium mode, e.g. "Technitium API http://192.168.50.5:5380 + http://192.168.50.6:5380"
+
+tddesc()
+{
+  local d
+  tdslot=1; d="Technitium API $(tdapiurl)"
+  [ -n "$tdurl2" ] && { tdslot=2; d="$d + $(tdapiurl)"; }
+  tdslot=1
+  if [ "$1" = "short" ] && [ "${#d}" -gt 60 ]; then d="$(printf '%.59s' "$d")>"; fi
+  echo "$d"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# tdreplyip $1=domain echoes the last public IP a Technitium server answered for it, from its query log
+
+tdreplyip()
+{
+  aghreplyip "$1" "$tdreplyfile"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -8001,9 +8723,10 @@ checkdns()
 
   [ "$enablednswatch" -eq 1 ] || return
 
-  local aghmode=0 phmode=0
+  local aghmode=0 phmode=0 tdmode=0
   dnsusesagh && aghmode=1
   dnsusesph && phmode=1
+  dnsusestd && tdmode=1
 
   if [ "$aghmode" -eq 1 ] && ! aghanylogin; then
     aghfailover=0
@@ -8017,7 +8740,7 @@ checkdns()
     aghloginwarned=0
   fi
 
-  if [ "$aghmode" -eq 0 ] && [ "$phmode" -eq 0 ] && ! dnsquerylogenabled; then
+  if [ "$aghmode" -eq 0 ] && [ "$phmode" -eq 0 ] && [ "$tdmode" -eq 0 ] && ! dnsquerylogenabled; then
     if [ "$dnsquerylogwarned" != "1" ]; then
       echo -e "$(date +'%b %d %Y %X') $(_GetLAN_HostName_) IOCMON[$$] - WARNING: DNS watch is enabled but dnsmasq query logging is off - enable it from the Configuration Menu." >> "$logfile"
       dnsquerylogwarned=1
@@ -8079,6 +8802,28 @@ checkdns()
     querypairs="$(cat "$dnspairfile.ph")"
     mv -f "$dnspairfile.ph.times" "$dnspairfile.times" 2>/dev/null
     rm -f "$dnspairfile.ph"
+    [ -z "$querypairs" ] && { rm -f "$dnspairfile.times"; return; }
+  elif [ "$tdmode" -eq 1 ]; then
+    resolvestateroot
+    [ -n "$stateroot" ] && mkdir -m 755 -p "$stateroot"
+    if [ "$dnslogannounced" != "technitium:$(tddesc)" ]; then
+      aghlog "INFO" "DNS watch is reading $(tddesc)."
+      dnslogannounced="technitium:$(tddesc)"
+    fi
+    dnslogshort="$(tddesc short)"
+    local tdrc
+    tdreadall "$dnspairfile.td"; tdrc=$?
+    case "$tdstate" in
+      none) dnslogshort="Technitium could not be read - see the IOCMON log" ;;
+      partial) if [ "$tdfailslot" = "2" ]; then dnslogshort="Backup Technitium could not be read - see the IOCMON log"; else dnslogshort="Primary Technitium could not be read - see the IOCMON log"; fi ;;
+    esac
+    [ "$tdrc" -eq 2 ] && dnslastcheck=$(date +'%H:%M')
+    [ "$tdrc" -eq 0 ] || { rm -f "$dnspairfile.td" "$dnspairfile.td.times"; return; }
+    dnschecked="$tdchecked"
+    dnslastcheck=$(date +'%H:%M')
+    querypairs="$(cat "$dnspairfile.td")"
+    mv -f "$dnspairfile.td.times" "$dnspairfile.times" 2>/dev/null
+    rm -f "$dnspairfile.td"
     [ -z "$querypairs" ] && { rm -f "$dnspairfile.times"; return; }
   else
     # dnsmasq: tail its log-queries lines
@@ -10393,8 +11138,9 @@ webrecent()
 webpublishlog()
 {
   local dst="$webuidir/$1.htm" sigfile="$webuidir/.$1.sig" sig
-  if [ -z "$2" ] || { [ ! -f "$2" ] && [ ! -f "$2.1" ]; }; then
-    rm -f "$dst" "$sigfile"
+  [ -z "$2" ] && return
+  if [ ! -f "$2" ] && [ ! -f "$2.1" ]; then
+    rm -f "$dst" "$sigfile" "$webuidir/.$1.rows"
     return
   fi
   sig="$webuiversion $(ls -ln "$2" "$2.1" 2>/dev/null)"
@@ -10405,7 +11151,25 @@ webpublishlog()
     { echo "iocmon=1"; logall "$2" | tail -n "$3" | webrecent "$4" | webcleanlog; } > "$webuidir/.$1.tmp.$$"
   fi
   mv -f "$webuidir/.$1.tmp.$$" "$dst"
+  case "$1" in ioc|dropbear|hash|reputation) logall "$2" | wc -l | tr -d ' ' > "$webuidir/.$1.rows" ;; esac
   echo "$sig" > "$sigfile"
+}
+
+# -------------------------------------------------------------------------------------------------------------------------
+# webpublishrows writes logrows.htm, the number of rows in each log and its rotated copies, for the page's log tabs
+
+webpublishrows()
+{
+  local l n
+  {
+    echo "iocmon=1"
+    for l in ioc dropbear hash reputation; do
+      n=""
+      [ -f "$webuidir/.$l.rows" ] && read -r n < "$webuidir/.$l.rows"
+      echo "$l=${n:-0}"
+    done
+  } > "$webuidir/.logrows.tmp"
+  mv -f "$webuidir/.logrows.tmp" "$webuidir/logrows.htm"
 }
 
 # -------------------------------------------------------------------------------------------------------------------------
@@ -10439,7 +11203,7 @@ webpublish()
   fi
   if [ "$enablednswatch" -eq 1 ]; then
     dnsstate="waiting"
-    if dnsusesph; then dnsstate="pihole"; elif dnsusesagh; then dnsstate="adguardhome"; aghanylogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
+    if dnsusesph; then dnsstate="pihole"; elif dnsusestd; then dnsstate="technitium"; elif dnsusesagh; then dnsstate="adguardhome"; aghanylogin || dnsstate="nologin"; elif dnsquerylogenabled; then dnsstate="dnsmasq"; fi
   fi
   {
     echo "iocmon=1"
@@ -10478,6 +11242,8 @@ webpublish()
     echo "dnslog=$dnslogshort"
     if dnsusesph; then
       case "$phstate" in none) echo "dnsfailover=2" ;; partial) echo "dnsfailover=1" ;; *) echo "dnsfailover=0" ;; esac
+    elif dnsusestd; then
+      case "$tdstate" in none) echo "dnsfailover=2" ;; partial) echo "dnsfailover=1" ;; *) echo "dnsfailover=0" ;; esac
     else
       echo "dnsfailover=$aghfailover"
     fi
@@ -10496,6 +11262,7 @@ webpublish()
     echo "ratelimit=$ratelimit"
     echo "cron=$cronscheduled"
     echo "storage=$(stripansi "$drivestatus")"
+    echo "drivestate=$drivelaststate"
     echo "drivefree=$drivefreespace"
     relsigpublish
   } | webescape > "$webuidir/.status.tmp"
@@ -10513,6 +11280,7 @@ webpublishlogs()
   webpublishlog dropbear "${stateroot:+$stateroot/dropbear_attempts.log}" "$webuirecentrows"
   webpublishlog hash "${stateroot:+$stateroot/hash_check.log}" "$webuirecentrows"
   webpublishlog reputation "${stateroot:+$stateroot/reputation.log}" "$webuirecentrows"
+  webpublishrows
   webpublishlog fssummary "${stateroot:+$stateroot/fs_scan_summary.txt}" 60 all
   webpublishlog fsnew "${stateroot:+$stateroot/fs_last_new.txt}" 200 all
   webpublishlog fsmod "${stateroot:+$stateroot/fs_last_modified.txt}" 200 all
@@ -10567,8 +11335,9 @@ webjobfeeds()
 {
   resolvefeedsroot
   if [ -z "$feedsroot" ]; then webjobmsg="No feed storage is available - the external drive may be missing."; return 1; fi
+  if [ "${feedsreadonly:-0}" -eq 1 ]; then webjobmsg="The external drive is read-only, so the feeds can't be refreshed. Detection keeps using the feeds already on it."; return 1; fi
   mkdir -m 755 -p "$feedsroot/meta"
-  if ! feedslock; then webjobmsg="A feed refresh is already in progress."; return 1; fi
+  if ! feedslock; then webjobmsg="A feed refresh is already in progress (running for $feedslockmins min)."; return 1; fi
   updatefeeds force
   date +%s > "$feedsroot/meta/.last_update"
   feedsunlock
@@ -10726,7 +11495,11 @@ webjobstart()
 {
   local pidfile="$addonsdir/iocmon.pid" monpid waited=0
   monpid="$(cat "$pidfile" 2>/dev/null)"
-  if [ -n "$monpid" ] && iocmonpid "$monpid"; then webjobmsg="The monitor is already running. It may be paused or open in a menu."; return 0; fi
+  if [ -n "$monpid" ] && iocmonpid "$monpid"; then
+    if feedslockheld && [ "$feedslockpid" = "$monpid" ]; then webjobmsg="The monitor is running, busy with a feed refresh for $feedslockmins min so far."
+    else webjobmsg="The monitor is already running. It may be paused or open in a menu."; fi
+    return 0
+  fi
   if [ ! -x /opt/sbin/screen ]; then webjobmsg="The Entware screen package is required to start the monitor from here."; return 1; fi
   TERM="${TERM:-xterm}"; export TERM
   sh "$apppath" -screen -now
@@ -10982,7 +11755,7 @@ geoipupdate()
 {
   [ "${enablewebui:-0}" = "1" ] || return 2
   resolvefeedsroot
-  [ "$feedsdegraded" -eq 0 ] && [ -n "$feedsroot" ] || return 2
+  [ "$feedsdegraded" -eq 0 ] && [ -n "$feedsroot" ] && [ "${feedsreadonly:-0}" -eq 0 ] || return 2
   local mode="$1" month now last out="$feedsroot/geoip.txt" raw="$feedsroot/geoip.raw" meta="$feedsroot/meta/geoip.meta"
   month="$(date +%Y-%m)"
   if [ -s "$out" ] && head -n 4 "$out" | grep -qx 'src=iplocate'; then
@@ -11404,7 +12177,7 @@ vresetdefaults()
 applyimportedconfig()
 {
   local importfile="$1" keepextdrivelabel="$extdrivelabel" keeplogfilepath="$logfilepath" newfswatchdirs="" entry oldlabel translated=0
-  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keepphcred="$phcred" keepphcred2="$phcred2" keptkeys=""
+  local keeptfkey="$threatfoxapikey" keepuhkey="$urlhausapikey" keepqfkey="$qfeedsapikey" keepaipdbkey="$abuseipdbapikey" keepaghcred="$aghcred" keepaghcred2="$aghcred2" keepphcred="$phcred" keepphcred2="$phcred2" keeptdcred="$tdcred" keeptdcred2="$tdcred2" keptkeys=""
 
   alertlevel=""; alertfeedonly=0; dnssharedhostsrev=1; ipexceptionnotes=""
   . "$importfile"
@@ -11420,6 +12193,8 @@ applyimportedconfig()
   [ -z "$aghcred2" ] && [ -n "$keepaghcred2" ] && { aghcred2="$keepaghcred2"; keptkeys="${keptkeys:+$keptkeys, }backup AdGuard Home"; }
   [ -z "$phcred" ] && [ -n "$keepphcred" ] && { phcred="$keepphcred"; keptkeys="${keptkeys:+$keptkeys, }Pi-hole"; }
   [ -z "$phcred2" ] && [ -n "$keepphcred2" ] && { phcred2="$keepphcred2"; keptkeys="${keptkeys:+$keptkeys, }backup Pi-hole"; }
+  [ -z "$tdcred" ] && [ -n "$keeptdcred" ] && { tdcred="$keeptdcred"; keptkeys="${keptkeys:+$keptkeys, }Technitium"; }
+  [ -z "$tdcred2" ] && [ -n "$keeptdcred2" ] && { tdcred2="$keeptdcred2"; keptkeys="${keptkeys:+$keptkeys, }backup Technitium"; }
   [ -z "$urlhausapikey" ] && enableurlhaus=0
   [ -z "$threatfoxapikey" ] && enablethreatfox=0
   [ -z "$qfeedsapikey" ] && enableqfeeds=0
@@ -11495,13 +12270,13 @@ exportiocmonconfig()
   fi
 
   echo ""
-  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys, the AdGuard Home logins and the Pi-hole passwords in this export?"
+  echo -e "Include the URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys, the AdGuard Home logins, the Pi-hole passwords and the Technitium API tokens in this export?"
   if promptyn "[y/n]: "; then includekeys=1; else includekeys=0; fi
 
   { echo "# IOCMON settings export - v$version - $(date +'%b %d %Y %X') - $(_GetLAN_HostName_)"
     cat "$config"
   } > "$exportpath"
-  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/; s/^phcred=.*/phcred=""/; s/^phcred2=.*/phcred2=""/' "$exportpath"
+  [ "$includekeys" -eq 0 ] && sed -i -E 's/^threatfoxapikey=.*/threatfoxapikey=""/; s/^urlhausapikey=.*/urlhausapikey=""/; s/^qfeedsapikey=.*/qfeedsapikey=""/; s/^abuseipdbapikey=.*/abuseipdbapikey=""/; s/^aghcred=.*/aghcred=""/; s/^aghcred2=.*/aghcred2=""/; s/^phcred=.*/phcred=""/; s/^phcred2=.*/phcred2=""/; s/^tdcred=.*/tdcred=""/; s/^tdcred2=.*/tdcred2=""/' "$exportpath"
 
   echo ""
   echo -e "${CGreen}Exported to ${exportpath}${CClear}"
@@ -11948,7 +12723,8 @@ laststatustext=""
 lastinputtext=""
 winchpending=0
 progressfirstdraw=0
-driveunmountedalerted=0
+drivelaststate=""
+drivewritetested=""
 skynetmissinglogged=0
 dnsquerylogwarned=0
 dnsquerymissingwarned=0
@@ -11963,7 +12739,7 @@ dnsoffsetcache=""; dnsanchorcache=""; authsyncsig=""; authlastlinecount=0
 dnslogresolved=""; dnslogreason=""; dnslogautofile=""; dnslogautotime=0; dnslogautoreason=""; dnslognonecount=0; dnslognonewarned=0; dnslogannounced=""; dnslogshort=""
 aghapiwarned=""; aghjqwarned=0; aghcursorcache=""; aghqueries=0; aghskippedblocked=0
 aghslot=1; aghfailover=0; aghapiwarned2=""; aghcursorcache2=""
-phslot=1; phstate=""
+phslot=1; phstate=""; tdslot=1; tdstate=""
 timerpaused=0
 exitallmenus=0
 
@@ -12100,6 +12876,7 @@ if [ "$1" == "-updatefeeds" ]; then
     resolvelogfile
     checkfeedupdate
     checklogrotate
+    drivenotifyflush
     exit 0
 fi
 
@@ -12146,6 +12923,7 @@ if [ "$1" == "-fsintegrity" ]; then
     resolvelogfile
     fsintegritycheck
     flushemailbatch
+    drivenotifyflush
     exit 0
 fi
 
@@ -12379,6 +13157,7 @@ renderdashboard()
 
   resolvestateroot
   [ "$alertbanneratbottom" -ne 1 ] && relsigbanner
+  [ "$alertbanneratbottom" -ne 1 ] && drivebanner
   if [ "$alertbanneratbottom" -ne 1 ] && [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     renderalertbanner
   fi
@@ -12391,6 +13170,7 @@ renderdashboard()
   fi
 
   echo -e "${InvGreen} ${CClear}"
+  echo -en "${InvGreen} ${CClear} ${CYellow}[Calculating Stats...]${CClear}"
 
   collectstatus
 
@@ -12402,6 +13182,12 @@ renderdashboard()
         none) dnsstatus="${CYellow}Pi-hole could not be read${CClear} (last checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
         partial) dnsstatus="${CYellow}on, one Pi-hole unreadable${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
         *) dnsstatus="${CGreen}on${CClear} (Pi-hole, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})" ;;
+      esac
+    elif dnsusestd; then
+      case "$tdstate" in
+        none) dnsstatus="${CYellow}Technitium could not be read${CClear} (last checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
+        partial) dnsstatus="${CYellow}on, one Technitium unreadable${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow" ;;
+        *) dnsstatus="${CGreen}on${CClear} (Technitium, ${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})" ;;
       esac
     elif dnsusesagh && ! aghanylogin; then dnsstatus="${CYellow}skipped, AdGuard Home login missing${CClear}"; dnslogcolor="$CYellow"
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then dnsstatus="${CYellow}on, AdGuard Home backup${CClear} (${dnsqueriedcount:-0} checked, checked ${dnslastcheck:-n/a})"; dnslogcolor="$CYellow"
@@ -12439,6 +13225,7 @@ renderdashboard()
   local lastalertshown="$lastalert" feedsbreakdownshown="$feedsbreakdown"
   [ "${#lastalertshown}" -gt 49 ] && lastalertshown="$(printf '%.48s' "$lastalertshown")>"
   [ "${#feedsbreakdownshown}" -gt 65 ] && feedsbreakdownshown="$(echo "$feedsbreakdownshown" | cut -c1-62)..."
+  printf '\r\033[2K'
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Feeds: ${CGreen}${feedsindicatorcount}${CClear} loaded, every ${CGreen}${feedupdatehrs}h${CClear}, oldest ${CGreen}${feedsoldest}${CClear}" 75; echo -e "${CWhite}Last Alert: ${CGreen}${lastalertshown}${CClear}"
   echo -en "${InvGreen} ${CClear} "; padright "${CWhite}Sources: ${CGreen}${feedsbreakdownshown:-none}${CClear}" 75; echo -e "${CWhite}Alerts Today: ${CGreen}${todaycount}${CClear} | $(reputationstatus $((61 - 17 - ${#todaycount})))"
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
@@ -12544,6 +13331,7 @@ renderdashboard()
   fi
   echo -e "${InvGreen} ${CClear}${CDkGray}-----------------------------------------------------------------------------------------------------------------------------------------${CClear}"
   [ "$alertbanneratbottom" -eq 1 ] && relsigbanner
+  [ "$alertbanneratbottom" -eq 1 ] && drivebanner
   if [ "$alertbanneratbottom" -eq 1 ] && [ -n "$stateroot" ] && [ -f "$stateroot/alert_pending" ]; then
     renderalertbanner
   fi
@@ -12568,7 +13356,13 @@ while true; do
   checkscriptreplaced
   rm -f "$abuseipdbcyclefile"
 
+  drivewritetested=""
   checkdrivealive
+  case "$drivelaststate" in
+    readonly) echo -e "  ${CRed}* ERROR: The external drive (label=$extdrivelabel) is read-only - its feeds are still matched; feed updates, scans and alert history paused${CClear}" ;;
+    missing) echo -e "  ${CRed}* ERROR: The external drive (label=$extdrivelabel) is not mounted - feed matching, feed updates, scans and alert history paused${CClear}" ;;
+  esac
+  drivenotifyflush
   checkfeedupdate
   geoipupdate cycle
   checklogrotate
@@ -12596,6 +13390,12 @@ while true; do
       echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Pi-hole (${CYellow}one Pi-hole could not be read${CClear}) against known-malicious-domain feeds${dnsselfnote}"
     elif dnsusesph; then
       echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Pi-hole against known-malicious-domain feeds${dnsselfnote}"
+    elif dnsusestd && [ "$tdstate" = "none" ]; then
+      echo -e "  ${CYellow}* WARNING: DNS watch could not read Technitium - see the IOCMON log.${CClear}"
+    elif dnsusestd && [ "$tdstate" = "partial" ]; then
+      echo -e "  ${CYellow}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Technitium (${CYellow}one Technitium server could not be read${CClear}) against known-malicious-domain feeds${dnsselfnote}"
+    elif dnsusestd; then
+      echo -e "  ${CGreen}*${CClear} Checked ${CGreen}${dnsqueriedcount}${CClear} DNS domain lookup(s) from Technitium against known-malicious-domain feeds${dnsselfnote}"
     elif [ "$aghfailover" = "2" ] && dnsusesagh; then
       echo -e "  ${CYellow}* WARNING: DNS watch could not read the primary or the backup AdGuard Home - see the IOCMON log.${CClear}"
     elif [ "$aghfailover" = "1" ] && dnsusesagh; then
@@ -12670,8 +13470,8 @@ done
 
 exit 0
 
-#Signed: 2026-11-22 16:48:00 UTC (v2.1.0)
+#Signed: 2026-11-27 17:36:44 UTC (v2.1.3)
 #-----BEGIN SIGNATURE-----
-#MEYCIQDVEMilL/rCEN6obiIzxZ3erckypRKjYz0VMN5SPFmbfAIhAN2krchqIgZJ
-#Esi6vZBdtoooSx86PEx0RtkxsS6BFg7m
+#MEYCIQDDooX8cHnBItMjRr1oNk0aYdCCCDW7wu4+5tgBXjqHPQIhAK3QaSZzv95q
+#/QTQxfA6H5bjOBikLWUGqg4bddWXsD7r
 #-----END SIGNATURE-----
