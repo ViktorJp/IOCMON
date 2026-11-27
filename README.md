@@ -23,7 +23,7 @@ Router Web UI:
 
 IOCMON is a lightweight, always-on security-intelligence monitor for Asus-Merlin routers. It runs quietly in
 the background and watches your router from four different angles at once, correlating what it sees against
-public threat-intelligence feeds to catch signs of compromise early, before they become a real problem.
+public threat-intelligence feeds to catch signs of compromise early — before they become a real problem.
 
 **Why run it:**
 
@@ -32,7 +32,8 @@ public threat-intelligence feeds to catch signs of compromise early, before they
 - **Correlates real threat intelligence**, not just generic anomaly noise. Every alert is checked against
   live indicator feeds from Feodo Tracker, Spamhaus, NetAPI.com, URLhaus, and ThreatFox before it's raised.
 - **Watches the whole picture, not just one thing:**
-  - **Network traffic** — active connections and DNS lookups checked against known-malicious IPs/domains.
+  - **Network traffic** — active connections and DNS lookups checked against known-malicious IPs/domains. Lookups
+    are read from the router's dnsmasq, or from AdGuard Home, Pi-hole or Technitium DNS Server.
   - **Filesystem integrity** — new, modified, deleted, and permission-escalated files across any folders you
     choose, plus automatic hash-matching against known malware signatures.
   - **Brute-force logins** — both a sudden burst of failed dropbear/httpd logins and a slow, sustained attempt
@@ -42,7 +43,7 @@ public threat-intelligence feeds to catch signs of compromise early, before they
     exposure, WAN DNS), new port-forward/DMZ/UPnP rules, and unauthorized new cron jobs.
 - **Tells you what changed, not just that something did.** New/modified/deleted/permission-changed files are
   each logged by name and timestamp, not just a bare count.
-- **Optional automatic quarantine** for any file that matches a known-malware hash, strips the execute bit
+- **Optional automatic quarantine** for any file that matches a known-malware hash — strips the execute bit
   and renames it, never deletes, so nothing is lost by mistake.
 - **Email alerts via AMTM**, batched into a single email when several things fire in the same cycle instead of
   flooding your inbox. If an alert email is rejected (some mail providers refuse mail naming a flagged domain),
@@ -98,11 +99,19 @@ sh /jffs/scripts/iocmon.sh -setup
 The first time IOCMON runs with no existing config, it walks you through a short setup wizard:
 
 - **Feed storage location.** IOCMON needs a place to store its threat-intelligence feed data and detection
-  history. If you have a USB drive already mounted (the common case), IOCMON detects it automatically, confirm
+  history. If you have a USB drive already mounted (the common case), IOCMON detects it automatically — confirm
   it if only one is found, or pick from a numbered list if you have more than one. If no drive is available,
   you can proceed in a reduced **degraded mode** (JFFS-only storage, a smaller feed set) instead. In this mode
   the filesystem watch covers only the JFFS folders: the bare `/tmp/mnt/` entry in the watched-folder list is
-  skipped, so other drives are never scanned into flash.
+  skipped, so other drives are never scanned into flash. IOCMON checks every cycle that the chosen drive is
+  mounted and can be written. If the router has remounted it read-only (usually after a drive or filesystem
+  error), IOCMON keeps matching connections and DNS lookups against the feeds already on the drive, but pauses
+  feed updates, file integrity scans and alert history. If the drive is missing, feed matching pauses too. Either
+  way IOCMON logs one ERROR, shows a red STORAGE WARNING banner and a red Storage value on the dashboard and the
+  web page, and moves its activity log to JFFS until the drive is back. Repeat alerts are still held back for 6
+  hours, using a record kept in RAM. Repair a read-only drive with a filesystem check (AMTM's disk check) or
+  replace it; IOCMON resumes by itself and logs an INFO line. With alert email on, IOCMON also sends one email
+  when the drive becomes read-only or unavailable, and another when it is writable again.
 - **Import settings (optional).** You can load a `.ioc` export from a previous installation. If you do, setup
   skips the settings question below and goes straight to the web interface question.
 - **Default settings or all functionality.** The default (recommended) keeps the shipped settings: only
@@ -123,17 +132,17 @@ The first time IOCMON runs with no existing config, it walks you through a short
 ### 3. Start the background monitor
 
 Network/log-based detection (connections, DNS, logins, NVRAM) only runs while IOCMON's monitor loop is
-actually running, it's not something cron alone can do. Launch it in a persistent background SCREEN session:
+actually running — it's not something cron alone can do. Launch it in a persistent background SCREEN session:
 
 ```
 sh /jffs/scripts/iocmon.sh -screen -now
 ```
 
 To have it start automatically on every reboot, turn on **Autostart** in Advanced Settings → General / Script
-Behavior (see below), this hooks the router's `post-mount` script so it launches once the USB drive is ready.
+Behavior (see below) — this hooks the router's `post-mount` script so it launches once the USB drive is ready.
 
 Two periodic tasks (feed refresh and filesystem-integrity scans) are scheduled via cron automatically whenever
-you save any setting, and run on their own independent of whether the background monitor is up, but for
+you save any setting, and run on their own independent of whether the background monitor is up — but for
 real-time detection of network traffic, DNS lookups, login attempts, and NVRAM changes, the background monitor
 needs to actually be running.
 
@@ -153,6 +162,53 @@ Once running, the main screen shows: feed status and per-source counts, each wat
 recent activity, the filesystem-integrity summary (with direct shortcuts to the new/modified/deleted/
 permission-change file lists), router/storage stats, and a running countdown to the next check cycle. A red
 banner takes over the top of the screen whenever a real detection is pending, until acknowledged.
+
+**Device names.** Connection and DNS alerts name the local device when the router knows it, for example
+`192.168.1.169 [Living-Room-TV]->www.youtube.com`, wired and wireless alike. The name is the one you gave the device in the
+router's client list, otherwise its DHCP reservation name, the name the router's network map found, or its DHCP hostname.
+It is saved with the alert, so the log, emails, the web page (and its CSV `client_name` column) and Threat View's feed
+show the name the device had at the time. Exceptions, the OTX report and repeat-alert checks still go by address only.
+
+**IOCMON Authenticity.** Beside Filesystem Integrity, the dashboard shows whether this copy of IOCMON is genuine:
+`IOCMON Authenticity: script [ok] | web ui [ok]`, with the signing date and key below it. Each release of `iocmon.sh` and
+`iocmon.asp` carries a digital signature at the end of the file, made with the author's private key; IOCMON checks it with the
+public key built into the copy you already run, using the router's own `openssl`.
+
+| Word | Meaning |
+|---|---|
+| `ok` (green) | The signature matches: this is the file the author released, unchanged. |
+| `invalid` (red) | A signature is there but doesn't match: the file was changed after release. |
+| `unsigned` (red) | No signature at all, for example a copy put on the router by hand or a fork. |
+| `restored` (red) | Since IOCMON last started, an altered copy of the script was found and replaced with the last verified copy. |
+| `unchecked` (yellow) | No `openssl` on the router to check with. |
+| `no key` / `off` (gray) | A copy from before signing began, or the web interface is off. |
+
+While the script or page is `invalid` or `unsigned`, a red **AUTHENTICITY WARNING** banner stays on the dashboard and the web
+page. It can't be acknowledged; it clears once a correctly signed copy is installed. Each such copy also raises one Critical
+alert and email.
+
+**An altered script is put back automatically.** If the installed `iocmon.sh` has been changed since it was signed, IOCMON replaces
+it with the last verified copy (`/jffs/addons/iocmon.d/iocmon.sh.verified`) and restarts into it, so **any edits to the file are
+undone**. The log and the alert email say so, and the dashboard shows a red banner naming when it happened. Press (A), or
+Acknowledge on the web page, to clear the banner. The Authenticity line keeps showing `script [restored]` as a reminder until
+IOCMON is restarted (stopped and started again, or the router rebooted); IOCMON restarting itself into the verified copy or into an
+update doesn't count. A copy with no signature at all is not replaced: it shows `unsigned` with the warning above.
+
+Updates are checked before they run:
+- **Configuration Menu (8), the web page's Install Update and `-autoupdate`:** a download with a signature that doesn't match is
+  refused and the installed version stays. A download with no signature is installed, with the warning.
+- **AMTM:** AMTM writes the new file over the old one. The copy you were running then checks it, and puts the last verified
+  copy (`/jffs/addons/iocmon.d/iocmon.sh.verified`) back if the signature doesn't match.
+- **A file replaced by other means** while the monitor runs is checked the same way before IOCMON restarts into it, and the
+  last verified copy is put back if it doesn't match.
+- Each of these replacements shows the `restored` banner and status. After an AMTM update while IOCMON isn't running, they
+  appear when IOCMON next starts.
+- **The web page:** a downloaded page with a signature that doesn't match is refused and the old page kept.
+- `-autoupdate` never installs an older version. Going back to an older version is still possible from Configuration Menu (8).
+
+Astraea also reads these signatures and shows IOCMON as signed. The key's fingerprint is published on the IOCMON GitHub
+page. Note that a copy changed on purpose could also remove its own warning, so the checks that count are the ones the
+installed copy makes before a new one runs, and Astraea's independent check.
 
 **Hotkeys** (press the letter, no Enter needed):
 
@@ -174,12 +230,12 @@ banner takes over the top of the screen whenever a real detection is pending, un
 | `t` | Simulate a detection end-to-end (using a real, currently-loaded feed indicator) to confirm alerting works — including a live AbuseIPDB reputation lookup when that check is on |
 | `a` | Acknowledge the red alert banner |
 | `p` | Pause/resume the countdown — while paused, you can browse any menu and return without triggering a rescan |
-| `x` | Detach from the background SCREEN session (also resumes the countdown if it was paused) |
+| `e` | Exit the SCREEN window (detach), leaving IOCMON running in the background (also resumes the countdown if it was paused) |
 | `l` | View the raw activity log |
-| `e` | Exit — asks "Are you sure you wish to Exit" first, since `e` is easy to hit by mistake when you meant `x` |
+| `x` | Exit IOCMON — asks "Are you sure you wish to Exit" first, since `x` is easy to hit by mistake when you meant `e` |
 
 Inside the Configuration Menu and its submenus, `e` returns one level up as usual, but typing `e!` and Enter
-exits every menu at once, back to the main dashboard, settings are saved the same way either way. Ctrl-C quits
+exits every menu at once, back to the main dashboard — settings are saved the same way either way. Ctrl-C quits
 IOCMON from anywhere, menus included, and removes its lock file.
 
 ---
@@ -218,7 +274,7 @@ and the lists are not downloaded in the reduced JFFS-only mode.
 ### URLhaus and ThreatFox (abuse.ch Auth-Key required)
 
 abuse.ch no longer offers keyless downloads of URLhaus or ThreatFox, so both are off until you give them a key.
-Create a free account at auth.abuse.ch and copy your **Auth-Key**, one key works for both. Under
+Create a free account at auth.abuse.ch and copy your **Auth-Key** — one key works for both. Under
 **Select Feed Sources, Reputation, API Keys and Lookups**, switch URLhaus (item 4) or ThreatFox (item 6) on, then enter the
 key under its API Key item (5 or 7). When you switch the second one on, IOCMON offers to reuse the key you already
 entered. Leaving the menu with a feed on but no key switches it back off. If you upgraded from a version that ran
@@ -265,7 +321,9 @@ alert is raised. Nothing about how the alert is handled changes - the result is 
   block in the alert email (with a link to the IP's AbuseIPDB page).
 - **DNS alerts:** AbuseIPDB only accepts IP addresses. IOCMON takes the IP from dnsmasq's own `reply`/`cached`
   log lines for that domain (following CNAMEs) and never resolves a suspicious domain itself. With AdGuard Home
-  as the DNS source, it uses the A/AAAA answers from AdGuard Home's query log instead. If no public answer was
+  as the DNS source, it uses the A/AAAA answers from AdGuard Home's query log instead; with Technitium, the answers in
+  its query log; with Pi-hole, the reply lines of a Pi-hole log file (Pi-hole's API doesn't report answer IPs, so API
+  mode can't check DNS alerts). If no public answer was
   logged (e.g. an ad-blocker answered `0.0.0.0`), the Reputation log records why it was skipped.
 - **Privacy:** each flagged public IP is sent to AbuseIPDB. LAN, CGNAT, loopback and link-local addresses are
   never looked up.
@@ -309,18 +367,18 @@ not downloaded yet, are not searched, and IPv6 can't be looked up because the fe
 ### Advanced Settings, by what you're trying to achieve
 
 **"I want to control email alerts"** → *Alerting & Notifications*
-Turn alert emails on/off, and cap how many can send per hour (0 = unlimited), useful if you're worried about
+Turn alert emails on/off, and cap how many can send per hour (0 = unlimited) — useful if you're worried about
 a noisy detection flooding your inbox. Choose whether the on-screen SECURITY ALERT banner appears at the top
 of the dashboard (default) or just above the timer/hotkey line at the bottom.
 
-**Alert severity and the alert level.** Every alert has a severity, shown as its color in the dashboard's
+**Alert severity and the alert level.** Every alert has a severity, shown as its colour in the dashboard's
 "Recent IoC Detections" panel and on the web page:
 
 | Severity | What gets it |
 |---|---|
 | **Critical** (red) | A connection to a feed-listed IP; a file matching a malware hash; `.ssh`, startup-script, `/etc`, `*.conf.add` or permission changes; new executables; new cron entries; new port-forward/UPnP rules; dropbear/httpd brute force; changes to watched NVRAM settings; a DNS match that is escalated (below); the (T) simulated test |
 | **Warning** (yellow) | A DNS lookup of a feed-listed domain; a change to `wan_dns`, `wan0_dns` or `wan1_dns`, which the firmware rewrites itself on a WAN reconnect |
-| **Info** (gray) | DNS-tunneling heuristic hits; a DNS feed match on a shared-hosting domain (see DNS Watch below) |
+| **Info** (gray) | DNS-tunneling heuristic hits; a DNS feed match on a shared-hosting domain (see DNS Watch below), or one whose answer address AbuseIPDB marks as whitelisted |
 
 *Alert level* (item 4) decides which alerts raise the SECURITY ALERT banner and send email. **All Alerts** does so
 for every alert. **Critical Only**, the default for new installs, does so only for Critical ones; Warning and Info
@@ -329,10 +387,16 @@ Upgrading from the older "Feed Matches Only" setting moves you to Critical Only,
 
 A DNS feed match becomes Critical when ThreatFox lists the domain as botnet C2, or when the AbuseIPDB check (if on)
 scores the domain's IP at or above item 5 (default 75%). Malware hosts are often new and have few reports, so most
-real DNS hits will stay Warning; the escalation only lifts the clearest cases.
+real DNS hits will stay Warning; the escalation only lifts the clearest cases. Item 5 never stops an alert from being
+made; it only raises a Warning to Critical. Two things lower a DNS match to Info first, even when ThreatFox says botnet
+C2: a domain on the shared-hosting list, or an answer address that AbuseIPDB marks as whitelisted (large providers such
+as Google). Malware sometimes keeps its settings on sites like YouTube, so feeds can list those sites as C2 although
+visiting them is harmless.
 
 **"I want to watch DNS lookups against known-bad domains, or catch DNS tunneling"** → *DNS Watch & Tunneling
 Detection*
+IOCMON reads lookups from the router's own dnsmasq by default. It can read them from AdGuard Home, Pi-hole or
+Technitium DNS Server instead, set by *DNS query source* (item 11); each has its own section below.
 Turn on feed-based DNS matching (this also offers to enable the router's own dnsmasq query logging, which it
 needs to see anything). Turning the DNS watch back off removes that query-logging line and restarts dnsmasq,
 so the router stops logging every lookup. IOCMON finds where dnsmasq's queries are written automatically
@@ -342,7 +406,7 @@ byte position and reads only the lines added since the last cycle, so a large lo
 costs no more to watch than a small one. When the log is rotated (`-1`, `1` or `.1`), the unread end of the old copy
 is read first. On the first run, or if its place is lost, at most the last 4 MB are read. Add domains to the exceptions list for known false positives (e.g. a CDN flagged only
 because a malicious URL was once hosted there). Separately, turn on the behavioral tunneling/exfiltration
-heuristic if you want to catch unusually long or high-volume DNS query patterns, this is off by default since
+heuristic if you want to catch unusually long or high-volume DNS query patterns — this is off by default since
 it can false-positive against legitimate high-subdomain-churn services; the same exceptions list quiets it too.
 Its hits are always Info.
 
@@ -351,7 +415,9 @@ written during the check wait for the next one. When the syslog rotates, the unr
 `syslog.log-1` are read before the new file. Domain matching ignores case.
 
 *Shared-hosting domains* (item 3) is a second list, preloaded with sites such as github.com, amazonaws.com,
-microsoft.com, roblox.com, steamcommunity.com, `in-addr.arpa` and `ip6.arpa`. Feeds such as URLhaus list these
+microsoft.com, google.com, youtube.com, roblox.com, steamcommunity.com, `in-addr.arpa` and `ip6.arpa`. Upgrading from
+v2.0.10 or earlier adds google.com, youtube.com, googlevideo.com, ytimg.com, youtu.be and ggpht.com to an existing list
+once. Feeds such as URLhaus list these
 because malware really is downloaded from them, so a lookup of one is usually harmless. A match on one of these
 domains, or any subdomain, is kept in the log as Info rather than dropped. Unlike the exceptions list, nothing is
 hidden: in the Critical Only level it just never raises the banner or email. Edit the list like any other; entries
@@ -389,13 +455,61 @@ exceptions, the tunneling heuristic, alerts, emails, AbuseIPDB) works the same.
 - Queries AdGuard Home already blocked never left your network and are skipped. Switch on *Also check queries
   AdGuard Home already blocked* (item 16) to be alerted when a device keeps trying a known-bad domain anyway.
 
+**Pi-hole.** Pi-hole v6 is supported, either on another machine or on the router itself (the Entware port of
+Pi-hole). `auto` never picks Pi-hole: set *DNS query source* (item 11) to 4, Pi-hole. Pi-hole v5 uses a different
+API and is not supported; IOCMON says so in the log and the menu if it finds one.
+- **Read method (item 17):** *API* reads Pi-hole's query API (needs Entware `jq`). *Log file* reads its `pihole.log`,
+  which is the same format as dnsmasq's log, so it also gives AbuseIPDB the IP each domain was answered with (the API
+  doesn't report answer IPs).
+- **API address (item 18):** e.g. `https://192.168.50.5` or `http://192.168.50.1:5080`. For a Pi-hole on the router,
+  `auto` reads the web port from `/opt/etc/pihole/pihole.toml` (`webserver.port`). The Entware port suggests moving
+  it off 80/443, e.g. to `5080,5443s`.
+- **Password (item 19):** Pi-hole v6 has no username. Use an **app password**, created in Pi-hole's web interface
+  under Settings → Web interface / API (Expert mode): it skips two-factor login and can be revoked on its own. Your
+  web password also works, unless two-factor login is on. It is kept base64-encoded in `iocmon.cfg` like the AdGuard
+  Home login, is sent to Pi-hole on stdin, and is left out of exports when you answer "no". IOCMON keeps one Pi-hole
+  session in RAM and reuses it, so it doesn't use up Pi-hole's limited API sessions.
+- **Log file (item 18 in log mode):** `auto` looks for `/opt/var/log/pihole/pihole.log`, then
+  `/var/log/pihole/pihole.log`; a remote Pi-hole's log can be used if it is mounted on the router. The Entware port
+  turns query logging off by default (`dns.queryLogging = false` in `pihole.toml`) to save wear on the drive; IOCMON
+  does not change that, and tells you to use the API instead.
+- **Backup Pi-hole (items 20-22):** devices usually send lookups to both Pi-holes, so the backup is read every cycle
+  alongside the primary, each with its own method, address or log file, and password. If one can't be read, the other
+  still is, and the dashboard and web page show it in yellow.
+- **Blocked queries** are skipped unless *Also check queries Pi-hole already blocked* (item 23) is on.
+- **When Pi-hole only sees the router:** if this router's dnsmasq forwards devices' lookups to Pi-hole, every query in
+  Pi-hole comes from the router, so the device behind each lookup can't be identified. IOCMON logs one WARNING when
+  that happens. Use `dnsmasq` as the source instead, or have DHCP hand devices the Pi-hole's own address.
+- As with AdGuard Home, the first check starts from "now", and later checks read every query since the previous one.
+
+**Technitium DNS Server.** Technitium, on another machine or in Docker, is read through its API. `auto` never picks it:
+set *DNS query source* (item 11) to 5, Technitium.
+- **What Technitium needs:** a query-log app, such as **Query Logs (Sqlite)** from its App Store (Apps → App Store).
+  Without one, Technitium keeps no query log that can be read, and IOCMON says so in the log and the menu. IOCMON finds
+  the installed app by itself. It also needs Entware `jq`.
+- **API address (item 24):** the address of Technitium's web console, e.g. `http://192.168.50.5:5380` (HTTP), or
+  `https://192.168.50.5:53443` if its HTTPS console is on.
+- **API token (item 25):** in Technitium's web console, open the user menu at the top right and choose *Create API
+  Token*. A token doesn't expire and isn't affected by two-factor login. A user with only **Logs: View** permission is
+  enough (Administration → Users, then Permissions), so the token can't change anything. The token is kept
+  base64-encoded in `iocmon.cfg`, is sent to Technitium on stdin, and is left out of exports when you answer "no".
+- **Backup Technitium (items 26 and 27):** devices usually send lookups to both servers, so the backup is read every
+  cycle alongside the primary, with its own address and token. If one can't be read, the other still is, and the
+  dashboard and web page show it in yellow.
+- **Blocked queries** (Blocked, UpstreamBlocked, CacheBlocked) are skipped unless *Also check queries Technitium
+  already blocked* (item 28) is on.
+- **AbuseIPDB:** Technitium's query log includes the answer, so DNS alerts get the answered IP checked, as with
+  AdGuard Home.
+- As with Pi-hole, IOCMON logs one WARNING when nearly every query comes from the router itself, and the first check
+  starts from "now".
+
 **"I want to catch brute-force login attempts"** → *Brute-Force Login Detection*
 Two independent layers: a **burst** alert (N failed logins from one IP within a single check) and a
 **sustained** alert (N failed logins from one IP across a longer sliding window, for an attacker deliberately
 staying under the burst threshold). Tune both thresholds and the sustained window size here.
 
 **"I want to watch files/folders for tampering"** → *Filesystem Integrity & Cron Watch*
-This is the largest section, how often to scan, which folders to watch, and four ways to exclude noise:
+This is the largest section — how often to scan, which folders to watch, and four ways to exclude noise:
 folder names, file extensions, individual files by absolute path, and (further down) cron jobs known to be
 re-added legitimately by another tool. Also controls the hash-size cap, automatic quarantine on a malware-hash
 match, deletion alerts on critical paths, permission-escalation alerts, and the cron-tampering diff itself.
@@ -412,9 +526,11 @@ compared every monitor cycle, and every change is written to the activity log as
 value and when the old value was last recorded. Only the first change in 6 hours also raises an alert, so a value
 that changes back still shows in the log. `wan0_dns` holds the DNS servers in use right now, which the firmware
 rewrites on a WAN reconnect or DHCP renewal, so it can change without anyone editing a setting. If a specific IP or
-CIDR range keeps matching a feed and you know it's safe, add it to the IP/CIDR Exceptions list (item 4), unlike
+CIDR range keeps matching a feed and you know it's safe, add it to the IP/CIDR Exceptions list (item 4) — unlike
 the watched/excluded folder lists under Filesystem Integrity, this is single IPs or ranges (e.g. `204.44.63.22`
-or `204.44.0.0/16`), not a hostname, and it's checked before the connection is ever compared to a feed. The same
+or `204.44.0.0/16`), not a hostname, and it's checked before the connection is ever compared to a feed. After the
+address, IOCMON asks for an optional short note (up to 64 characters, Enter for none) describing the entry, shown
+beside it in the list and in the Research lookup. Editing an entry offers to change its note too (`-` removes it). The same
 list is honored by the Skynet import: an excepted address inside a banned feed range is cut out of that range, and
 the rest of the range stays banned.
 
@@ -423,6 +539,11 @@ seconds and again after a further 60, so a feed refresh can take up to 90 second
 the previous IOCMON bans stay in force. If all three attempts fail, the activity log gets a WARNING quoting Skynet's
 last message, and Skynet's full output for each attempt (without its banner) is kept in
 `<drive>/iocmon.d/state/skynet_import.log` for you to look at later.
+
+An import normally takes one to three minutes; the progress line shows the seconds so far. If Skynet hasn't finished
+after 15 minutes, IOCMON stops it (and anything it started), logs an ERROR, keeps the previous bans and carries on;
+it tries again at the next feed refresh rather than at once. A rule removal gets 3 minutes. This keeps a stuck Skynet
+from stopping IOCMON's own detection. If it happens, check Skynet with `sh /jffs/scripts/firewall debug info`.
 
 **"I want to change how often it checks, how much it logs, or how it updates itself"** → *General / Script
 Behavior*
@@ -450,6 +571,67 @@ the current page; use Full History first to include older rows. The file is UTF-
 `YYYY-MM-DD HH:MM:SS` in the router's local time. A cell that starts with `=`, `+`, `-` or `@` gets a leading `'`, so a
 spreadsheet treats it as text: login names and domains in these logs can be chosen by an attacker.
 
+**Clear Log.** Below the rows of every log page, above *Prev/Next*, a right-aligned button clears the log you are viewing
+(*Clear IoC Detections Log*, *Clear Dropbear Log* and so on), after a confirmation. It does exactly what the `(R)` hotkey
+does: the whole log on the router and its rotated copies are erased, for the page and the IOCMON screen alike.
+
+**Exception switch.** IoC Detections rows that have an exception list show an *Exception* switch on the right. Turning it on
+(after a confirmation) adds the item to its list; turning it off removes it. Rows already in the log stay; the exception
+only stops future alerts.
+- DNS rows add the base domain, as the `(Z)` hotkey does, so `abc.vod.pv-cdn.net` adds `pv-cdn.net` and its subdomains.
+- Conntrack rows add the destination IP to the IP/CIDR exceptions. Filesystem rows add the file to the excluded files,
+  which stops every filesystem check on it; for a startup script, `.ssh` or `.conf.add` file the confirmation warns in
+  red that IOCMON will no longer watch it for tampering. Cron rows add the entry to the cron exceptions.
+- Brute-force, NVRAM, NAT rule, `/etc` critical-file, Kairos/Astraea signature and simulated rows have no switch.
+- The page never sends the item itself to the router, only a short code. IOCMON looks the code up in its own log and
+  checks the item with the same rules as the menus, so text in a log can't be turned into a command.
+- *Excepted only* in the kind filter shows the rows whose item is excepted.
+
+**Exceptions panel.** Hidden by default to keep the page short: its heading shows how many entries the four lists hold, and
+the **Show**/**Hide** button beside it opens or closes the panel (your browser remembers which). Inside are four tabs, like the Logs panel: DNS Domains, IP Addresses, Files and Cron Entries, each showing how many
+entries it holds. One list shows at a time, including entries added in the menus, each with a switch to remove it. Adding an
+exception is only possible from a log row or the menus. The IP Addresses tab shows each entry's note beside it; notes are
+added or changed in the IP/CIDR Exceptions menu (Network & System Watches → item 4), not on the page.
+
+**Threat View.** The **Threat View** button at the left of the button row swaps the dashboard for a live world map of your
+router's traffic; **Back to Dashboard** returns. Arcs run from your router's location to the other end of each new connection
+(outbound) or from the other end to your router (inbound), sampled every 5 seconds:
+- **Red, thicker:** an address from an unacknowledged Critical alert. **Yellow:** a Warning alert. These addresses keep a
+  steady arc until you press **Acknowledge** (in the view or on the dashboard). **Grey-blue:** all other traffic.
+- **Dimmer and dashed:** blocked attempts, both those the router's own firewall turned away and those Skynet dropped and
+  logged, if Skynet is installed. Without Skynet, the router's own firewall rule records the same attempts.
+- Below the map: blocked and allowed inbound, outbound, DNS lookups, Skynet-blocked outbound, Skynet's total drops and
+  flagged traffic, each as new connections per minute (hover over a counter for what it counts). **Allowed in** counts
+  only connections started from the internet that the firewall let in (port forwards, UPnP, a VPN server or a router
+  service). Replies to connections your own devices opened belong to those connections, so on a home network without
+  port forwards it is usually 0-2 a minute. Every DNS lookup to an outside server (port 53, or 853 for DNS over
+  TLS) is a new connection, so DNS has its own counter and Outbound counts everything else. A router running its own
+  resolver (Unbound, for example) can make thousands of lookups a minute. Without Skynet, the **Blocked out** and
+  **Skynet drops** counters read "Not installed" and the feed's key leaves out SKYNET. Everything else works the same.
+- Filters: inbound, outbound, allowed, blocked, **DNS lookups** (off by default, so DNS arcs and rows are hidden unless the
+  address is flagged) and flagged only.
+- Three tabs. **Live Feed** lists each connection with its device, flagged first, then inbound. Its Result column reads
+  **ALLOWED** (the connection went through), **FIREWALL** (an unsolicited inbound attempt the router's own firewall
+  dropped) or **SKYNET** (dropped by Skynet's blocklist, in either direction). **Top Countries** covers
+  the last 15 minutes. **Replay** plays the last 15 minutes back at 1x, 4x or 16x, and the slider follows the playback.
+- Click a dot on the map or a row to see that country's addresses, with OTX, AbuseIPDB and URLhaus links. The dotted line
+  is the day/night boundary, and the clock shows UTC.
+- **Expand** fills the browser window with the map at full width and the counters, filters and alert bar along the
+  bottom. The tabs move into a panel that slides over the left of the map: the **FEED** tab on the left edge opens it
+  and **HIDE** closes it, and the browser remembers which you chose. **Fullscreen** then fills the screen, and **Shrink**
+  or Esc returns.
+- Your location is the centre of your WAN address's country. **change** (bottom left) sets an exact latitude and
+  longitude, kept only in that browser.
+
+The router only collects this data while the view is open. It adds one firewall rule and one ipset per WAN interface, which
+it removes 2 minutes after the view closes, and reads only new syslog lines for Skynet's entries. Countries come from
+IPLocate.io's free IP to Country database (IP address data powered by IPLocate.io, CC BY-SA 4.0), which IOCMON downloads
+to the USB drive once a month (a 9 MB zip; not available in JFFS-only mode). It needs no account or key. Google's and
+Cloudflare's addresses, which are served from many cities at once, show under the company's country (US). No free table is
+perfect: a server hosted abroad by a company can still show under the company's country. The first table is built in the
+next monitor cycle after the web interface is turned on, with "[Updating Country IP Location Lookup Database]" on screen;
+after that the monthly update runs with the feed refresh, as its own "Country lookup" line. Until it is built, the feed works but no arcs are drawn. IPv4 only. The map is from Natural Earth.
+
 The activity log (`iocmon.log`) is kept on JFFS (`/jffs/addons/iocmon.d/iocmon.log`) by default. Item (3) moves it to
 the external drive instead (`/tmp/mnt/<drive>/iocmon.d/state/iocmon.log`) to spare the router's flash from constant
 log writes. Pressing it again moves it back. Both directions ask for confirmation and carry the existing log over.
@@ -476,7 +658,7 @@ list for nearly every watch instead of forcing you to disable the whole feature:
 - **Filesystem — one specific file**: add its full path to the excluded-files list (item 7).
 - **Connections — one IP or range**: add it to the IP/CIDR Exceptions list (Network & System Watches → item 4).
 - **Cron**: use the cron exceptions picker (item 13) to select a specific job from a live numbered list rather
-  than retyping it by hand, this survives a managing tool later re-writing that job's own schedule. `(b)` adds
+  than retyping it by hand — this survives a managing tool later re-writing that job's own schedule. `(b)` adds
   every current cron job at once (already-excepted ones are skipped), so you can then delete just the ones you
   want watched; `(c)` clears the whole list after a y/n confirmation.
 
@@ -515,7 +697,7 @@ it, and a ready-made `https://otx.alienvault.com/indicator/ip/<ip>` link you can
 AlienVault's free OTX reputation service.
 
 Item (6) on the report's own menu toggles the sort order between **Frequency** (one row per matched IP, most
-alerts first, the default) and **Date** (every individual alert occurrence listed separately, newest first, with
+alerts first — the default) and **Date** (every individual alert occurrence listed separately, newest first, with
 its own date/time and the local device involved). Your choice is saved and used for every later run.
 
 Pick a date range (today, last 7/30 days, all available history, or a custom start/end date), then how many
@@ -523,21 +705,21 @@ rows to show per page (10/20/50). The report's header also shows how many days o
 currently available in the log, so you can judge how much a given range actually covers. If the result spans
 more than one page, press Enter for the next page, `a` to show every remaining row at once, or `e` to return
 to the report's own date-range menu. Any "press any key" prompt also returns you to that same date-range menu
-rather than leaving the report entirely, use `e`/`e!` on the date-range screen itself to go back to the
+rather than leaving the report entirely — use `e`/`e!` on the date-range screen itself to go back to the
 Configuration Menu.
 
 Two things worth knowing about what the numbers mean: the count is how many distinct alert *events* IOCMON
-actually logged for that IP, not a raw packet/connection counter the way a firewall's own ban-list statistics
-are, since repeated hits on the same IP within IOCMON's own 6-hour dedup window only ever log once, so treat
+actually logged for that IP — not a raw packet/connection counter the way a firewall's own ban-list statistics
+are, since repeated hits on the same IP within IOCMON's own 6-hour dedup window only ever log once — so treat
 it as a frequency indicator, not an exact tally. And this report only ever covers *outbound* matches (a device
-here reaching out to a listed bad IP), IOCMON's conntrack watch has no way to see unsolicited inbound traffic
+here reaching out to a listed bad IP) — IOCMON's conntrack watch has no way to see unsolicited inbound traffic
 that a listed bad IP sends toward your router.
 
 ### Starting Over
 
 If your configuration has drifted somewhere you don't want, use **Configuration Menu → (6) Reset IOCMON back
 to Default Settings**. After a confirmation prompt explaining exactly what will happen, this erases the saved
-config and restarts IOCMON fresh, every toggle, threshold, and list reverts to its shipped default, and you'll
+config and restarts IOCMON fresh — every toggle, threshold, and list reverts to its shipped default, and you'll
 be walked back through the initial drive-selection setup. This cannot be undone.
 
 ### Uninstalling
@@ -548,23 +730,26 @@ feed/state data from your USB drive. This is irreversible.
 
 ### Importing/Exporting Settings
 
-**Configuration Menu → (7) Import/Export IOCMON Settings** lets you carry your configuration, every toggle,
-threshold, and exclusion list, between routers, or keep a backup before experimenting:
+**Configuration Menu → (7) Import/Export IOCMON Settings** lets you carry your configuration — every toggle,
+threshold, and exclusion list — between routers, or keep a backup before experimenting:
 
 - **Export** writes your current settings to a plain `.ioc` file, defaulting to `<your-router's-hostname>-
   config-export.ioc` on your feed storage drive (you can type a different path/filename instead). It asks
-  separately whether to include your URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys, leave them out if you plan to share or
-  store the file somewhere less trusted, and just re-enter them afterward under Select Feed Sources, Reputation & API
-  Keys. Every other setting, including all the AbuseIPDB reputation-check settings, is always exported.
-- On **import**, a key the file doesn't carry never wipes out this router's own key, the existing key is kept.
+  separately whether to include your URLhaus/ThreatFox/Q-Feeds/AbuseIPDB API keys, AdGuard Home logins, Pi-hole
+  passwords and Technitium API tokens — leave them out if you plan to share or store the file somewhere less trusted,
+  and just re-enter them afterward (the API keys under Select Feed Sources, Reputation, API Keys and Lookups; the DNS
+  logins under Advanced Settings → DNS Watch). Every other setting, including all the AbuseIPDB reputation-check
+  settings, is always exported.
+- On **import**, a key, login, password or token the file doesn't carry never wipes out this router's own — the
+  existing one is kept.
   If URLhaus, ThreatFox, Q-Feeds or the AbuseIPDB check is switched on in the file but no key exists on either
   side, that feature is imported as switched off.
 - **Import** loads a `.ioc` file and overwrites your current configuration with it, then restarts IOCMON. Your
-  feed storage drive selection is always kept as this router's own, it's never overwritten by the import file.
+  feed storage drive selection is always kept as this router's own — it's never overwritten by the import file.
   Any watched-folder path tied to the *old* router's drive label is automatically updated to this router's own
   label, and a manually-set DNS query log path is reset to auto-detect, since both are specific to the router
   that originally saved them.
-- You can also import a `.ioc` file during first-time setup, right after selecting your feed storage drive, if
+- You can also import a `.ioc` file during first-time setup, right after selecting your feed storage drive — if
   you have one, this replaces the rest of the setup wizard with your imported settings instead.
 
 ### Support and Discussion Forum
